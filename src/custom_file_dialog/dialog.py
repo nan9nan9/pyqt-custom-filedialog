@@ -413,10 +413,17 @@ class CustomFileDialog(QFileDialog):
         self.selectFile(os.path.basename(directory))
 
     def _on_accepted(self):
+        paths = self.selectedFiles()
+        if not paths:
+            return
+        # 사이드바에 "최근 파일"을 얹었다면 고른 것을 거기 쌓는다. 위젯을 거치지
+        # 않고 이 클래스로 바로 띄워도 목록이 자라야 한다. (recent 를 안 쓰면
+        # record_recent 는 아무 일도 하지 않고, 폴더·저장소 안의 링크는 저장소가
+        # 스스로 거른다. FilePathEdit 도 한 번 더 기록하지만 재기록은 지웠다
+        # 다시 만드는 동작이라 결과가 같다.)
+        self._places.record_recent(paths)
         if self._settings_key:
-            paths = self.selectedFiles()
-            if paths:
-                history.remember_dir(self._settings_key, paths[0])
+            history.remember_dir(self._settings_key, paths[0])
 
 
 def resolve_start_dir(

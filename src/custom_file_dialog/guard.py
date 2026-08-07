@@ -133,7 +133,12 @@ class _AcceptBlocker(QObject):
             keys = _OPEN_KEYS if obj is self._edit else _OPEN_KEYS + (Qt.Key.Key_Space,)
             if event.key() not in keys:
                 return False
-        elif kind != QEvent.Type.MouseButtonRelease:
+        elif kind == QEvent.Type.MouseButtonRelease:
+            # 클릭으로 "확정"이 되는 건 열기/저장 버튼뿐이다. 입력창 클릭까지
+            # 삼키면 차단 경로를 고치려고 칸을 클릭하는 것조차 안 된다.
+            if obj is self._edit:
+                return False
+        else:
             return False
 
         # 상대 경로("..")도 현재 폴더 기준으로 풀어서 판정한다

@@ -249,9 +249,7 @@ def build_window(tree, append):
         paths = dialog.selectedFiles()       # 즐겨찾기 링크는 원본으로 복원된다
         result.setText("%s → %s" % (label, "\n     ".join(paths) or "(없음)"))
         append("[선택] %s -> %s" % (label, paths))
-        if checks["recent"].isChecked():
-            tree["recent"].record_all(paths)
-        refresh()
+        refresh()      # 최근 파일 기록은 CustomFileDialog 가 스스로 한다
 
     for mode, label, filters, suffix in MODES:
         button = QPushButton(label)

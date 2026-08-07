@@ -674,3 +674,28 @@ def test_remember_dir_keeps_widget_history(qapp, tmp_path):
     assert last_dir("공용", settings=make()) == str(target)
     reloaded = PathHistory(key="공용", max_items=30, settings=make())
     assert len(reloaded.items()) == 15       # 목록은 그대로
+
+
+def test_custom_file_dialog_records_recent(qapp, tmp_path):
+    """위젯 없이 클래스로 바로 띄워도 고른 파일이 최근 파일에 쌓인다."""
+    from custom_file_dialog import CustomFileDialog
+
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=10)
+    design, report, _output = _make_tree(tmp_path)
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=os.path.dirname(design), recent=recent
+    )
+    dialog.selectFile(design)
+    _close_soon(dialog)
+    assert _run(dialog)
+    assert recent.items() == [design]
+
+    # 취소하면 기록하지 않는다
+    cancelled = CustomFileDialog(
+        None, mode="open_file", directory=os.path.dirname(report), recent=recent
+    )
+    cancelled.selectFile(report)
+    _close_soon(cancelled, accepted=False)
+    _run(cancelled)
+    assert recent.items() == [design]

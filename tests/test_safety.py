@@ -758,3 +758,59 @@ def test_widget_path_timeout(qapp, dead_nfs, monkeypatch):
     edit.set_path_timeout(None)
     assert edit.path_timeout() is None
 
+
+
+def test_mountinfo_unescapes_special_characters(monkeypatch, tmp_path):
+    """mountinfo 의 8진수 이스케이프(공백=\\040 등)를 풀어서 마운트를 맞춘다.
+
+    풀지 않으면 공백이 든 마운트는 어떤 경로와도 못 맞춰 원격 판별이 조용히
+    실패하고, 그 마운트에는 안전장치가 걸리지 않았다.
+    """
+    from custom_file_dialog import safety
+
+    fake = tmp_path / "mountinfo"
+    fake.write_text(
+        "36 25 0:32 / /mnt/my\\040share rw - nfs4 server:/with\\040space rw\n"
+        "37 25 0:33 / /mnt/plain rw - nfs4 server:/export rw\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(safety, "MOUNTINFO", str(fake))
+    safety.clear_cache()
+    try:
+        mount = safety.mount_for("/mnt/my share/a.csv")
+        assert mount == ("/mnt/my share", "nfs4", "server:/with space")
+        assert safety.is_remote("/mnt/my share/a.csv")
+        assert safety.mount_for("/mnt/plain/a")[0] == "/mnt/plain"
+    finally:
+        safety.clear_cache()        # 가짜 표가 캐시에 남지 않게
+
+
+def test_accept_blocker_lets_clicks_into_edit(qapp, guarded_root):
+    """차단 경로가 입력돼 있어도 **입력창 클릭은** 삼키지 않는다.
+
+    클릭으로 "확정"이 되는 건 열기/저장 버튼뿐이다. 입력창 클릭까지 삼키면
+    사용자가 경로를 고치려고 칸을 클릭하는 것조차 안 된다.
+    """
+    from qtpy.QtCore import QEvent, QPointF, Qt
+    from qtpy.QtGui import QMouseEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit, QPushButton
+
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    dialog = QFileDialog()
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    button = QPushButton(dialog)             # 열기 버튼 대역
+    blocker = _AcceptBlocker(dialog, edit, dialog)
+    edit.setText(guarded_root)
+
+    def release():
+        return QMouseEvent(
+            QEvent.Type.MouseButtonRelease, QPointF(5, 5),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+    assert not blocker.eventFilter(edit, release())      # 입력창 클릭은 통과
+    assert blocker.eventFilter(button, release())        # 버튼 클릭은 차단
+    dialog.deleteLater()

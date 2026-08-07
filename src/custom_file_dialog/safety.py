@@ -262,6 +262,19 @@ def pending_checks():
 
 
 # --------------------------------------------------------------- 마운트
+# mountinfo 는 경로 안의 특수 문자를 8진수로 이스케이프해 적는다(man 5 proc).
+# 풀지 않으면 공백이 든 마운트("/mnt/my share")를 어떤 경로와도 못 맞춰서
+# 원격 판별이 조용히 실패하고, 그 마운트에는 안전장치가 걸리지 않는다.
+# 역슬래시(\134)는 마지막에 풀어야 "\134040" 같은 조합을 다시 해석하지 않는다.
+_MOUNT_ESCAPES = (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"), ("\\134", "\\"))
+
+
+def _unescape_mount(field):
+    for code, char in _MOUNT_ESCAPES:
+        field = field.replace(code, char)
+    return field
+
+
 def iter_mounts(refresh=False):
     """``[(마운트지점, 종류, 원본)]`` 목록. 읽지 못하면 빈 목록.
 
@@ -288,7 +301,13 @@ def iter_mounts(refresh=False):
             continue
         if len(fields) < separator + 3:
             continue
-        mounts.append((fields[4], fields[separator + 1], fields[separator + 2]))
+        mounts.append(
+            (
+                _unescape_mount(fields[4]),
+                fields[separator + 1],
+                _unescape_mount(fields[separator + 2]),
+            )
+        )
     _mounts["list"], _mounts["stamp"] = mounts, now
     return mounts
 
