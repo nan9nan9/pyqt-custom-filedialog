@@ -1,39 +1,82 @@
 # custom-file-dialog
 
-`QFileDialog` 를 감싼 라이브러리입니다. `qtpy` 를 사용하여
+`QFileDialog` 를 확장한 파일 다이얼로그입니다. 즐겨찾기 · 최근 파일 · 사이드바
+구성 · 용도별 시작 위치 기억 · 죽은 네트워크 경로 방어를 더했고, `qtpy` 를 사용하여
 **PyQt5 / PyQt6 / PySide2 / PySide6** 모두에서 동작합니다.
 
-**쓰는 방법은 두 가지**입니다. 필요한 쪽만 골라 쓰면 되고, 섞어 써도 됩니다.
+**쓰는 방법은 세 가지**입니다. 필요한 쪽만 골라 쓰면 되고, 섞어 써도 됩니다.
 
-### 1. 다이얼로그를 그냥 띄우기 — `exec_file_dialog()`
+### 1. `CustomFileDialog` — `QFileDialog` 를 쓰던 그대로
 
-`QFileDialog.getOpenFileName()` 자리에 그대로 갈아 끼우는 방식입니다.
-위젯을 배치할 필요가 없습니다.
+`QFileDialog` 를 물려받은 클래스입니다. **생성자에 설정을 넣고 `exec()` 로 띄운 뒤
+결과를 받는** 방식이 `QFileDialog` 와 같습니다.
+
+```python
+from custom_file_dialog import CustomFileDialog
+
+dlg = CustomFileDialog(
+    self,
+    mode="open_file",
+    caption="입력 파일 선택",
+    filters=[("CSV", ["csv"]), ("엑셀", ["xlsx", "xls"])],
+)
+if dlg.exec():
+    print(dlg.selectedFiles())      # ["/home/user/data.csv"]
+    print(dlg.selectedPath())       # "/home/user/data.csv"  (1개짜리 편의 메서드)
+```
+
+`QFileDialog` 와 나란히 두면 이렇습니다.
+
+```python
+# Qt 기본
+dlg = QFileDialog(self, "입력 파일 선택")
+dlg.setFileMode(QFileDialog.FileMode.ExistingFile)
+dlg.setNameFilters(["CSV (*.csv)", "엑셀 (*.xlsx *.xls)"])
+if dlg.exec():
+    files = dlg.selectedFiles()
+
+# 이 라이브러리 — 설정을 생성자에서 한 번에
+dlg = CustomFileDialog(self, mode="open_file",
+                       filters=[("CSV", ["csv"]), ("엑셀", ["xlsx", "xls"])])
+if dlg.exec():
+    files = dlg.selectedFiles()
+```
+
+`QFileDialog` 를 물려받았으므로 `setDirectory()` · `selectNameFilter()` ·
+`currentChanged` 처럼 **원래 쓰던 것은 그대로 씁니다.** 이 라이브러리가 더하는
+것은 생성자 인자로 켭니다.
+
+```python
+dlg = CustomFileDialog(
+    self,
+    mode="open_files",
+    filters=[("이미지", ["png", "jpg"])],
+    favorites=store,            # 즐겨찾기 분류를 사이드바에
+    recent=recent,              # 최근 파일 항목
+    remember="입력이미지",       # 이 용도로 마지막에 쓰던 폴더에서 열기
+    default_suffix="png",       # 저장 모드에서 확장자 자동 부착
+)
+if dlg.exec():
+    paths = dlg.selectedFiles()   # 즐겨찾기 링크는 원본 경로로 복원되어 나옵니다
+```
+
+`mode` 하나로 네 종류를 다 부릅니다 — `"open_file"` · `"open_files"` ·
+`"save_file"` · `"directory"`.
+
+### 2. `exec_file_dialog()` — 한 줄로 끝내기
+
+띄우고 결과만 받으면 될 때. 안에서 `CustomFileDialog` 를 쓰므로 동작은 같습니다.
 
 ```python
 from custom_file_dialog import exec_file_dialog
 
-paths, chosen = exec_file_dialog(
-    parent=self,
-    mode="open_file",
-    filters=[("CSV", ["csv"])],
-)
+paths, chosen = exec_file_dialog(self, "open_file", filters=[("CSV", ["csv"])])
 if paths:
     print(paths[0])
 ```
 
-`QFileDialog` 정적 메서드와 나란히 두면 이렇습니다.
-
-```python
-# Qt 기본
-path, _ = QFileDialog.getOpenFileName(self, "파일 선택", "", "CSV (*.csv)")
-
-# 이 라이브러리 — 모드만 바꾸면 네 종류를 같은 함수로 부릅니다
-paths, _ = exec_file_dialog(self, "open_file",  filters=[("CSV", ["csv"])])
-paths, _ = exec_file_dialog(self, "open_files", filters=[("CSV", ["csv"])])
-paths, _ = exec_file_dialog(self, "save_file",  filters=[("CSV", ["csv"])])
-paths, _ = exec_file_dialog(self, "directory")
-```
+반환은 **언제나** `(경로 리스트, 선택된 필터)` 이고, 취소하면 `([], 필터)` 입니다.
+바인딩(PyQt5/6 · PySide2/6)과 모드마다 다른 Qt 의 반환 형태를 여기서 흡수합니다.
 
 | | `QFileDialog` 정적 메서드 | `exec_file_dialog()` |
 | --- | --- | --- |
@@ -43,11 +86,9 @@ paths, _ = exec_file_dialog(self, "directory")
 | 필터 | Qt 문자열만 | 파이썬 리스트·dict·문자열 다 됨 |
 | 저장 확장자 | 플랫폼마다 붙기도 안 붙기도 | 항상 붙여 줌 |
 
-여기에 시작 위치 기억(`remember=`), 사이드바 커스터마이즈(`places=`),
-죽은 네트워크 경로 방어가 필요하면 인자만 더 주면 됩니다.
 자세한 내용은 [다이얼로그로 쓰기](#다이얼로그로-쓰기)를 보세요.
 
-### 2. 화면에 붙이는 경로 입력 줄 — `FilePathEdit`
+### 3. 화면에 붙이는 경로 입력 줄 — `FilePathEdit`
 
 설정 화면처럼 **경로가 폼에 남아 있어야 할 때** 쓰는 위젯입니다.
 입력창 + 찾아보기 버튼 한 줄이고, `[...]` 를 누르면 위와 같은 다이얼로그가 뜹니다.
@@ -71,8 +112,9 @@ print(edit.path())
 
 | 이럴 때 | 쓸 것 |
 | --- | --- |
-| 버튼을 누르면 파일 하나 고르고 끝 | `exec_file_dialog()` |
-| 메뉴 항목 · 툴바에서 여는 일회성 다이얼로그 | `exec_file_dialog()` |
+| `QFileDialog` 쓰던 코드를 옮겨 옴 | `CustomFileDialog` |
+| 띄우기 전후로 다이얼로그를 더 만져야 함 (신호 연결 등) | `CustomFileDialog` |
+| 띄우고 결과만 받으면 끝 | `exec_file_dialog()` |
 | 설정 화면에 경로가 계속 보여야 함 | `FilePathEdit` |
 | 사용자가 경로를 직접 타이핑하거나 끌어다 놓음 | `FilePathEdit` |
 | 여러 경로를 폼으로 묶어 한 번에 꺼냄 | `FilePathForm` |
@@ -1089,23 +1131,70 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 
 ## 다이얼로그로 쓰기
 
-위젯을 배치하지 않고 `QFileDialog` 처럼 그때그때 띄우는 방식입니다.
+### `CustomFileDialog`
+
+`QFileDialog` 를 물려받은 클래스입니다. 생성자에 설정을 넣고 `exec()` 로 띄웁니다.
+
+```python
+from custom_file_dialog import CustomFileDialog
+
+dlg = CustomFileDialog(
+    self,                                  # parent
+    mode="open_files",
+    caption="이미지 고르기",                # 생략하면 모드별 한국어 기본 제목
+    directory="/home/user",
+    filters=[("이미지", ["png", "jpg"])],
+)
+if dlg.exec():
+    for path in dlg.selectedFiles():
+        print(path)
+```
+
+| 생성자 인자 | 설명 |
+| --- | --- |
+| `parent` | 부모 위젯 (모달 기준). 보통 `self` |
+| `mode` | `"open_file"` · `"open_files"` · `"save_file"` · `"directory"` |
+| `caption` / `directory` | 창 제목 / 처음 열릴 폴더 (파일 경로를 주면 그 파일이 미리 선택됨) |
+| `filters` / `selected_filter` | 파일 필터 ("필터 지정" 참고) / 처음 선택될 항목 |
+| `add_all_files_filter` | 필터 끝에 "모든 파일 (*)" 추가 (기본 `False`) |
+| `default_suffix` | 저장 모드에서 확장자 자동 부착 (없으면 필터에서 유추) |
+| `show_dirs_only` | 폴더 모드에서 파일을 숨길지 (기본 `True`) |
+| `options` | 추가 `QFileDialog.Option` |
+| `favorites` / `recent` | `FavoritesStore` / `RecentStore` |
+| `sidebar_urls` / `fixed_sidebar_urls` | 사이드바 기준 목록 / 제거를 막을 위치 |
+| `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) |
+| `places` | 위 다섯 개 대신 `Places` 를 통째로 |
+| `remember` | 용도별 시작 위치 기억 ("용도마다 다른 시작 위치" 참고) |
+| `path_timeout` | 죽은 네트워크 경로 방어 제한 시간(초) |
+
+| 메서드 | 설명 |
+| --- | --- |
+| `.exec()` / `.exec_()` | `QFileDialog` 그대로. 확인하면 참 |
+| `.selectedFiles()` | 고른 경로들. **즐겨찾기 링크는 원본으로 복원**되고 모드에 맞게 개수가 맞춰집니다 |
+| `.selectedPath()` | 경로 하나 (없으면 `None`) |
+| `.selectedNameFilter()` | `QFileDialog` 그대로 |
+| `.mode()` / `.places()` | 이 다이얼로그의 선택 모드 / 사이드바 묶음 |
+
+`QFileDialog` 의 나머지 API(`setDirectory()` · `selectFile()` · `currentChanged` ·
+`directoryEntered` …)도 전부 그대로 씁니다.
+
+> **항상 Qt 자체 다이얼로그로 뜹니다.** 여기서 더하는 것(사이드바 · 아이콘 · 링크
+> 추적 · 우클릭 메뉴 · 차단 경로 방어)은 모두 Qt 위젯을 직접 건드려야 하는데,
+> 네이티브 창은 OS 가 그려서 손댈 수 없습니다. 꾸밀 것이 없고 네이티브 창이
+> 필요하면 `exec_file_dialog(native=True)` 를 쓰세요.
+
+### `exec_file_dialog()`
+
+띄우고 결과만 받으면 될 때. 안에서 `CustomFileDialog` 를 쓰므로 동작은 같습니다.
 
 ```python
 from custom_file_dialog import exec_file_dialog
 
 paths, chosen = exec_file_dialog(
-    parent=self,
-    mode="open_files",
-    caption="이미지 고르기",              # 생략하면 모드별 한국어 기본 제목
-    directory="/home/user",
-    filters=[("이미지", ["png", "jpg"])],
+    parent=self, mode="open_files", caption="이미지 고르기",
+    directory="/home/user", filters=[("이미지", ["png", "jpg"])],
 )
 ```
-
-반환은 **언제나** `(경로 리스트, 선택된 필터)` 입니다. 취소하면 `([], 필터)` 이므로
-`if paths:` 하나로 모든 모드를 똑같이 처리할 수 있습니다. 바인딩(PyQt5/6·PySide2/6)과
-모드마다 다른 Qt 의 반환 형태를 여기서 흡수합니다.
 
 ```python
 paths, _ = exec_file_dialog(self, "open_file")    # 파일 1개  -> ["/a/b.csv"] 또는 []
@@ -1114,25 +1203,9 @@ paths, _ = exec_file_dialog(self, "save_file")    # 저장 이름  -> ["/a/새�
 paths, _ = exec_file_dialog(self, "directory")    # 폴더 1개   -> ["/a"]
 ```
 
-### 주요 인자
-
-| 인자 | 설명 |
-| --- | --- |
-| `parent` | 부모 위젯 (모달 기준). 보통 `self` |
-| `mode` | `"open_file"` · `"open_files"` · `"save_file"` · `"directory"` |
-| `caption` / `directory` | 제목 / 처음 열릴 폴더 |
-| `filters` | 파이썬 리스트·dict·Qt 문자열 다 됩니다 ("필터 지정" 참고) |
-| `add_all_files_filter` | 필터 끝에 "모든 파일 (*)" 추가 (기본 `False`) |
-| `default_suffix` | 저장 모드에서 확장자 자동 부착 (없으면 필터에서 유추) |
-| `remember` | 용도별 시작 위치 기억 ("용도마다 다른 시작 위치" 참고) |
-| `native` | `False` 면 Qt 자체 다이얼로그 강제 |
-| `places` | 사이드바 커스터마이즈 (아래) |
-
-### 사이드바까지 손보기
-
-`places=` 에 `Places` 를 넘기면 즐겨찾기·최근 파일·사이드바가 붙습니다. 이때만
-정적 메서드 대신 인스턴스 다이얼로그를 띄우고(네이티브 창으로는 사이드바를 못
-바꾸므로), 링크 추적 · 우클릭 메뉴 · 차단 경로 방어까지 함께 겁니다.
+생성자 인자는 `CustomFileDialog` 와 거의 같고, 사이드바를 손보려면 `places=` 에
+`Places` 를 넘깁니다. `native=True` 로 두면 정적 메서드를 써서 OS 네이티브 창이
+뜹니다(대신 꾸미기는 적용되지 않습니다).
 
 ```python
 from custom_file_dialog import Places, exec_file_dialog
@@ -1142,11 +1215,11 @@ paths, chosen = exec_file_dialog(
     places=Places(favorites=store, recent=recent, sidebar_urls=["~", "/mnt/data"]),
     remember="입력csv",     # 이 용도의 마지막 폴더에서 열고, 고른 뒤 다시 기억
 )
-paths = Places(favorites=store).resolve_all(paths)   # 링크 -> 원본 경로
 ```
 
-즐겨찾기에서 고르면 **링크 경로**가 돌아오므로 `resolve_all()` 을 한 번
-통과시키세요 (`FilePathEdit` 은 자동으로 합니다).
+즐겨찾기 링크는 `CustomFileDialog` 를 쓰는 경로(= `places=` 를 준 경우)에서
+자동으로 원본으로 복원됩니다. 직접 `QFileDialog` 를 쓴 결과라면
+`places.resolve_all(paths)` 를 한 번 통과시키세요.
 
 ### 그 밖의 헬퍼
 

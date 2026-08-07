@@ -1147,6 +1147,199 @@ def test_sidebar_dialog_returns_selection(qapp, monkeypatch, tmp_path):
     assert chosen == "CSV (*.csv)"
 
 
+def _close_soon(dialog, accepted=True):
+    """다음 이벤트 루프 차례에 다이얼로그를 닫는다.
+
+    ``accept()`` 는 QFileDialog 가 자체 검증을 해서 조건이 안 맞으면 아무 일도
+    하지 않는다(그러면 exec() 가 영원히 안 돌아온다). 검증을 건너뛰는
+    ``done()`` 으로 닫아 테스트가 매달리지 않게 한다.
+    """
+    from qtpy.QtCore import QTimer
+    from qtpy.QtWidgets import QDialog
+
+    code = QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
+    QTimer.singleShot(0, lambda: dialog.done(code))
+
+
+def _run(dialog):
+    """바인딩에 무관하게 exec 한다."""
+    runner = getattr(dialog, "exec_", None) or dialog.exec
+    return runner()
+
+
+def test_custom_file_dialog_is_a_qfiledialog(qapp, tmp_path):
+    """QFileDialog 를 물려받아 원래 쓰던 API 가 그대로 통한다."""
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import CustomFileDialog
+
+    assert issubclass(CustomFileDialog, QFileDialog)
+
+    target = tmp_path / "data.csv"
+    target.write_text("x")
+
+    dialog = CustomFileDialog(
+        None,
+        mode="open_file",
+        caption="입력 파일 선택",
+        directory=str(tmp_path),
+        filters=[("CSV", ["csv"])],
+    )
+    assert dialog.windowTitle() == "입력 파일 선택"
+    assert dialog.nameFilters() == ["CSV (*.csv)"]
+    assert dialog.directory().absolutePath() == str(tmp_path)
+    assert dialog.mode() == SelectMode.OPEN_FILE
+    assert dialog.fileMode() == QFileDialog.FileMode.ExistingFile
+    assert dialog.acceptMode() == QFileDialog.AcceptMode.AcceptOpen
+    # 커스터마이즈하려면 Qt 자체 다이얼로그여야 한다
+    assert dialog.options() & QFileDialog.Option.DontUseNativeDialog
+
+    # 제목을 안 주면 모드별 기본 제목
+    assert CustomFileDialog(None, mode="directory").windowTitle() == "폴더 선택"
+    dialog.deleteLater()
+
+
+def test_custom_file_dialog_exec_and_result(qapp, tmp_path):
+    """exec() 로 띄우고 selectedFiles() 로 받는다 — 취소하면 빈 결과."""
+    from custom_file_dialog import CustomFileDialog
+
+    target = tmp_path / "data.csv"
+    target.write_text("x")
+
+    dialog = CustomFileDialog(None, mode="open_file", directory=str(tmp_path))
+    dialog.selectFile(str(target))
+    _close_soon(dialog)
+    assert _run(dialog)                              # if dlg.exec(): 가 통한다
+    assert dialog.selectedFiles() == [str(target)]
+    assert dialog.selectedPath() == str(target)
+
+    cancelled = CustomFileDialog(None, mode="open_file", directory=str(tmp_path))
+    _close_soon(cancelled, accepted=False)
+    assert not _run(cancelled)
+    assert cancelled.selectedPath() is None
+
+
+def test_custom_file_dialog_modes(qapp, tmp_path):
+    """모드마다 개수와 확장자 규칙이 exec_file_dialog 과 같다."""
+    from custom_file_dialog import CustomFileDialog
+
+    inner = tmp_path / "안쪽"
+    inner.mkdir()
+    for name in ("a.csv", "b.csv"):
+        (inner / name).write_text("x")
+
+    # 저장 모드: 확장자를 빼고 쳐도 붙는다
+    save = CustomFileDialog(
+        None, mode="save_file", directory=str(inner),
+        filters=[("CSV", ["csv"])], default_suffix="csv",
+    )
+    save.selectFile("새파일")
+    _close_soon(save)
+    _run(save)
+    assert save.selectedPath() == str(inner / "새파일.csv")
+
+    # 폴더 모드
+    folder = CustomFileDialog(None, mode="directory", directory=str(tmp_path))
+    folder.selectFile(str(inner))
+    _close_soon(folder)
+    _run(folder)
+    assert folder.selectedPath() == str(inner)
+
+    # 한 개 모드는 여러 개가 골라져도 1개로 자른다
+    single = CustomFileDialog(None, mode="open_file", directory=str(inner))
+    single.selectFile(str(inner / "a.csv"))
+    _close_soon(single)
+    _run(single)
+    assert len(single.selectedFiles()) == 1
+
+
+def test_custom_file_dialog_resolves_links(qapp, tmp_path):
+    """즐겨찾기 링크를 골라도 selectedFiles() 는 원본 경로를 돌려준다."""
+    from custom_file_dialog import CustomFileDialog
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+    link = os.path.join(store.category_dir("설계"), "설계도.csv")
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=store.category_dir("설계"), favorites=store
+    )
+    dialog.selectFile(link)
+    _close_soon(dialog)
+    _run(dialog)
+
+    assert dialog.selectedFiles() == [design]        # 링크가 아니라 원본
+    assert dialog.places().favorites_store() is store
+
+
+def test_custom_file_dialog_sidebar_and_remember(qapp, tmp_path, monkeypatch):
+    """사이드바가 구성되고, remember 로 시작 위치를 주고받는다."""
+    from qtpy.QtWidgets import QListView
+
+    from custom_file_dialog import CustomFileDialog, last_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=os.path.dirname(design),
+        favorites=store, remember="입력csv",
+    )
+    sidebar = dialog.findChild(QListView, "sidebar")
+    model = sidebar.model()
+    names = [model.index(r, 0).data() for r in range(model.rowCount())]
+    assert "설계" in names                       # 분류가 사이드바에 올라왔다
+
+    dialog.selectFile(design)
+    _close_soon(dialog)
+    _run(dialog)
+    assert last_dir("입력csv") == os.path.dirname(design)
+
+    # 다음에 열면 거기서 시작한다 (directory 를 주지 않았을 때)
+    again = CustomFileDialog(None, mode="open_file", remember="입력csv")
+    assert again.directory().absolutePath() == os.path.dirname(design)
+
+    # directory 를 주면 그쪽이 이긴다
+    forced = CustomFileDialog(
+        None, mode="open_file", directory=str(tmp_path), remember="입력csv"
+    )
+    assert forced.directory().absolutePath() == str(tmp_path)
+
+
+def test_exec_file_dialog_uses_the_class(qapp, tmp_path, monkeypatch):
+    """exec_file_dialog(places=...) 은 같은 클래스를 쓴다(구현이 하나다)."""
+    from custom_file_dialog import CustomFileDialog
+
+    built = []
+    real_init = CustomFileDialog.__init__
+
+    def spy_init(self, *args, **kwargs):
+        built.append(kwargs.get("mode"))
+        real_init(self, *args, **kwargs)
+        _close_soon(self)
+
+    monkeypatch.setattr(CustomFileDialog, "__init__", spy_init)
+
+    target = tmp_path / "a.csv"
+    target.write_text("x")
+    monkeypatch.setattr(
+        dialog_module.QFileDialog, "selectedFiles", lambda self: [str(target)]
+    )
+
+    paths, _chosen = dialog_module.exec_file_dialog(
+        mode=SelectMode.OPEN_FILE,
+        directory=str(tmp_path),
+        places=Places(sidebar_urls=[str(tmp_path)]),
+    )
+    assert built == [SelectMode.OPEN_FILE]
+    assert paths == [str(target)]
+
+
 def test_exec_file_dialog_accepts_pythonic_filters(qapp, monkeypatch):
     """다이얼로그도 위젯과 같은 형태의 filters 를 받는다."""
     seen = []

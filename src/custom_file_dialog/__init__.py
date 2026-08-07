@@ -11,7 +11,7 @@ QFileDialog 기반 경로 선택 위젯.
 
 from . import safety
 from .constants import SelectMode
-from .dialog import exec_file_dialog, resolve_start_dir
+from .dialog import CustomFileDialog, exec_file_dialog, resolve_start_dir
 from .favorites import (
     FavoritesError,
     FavoritesStore,
@@ -42,6 +42,9 @@ from .validators import validate_paths
 __version__ = "0.1.0"
 
 __all__ = [
+    # 다이얼로그
+    "CustomFileDialog",
+    "exec_file_dialog",
     # 위젯
     "FilePathEdit",
     "FilePathForm",
@@ -60,7 +63,6 @@ __all__ = [
     "home_icon",
     "CategoryIconProvider",
     # 다이얼로그 직접 다루기
-    "exec_file_dialog",
     "resolve_start_dir",
     "current_sidebar_urls",
     "to_urls",

@@ -11,7 +11,8 @@ import os
 from qtpy.QtWidgets import QFileDialog
 
 from . import history, safety
-from .constants import DEFAULT_CAPTIONS, SelectMode
+from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
+from .places import Places
 from .util import to_urls
 from .filters import build_filter, ensure_suffix, suffix_of
 
@@ -189,77 +190,218 @@ _INSTANCE_MODES = {
 }
 
 
+class CustomFileDialog(QFileDialog):
+    """설정을 넣어 만들고 ``exec()`` 로 띄우는 다이얼로그 — QFileDialog 그대로.
+
+        dlg = CustomFileDialog(
+            self,
+            mode="open_file",
+            caption="입력 파일 선택",
+            filters=[("CSV", ["csv"]), ("엑셀", ["xlsx", "xls"])],
+            favorites=store,
+            remember="입력csv",
+        )
+        if dlg.exec():
+            paths = dlg.selectedFiles()      # 원본 경로로 복원되어 나온다
+
+    ``QFileDialog`` 를 물려받았으므로 ``setDirectory()`` · ``selectNameFilter()`` ·
+    ``currentChanged`` 처럼 원래 쓰던 것을 그대로 쓸 수 있다. 이 라이브러리가
+    더하는 것(사이드바 구성 · 즐겨찾기 · 최근 파일 · 링크 추적 · 차단 경로 방어 ·
+    용도별 시작 위치)은 생성자 인자로 켠다.
+
+    한 줄로 끝내고 싶으면 :func:`exec_file_dialog` 를 쓴다. 안에서 이 클래스를
+    쓰므로 동작은 같다.
+
+    **항상 Qt 자체 다이얼로그로 뜬다.** 여기서 더하는 것은 모두 Qt 위젯을 직접
+    건드려야 하는데 네이티브 창은 OS 가 그려서 손댈 수 없다. 꾸밀 것이 없고
+    네이티브 창이 필요하면 ``exec_file_dialog(native=True)`` 를 쓴다.
+
+    Args:
+        parent: 부모 위젯(모달 기준).
+        mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
+        caption: 창 제목. None 이면 모드별 기본 제목.
+        directory: 처음 열릴 폴더(또는 파일 경로 — 그 파일이 미리 선택된다).
+        filters: 파일 필터. ``FilePathEdit(filters=...)`` 와 같은 형태를 모두
+            받는다 (:func:`~custom_file_dialog.filters.build_filter` 참고).
+        selected_filter: 처음 선택되어 있을 필터 항목.
+        default_suffix: 저장 모드에서 확장자가 없을 때 붙일 확장자.
+        add_all_files_filter: 필터 끝에 "모든 파일 (*)" 을 붙일지.
+        show_dirs_only: 폴더 모드에서 파일을 숨길지.
+        options: 추가 ``QFileDialog.Option``.
+        places: :class:`~custom_file_dialog.places.Places` 를 직접 줄 때. 주면
+            아래 favorites/recent/… 인자는 무시한다.
+        favorites: :class:`~custom_file_dialog.favorites.FavoritesStore`.
+        recent: :class:`~custom_file_dialog.recent.RecentStore`.
+        sidebar_urls: 사이드바 기준 목록 (None 이면 홈 + 현재 위치).
+        fixed_sidebar_urls: 사이드바에서 제거를 막을 위치 (None 이면 홈만).
+        favorites_icon: 분류·홈 아이콘 (True / QIcon / False).
+        remember: 용도 이름. 주면 그 용도로 마지막에 쓰던 폴더에서 열고,
+            고르고 나면 그 폴더를 다시 기억한다
+            (:func:`~custom_file_dialog.history.last_dir` 와 같은 저장소).
+        path_timeout: 죽은 네트워크 경로에서 멈추지 않도록 하는 제한 시간(초).
+    """
+
+    def __init__(
+        self,
+        parent=None,
+        mode=SelectMode.OPEN_FILE,
+        caption=None,
+        directory=None,
+        filters=None,
+        selected_filter=None,
+        default_suffix=None,
+        add_all_files_filter=False,
+        show_dirs_only=True,
+        options=None,
+        places=None,
+        favorites=None,
+        recent=None,
+        sidebar_urls=None,
+        fixed_sidebar_urls=None,
+        favorites_icon=True,
+        remember=None,
+        path_timeout=safety.DEFAULT_TIMEOUT,
+    ):
+        mode = normalize_mode(mode)
+        super().__init__(parent, caption or DEFAULT_CAPTIONS.get(mode, "선택"))
+
+        self._mode = mode
+        self._default_suffix = default_suffix
+        self._remember = remember
+        self._path_timeout = None if path_timeout is None else float(path_timeout)
+        self._places = places if places is not None else Places(
+            favorites=favorites,
+            recent=recent,
+            sidebar_urls=sidebar_urls,
+            fixed_urls=fixed_sidebar_urls,
+            icon=favorites_icon,
+        )
+
+        # 네이티브 창으로는 아래 것들을 하나도 걸 수 없다
+        self.setOptions(
+            make_options(
+                native=False,
+                show_dirs_only=(mode == SelectMode.DIRECTORY and show_dirs_only),
+                extra=options,
+            )
+        )
+        accept_mode, file_mode = _INSTANCE_MODES[mode]
+        self.setAcceptMode(_enum("AcceptMode", accept_mode))
+        self.setFileMode(_enum("FileMode", file_mode))
+
+        name_filter = build_filter(filters, add_all_files=add_all_files_filter)
+        if name_filter and mode != SelectMode.DIRECTORY:
+            self.setNameFilters([f for f in name_filter.split(";;") if f])
+            if selected_filter:
+                self.selectNameFilter(selected_filter)
+        if default_suffix:
+            self.setDefaultSuffix(default_suffix)
+
+        if not directory and remember:
+            directory = resolve_start_dir(
+                [], last_dir=history.last_dir(remember), mode=mode,
+                timeout=self._path_timeout,
+            )
+        if directory:
+            self._start_at(directory)
+
+        # 아이콘 제공자는 사이드바보다 먼저 걸어야 사이드바 항목에도 반영된다
+        # (QUrlModel 이 등록 시점의 DecorationRole 을 복사해 가기 때문).
+        provider = self._places.icon_provider()
+        if provider is not None:
+            self.setIconProvider(provider)
+
+        # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
+        current = self.directory().absolutePath()
+        urls = self._places.sidebar_urls(current)
+        if urls is not None:
+            self.setSidebarUrls(to_urls(urls))
+
+        # 사이드바 표시 · 링크 추적 · 우클릭 메뉴 · 차단 경로 방어를 한 번에
+        from .hooks import install_hooks
+
+        install_hooks(self, self._places, current)
+
+        # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
+        self.accepted.connect(self._on_accepted)
+
+    # ------------------------------------------------------------- 조회
+    def mode(self):
+        """이 다이얼로그의 선택 모드."""
+        return self._mode
+
+    def places(self):
+        """사이드바에 얹은 것들의 묶음 (:class:`Places`)."""
+        return self._places
+
+    def selectedFiles(self):        # noqa: N802 (Qt 시그니처)
+        """고른 경로들. **즐겨찾기 링크는 원본 경로로 되돌려서** 돌려준다.
+
+        모드에 맞게 개수도 맞춘다(여러 개 모드가 아니면 1개). 저장 모드에서는
+        확장자가 없으면 ``default_suffix`` 나 선택된 필터의 확장자를 붙인다.
+        """
+        paths = [p for p in super().selectedFiles() if p]
+        if self._mode == SelectMode.SAVE_FILE and paths:
+            suffix = self._default_suffix or suffix_of(self.selectedNameFilter())
+            paths = [ensure_suffix(paths[0], suffix)]
+        elif self._mode != SelectMode.OPEN_FILES:
+            paths = paths[:1]
+        return self._places.resolve_all(paths)
+
+    def selectedPath(self):         # noqa: N802 (Qt 시그니처에 맞춘 이름)
+        """고른 경로 하나 (없으면 None). 여러 개 모드에서는 첫 번째."""
+        paths = self.selectedFiles()
+        return paths[0] if paths else None
+
+    # ------------------------------------------------------------- 내부
+    def _start_at(self, directory):
+        """시작 위치를 잡는다. 파일 경로면 그 폴더를 열고 이름을 미리 채운다."""
+        isdir = (
+            os.path.isdir
+            if self._path_timeout is None
+            else (lambda p: safety.safe_isdir(p, self._path_timeout))
+        )
+        if isdir(directory):
+            self.setDirectory(directory)
+            return
+        parent_dir = os.path.dirname(directory)
+        if parent_dir:
+            self.setDirectory(parent_dir)
+        self.selectFile(os.path.basename(directory))
+
+    def _on_accepted(self):
+        if self._remember:
+            paths = self.selectedFiles()
+            if paths:
+                history.remember_dir(self._remember, paths[0])
+
+
 def _exec_instance_dialog(
     parent, mode, caption, directory, name_filter, selected_filter,
     default_suffix, show_dirs_only, extra_options, places,
 ):
-    """QFileDialog 인스턴스를 직접 만들어 띄운다(사이드바/아이콘 커스터마이즈용).
+    """사이드바를 손봐야 할 때 :class:`CustomFileDialog` 로 띄운다.
 
     정적 메서드(getOpenFileName 등)로는 사이드바나 아이콘을 건드릴 수 없어서,
-    이 경로만 인스턴스를 만든다. 네이티브 창은 OS 가 그려서 setSidebarUrls() /
-    setIconProvider() 가 무시되므로 항상 Qt 자체 다이얼로그
-    (DontUseNativeDialog)로 연다.
+    이 경로만 인스턴스를 만든다.
     """
-    dialog = QFileDialog(parent, caption)
-    dialog.setOptions(
-        make_options(
-            native=False,
-            show_dirs_only=(mode == SelectMode.DIRECTORY and show_dirs_only),
-            extra=extra_options,
-        )
+    dialog = CustomFileDialog(
+        parent,
+        mode=mode,
+        caption=caption,
+        directory=directory,
+        filters=name_filter,
+        selected_filter=selected_filter,
+        default_suffix=default_suffix,
+        show_dirs_only=show_dirs_only,
+        options=extra_options,
+        places=places,
+        # remember 는 exec_file_dialog 이 이미 처리했다(두 번 기억하지 않게)
     )
-
-    accept_mode, file_mode = _INSTANCE_MODES[mode]
-    dialog.setAcceptMode(_enum("AcceptMode", accept_mode))
-    dialog.setFileMode(_enum("FileMode", file_mode))
-
-    if name_filter and mode != SelectMode.DIRECTORY:
-        dialog.setNameFilters([f for f in name_filter.split(";;") if f])
-        if selected_filter:
-            dialog.selectNameFilter(selected_filter)
-    if default_suffix:
-        dialog.setDefaultSuffix(default_suffix)
-
-    # 시작 위치. 파일 경로가 오면 폴더로 열고 파일 이름은 미리 채워 준다.
-    if directory:
-        if os.path.isdir(directory):
-            dialog.setDirectory(directory)
-        else:
-            parent_dir = os.path.dirname(directory)
-            if parent_dir:
-                dialog.setDirectory(parent_dir)
-            dialog.selectFile(os.path.basename(directory))
-
-    # 아이콘 제공자는 사이드바보다 먼저 걸어야 사이드바 항목에도 반영된다
-    # (QUrlModel 이 등록 시점의 DecorationRole 을 복사해 가기 때문).
-    provider = places.icon_provider()
-    if provider is not None:
-        dialog.setIconProvider(provider)
-
-    # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
-    current = dialog.directory().absolutePath()
-    urls = places.sidebar_urls(current)
-    if urls is not None:
-        dialog.setSidebarUrls(to_urls(urls))
-
-    # 다이얼로그에 거는 것들(사이드바 표시 · 링크 추적 · 메뉴 · 차단)은
-    # hooks 가 한 번에 처리한다. 사이드바를 채울 때 쓴 "현재 위치"를 그대로
-    # 넘겨 이름을 갈아 끼울 항목이 어긋나지 않게 한다.
-    from .hooks import install_hooks
-
-    install_hooks(dialog, places, current)
-
-    accepted = dialog.exec_() if hasattr(dialog, "exec_") else dialog.exec()
-    if not accepted:
+    run = getattr(dialog, "exec_", None) or dialog.exec
+    if not run():
         return [], selected_filter
-
-    paths = [p for p in dialog.selectedFiles() if p]
-    chosen = dialog.selectedNameFilter() or selected_filter
-    if mode == SelectMode.SAVE_FILE and paths:
-        paths = [ensure_suffix(paths[0], default_suffix or suffix_of(chosen))]
-    elif mode != SelectMode.OPEN_FILES:
-        paths = paths[:1]
-    return paths, chosen
+    return dialog.selectedFiles(), (dialog.selectedNameFilter() or selected_filter)
 
 
 def resolve_start_dir(
