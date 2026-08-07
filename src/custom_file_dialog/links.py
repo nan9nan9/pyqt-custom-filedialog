@@ -13,6 +13,7 @@ Qt 가 C++ 에서 연결해 둔 슬롯은 파이썬에서 끊을 수 없다. 그
 
 import os
 
+from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import QComboBox, QToolButton
 
 from . import safety
@@ -68,6 +69,9 @@ def follow_link_on_parent(dialog, places):
     def on_current_changed(path):
         state["target"] = places.link_target(path)
 
+    def disarm():
+        state["goto"] = None
+
     def on_pressed():
         # 누른 그 순간의 상황으로 목적지를 정한다(누른 뒤에는 이미 옮겨진 뒤다)
         state["goto"] = None
@@ -77,6 +81,11 @@ def follow_link_on_parent(dialog, places):
         if not places.is_inside(dialog.directory().absolutePath()):
             return                       # 분류 폴더 안에서 고른 링크일 때만
         state["goto"] = os.path.dirname(abspath(target) or "")
+        # 진짜 클릭이면 이동과 directoryEntered 가 이 이벤트 처리 안에서 동기로
+        # 끝난다(타이머는 그 뒤에 돈다). 눌렀다가 끌어서 밖에서 놓으면 이동이
+        # 없는데, 장전만 된 채 남으면 **다음 평범한 이동을 가로채** 엉뚱한 곳으로
+        # 보내 버린다. 이벤트 루프로 돌아오면 무장을 푼다.
+        QTimer.singleShot(0, disarm)
 
     def on_entered(_path):
         destination, state["goto"], state["target"] = state["goto"], None, None

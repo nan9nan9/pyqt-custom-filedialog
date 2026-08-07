@@ -60,8 +60,10 @@ class FilePathForm(QWidget):
         if key in self._edits:
             raise ValueError("이미 등록된 key 입니다: %r" % key)
 
-        # 라벨은 QFormLayout 이 정렬해 주므로 위젯 자체에는 붙이지 않는다.
+        # 라벨은 QFormLayout 이 정렬해 주므로 위젯 자체에는 붙이지 않고,
+        # 부모는 폼이 가지므로 parent 를 넘겨도 조용히 무시한다(TypeError 방지).
         kwargs.pop("label", None)
+        kwargs.pop("parent", None)
         edit = FilePathEdit(parent=self, **kwargs)
         self._edits[key] = edit
         self._order.append(key)

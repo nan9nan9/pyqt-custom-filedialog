@@ -184,7 +184,12 @@ class FavoritesStore:
             link = os.path.join(directory, name)
             index.pop(os.path.normpath(link), None)
             self._unlink(link)
-        os.rmdir(directory)
+        try:
+            os.rmdir(directory)
+        except OSError:
+            # 링크 하나가 안 지워졌으면(권한 등) 폴더가 남는다. 우클릭 슬롯까지
+            # 예외가 튀어 오르는 것보다, 남은 것을 두고 인덱스만 맞추는 편이 낫다.
+            pass
         self._save_index(index)
 
     # ------------------------------------------------------------- 항목

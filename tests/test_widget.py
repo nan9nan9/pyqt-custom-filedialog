@@ -353,3 +353,10 @@ def test_set_mode_updates_completer_filter(qapp):
 
     edit.set_mode("open_file")
     assert edit._completer_model.filter() & QDir.Filter.Files
+
+
+def test_form_add_path_ignores_parent_kwarg(qapp):
+    """add_path 에 parent 를 넘겨도 (폼이 부모이므로) 조용히 무시한다."""
+    form = FilePathForm()
+    edit = form.add_path("input", "입력:", mode="open_file", parent=None)
+    assert edit.parent() is form

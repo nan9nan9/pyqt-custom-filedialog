@@ -296,3 +296,35 @@ def test_widget_follows_links(qapp, tmp_path, monkeypatch):
     FilePathEdit(mode="open_file", favorites=favorites).browse()
     assert shown["path"] == output
 
+
+
+def test_follow_link_on_parent_disarms_without_navigation(qapp, tmp_path):
+    """버튼을 눌렀다 끌어서 놓아(클릭 불발) 이동이 없으면 무장이 풀린다.
+
+    장전된 채 남으면 **다음 평범한 이동을 가로채** 원본 부모로 순간이동했다.
+    """
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    category = favorites.category_dir("설계")
+    other = tmp_path / "다른폴더"
+    other.mkdir()
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.follow_link_on_parent(dialog, Places(favorites=favorites))
+    button = dialog.findChild(QToolButton, "toParentButton")
+
+    # 링크를 고르고 버튼을 눌렀지만 이동은 일어나지 않았다 (드래그로 놓침)
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    button.pressed.emit()
+    _spin(qapp, 50)                       # 이벤트 루프로 돌아오면 무장 해제
+
+    # 그 뒤의 평범한 이동은 가로채이지 않는다
+    dialog.setDirectory(str(other))
+    dialog.directoryEntered.emit(str(other))
+    assert dialog.directory().absolutePath() == str(other)
+    dialog.deleteLater()

@@ -453,3 +453,15 @@ def test_is_category_dir_skips_fs_for_outside_paths(store, tmp_path, monkeypatch
     # 진짜 분류 폴더는 여전히 잡는다(이때만 isdir 을 만진다)
     assert store.is_category_dir(store.category_dir("설계"))
     assert calls
+
+
+def test_remove_category_survives_rmdir_failure(store, tmp_path, monkeypatch):
+    """링크 하나가 안 지워져 rmdir 이 실패해도 예외가 튀어 오르지 않는다."""
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+
+    def boom(path):
+        raise OSError("장치 사용 중")
+
+    monkeypatch.setattr(os, "rmdir", boom)
+    store.remove_category("설계")            # 예외 없이 돌아와야 한다
