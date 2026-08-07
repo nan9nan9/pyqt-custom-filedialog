@@ -235,6 +235,9 @@ class CustomFileDialog(QFileDialog):
         mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
         caption: 창 제목. None 이면 모드별 기본 제목.
         directory: 처음 열릴 폴더(또는 파일 경로 — 그 파일이 미리 선택된다).
+            **여기에 줘야 한다.** 만든 뒤에 ``setDirectory()`` 를 부르면 사이드바의
+            "현재 위치" 항목은 생성 시점의 폴더를 가리킨 채로 남는다(사이드바는
+            생성할 때 한 번 채워지기 때문).
         filters: 파일 필터. ``FilePathEdit(filters=...)`` 와 같은 형태를 모두
             받는다 (:func:`~custom_file_dialog.filters.build_filter` 참고).
         selected_filter: 처음 선택되어 있을 필터 항목.
