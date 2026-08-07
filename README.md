@@ -361,6 +361,25 @@ if not form.is_valid():
 ## 사이드바(왼쪽 즐겨찾기) 커스터마이즈
 
 **생성자 인자만으로 다 됩니다.** 사이드바를 위해 따로 위젯을 만들 필요는 없습니다.
+가장 짧게는 이렇습니다.
+
+```python
+dlg = CustomFileDialog(self, mode="open_file", favorites=True, recent=True)
+if dlg.exec():
+    paths = dlg.selectedFiles()
+```
+
+`True` 를 주면 **기본 위치**(앱 데이터 폴더)에 저장소를 알아서 만들어 씁니다.
+등록해 둔 즐겨찾기·최근 파일은 **디스크에 남아 있으므로, 띄울 때마다 새로
+만들어도 내용은 그대로입니다.** 목록을 코드에서 관리할 필요가 없습니다.
+
+```python
+# 세 번을 새로 띄워도 사이드바는 그대로
+for _ in range(3):
+    CustomFileDialog(self, favorites=True)   # -> [홈, 현재 위치, 설계, 보고서]
+```
+
+저장소를 직접 다뤄야 할 때(등록·삭제·위치 지정)만 인스턴스를 만들어 넘깁니다.
 
 ```python
 dlg = CustomFileDialog(
@@ -372,18 +391,21 @@ dlg = CustomFileDialog(
     fixed_sidebar_urls=["~", "/mnt/data"],  # 우클릭 "제거" 잠금
     favorites_icon=False,                   # 아이콘 끄기 (Qt 기본 폴더 아이콘)
 )
-if dlg.exec():
-    paths = dlg.selectedFiles()
 ```
 
 | 인자 | 하는 일 | 생략하면 |
 | --- | --- | --- |
-| `favorites` | `FavoritesStore` 의 분류를 사이드바에 올림 | 안 올림 |
-| `recent` | `RecentStore` 를 "최근 파일" 항목 하나로 | 안 올림 |
+| `favorites` | `True` = 기본 위치에 자동 생성 / `FavoritesStore` = 그걸 사용 | 안 올림 |
+| `recent` | `True` = 자동 생성 / `RecentStore` = 그걸 사용 | 안 올림 |
+| `recent_max` | `recent=True` 로 만들 때 기억할 개수 | 20 |
 | `sidebar_urls` | 기준 목록을 통째로 지정 | 홈 + 현재 위치 |
 | `fixed_sidebar_urls` | 우클릭 "사이드바에서 제거" 를 막을 위치 | 홈만 보호 |
 | `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) | `True` (별표·시계·집) |
-| `places` | 위 다섯 개 대신 `Places` 를 통째로 | — |
+| `places` | 위 여섯 개 대신 `Places` 를 통째로 | — |
+
+저장소는 **디스크 폴더를 가리키는 손잡이**일 뿐이라 만드는 비용도 거의 없습니다
+(`FavoritesStore()` 200회에 4ms). 앱 어딘가에 들고 다닐 필요 없이 필요할 때마다
+만들면 됩니다. 저장 위치는 "저장 위치 정하기" 를 참고하세요.
 
 `QFileDialog` 를 물려받았으므로 띄우기 전에 **원래 API 로 더 만져도** 됩니다.
 
@@ -839,7 +861,7 @@ menus.remove_entry(store, "설계", link_path)      # 코드에서 직접 제거
 from custom_file_dialog import CustomFileDialog, RecentStore
 
 # 1) 가장 간단하게 — 기본 위치에 저장소를 자동으로 만든다
-CustomFileDialog(self, mode="open_file", recent=RecentStore(max_items=20))
+CustomFileDialog(self, mode="open_file", recent=True, recent_max=20)
 
 # 2) 저장소를 직접 만들어 여러 자리가 같은 목록을 공유
 recent = RecentStore(max_items=20)
@@ -1221,7 +1243,8 @@ if dlg.exec():
 | `default_suffix` | 저장 모드에서 확장자 자동 부착 (없으면 필터에서 유추) |
 | `show_dirs_only` | 폴더 모드에서 파일을 숨길지 (기본 `True`) |
 | `options` | 추가 `QFileDialog.Option` |
-| `favorites` / `recent` | `FavoritesStore` / `RecentStore` |
+| `favorites` / `recent` | `True` (기본 위치에 자동 생성) 또는 `FavoritesStore` / `RecentStore` |
+| `recent_max` | `recent=True` 로 만들 때 기억할 개수 (기본 20) |
 | `sidebar_urls` / `fixed_sidebar_urls` | 사이드바 기준 목록 / 제거를 막을 위치 |
 | `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) |
 | `places` | 위 다섯 개 대신 `Places` 를 통째로 |

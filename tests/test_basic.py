@@ -51,6 +51,7 @@ from custom_file_dialog import dialog as dialog_module  # noqa: E402
 from custom_file_dialog import history as history_module  # noqa: E402
 from custom_file_dialog import hooks as hooks_module  # noqa: E402
 from custom_file_dialog import places as places_module  # noqa: E402
+from custom_file_dialog import recent as recent_module  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -1251,6 +1252,70 @@ def test_custom_file_dialog_modes(qapp, tmp_path):
     _close_soon(single)
     _run(single)
     assert len(single.selectedFiles()) == 1
+
+
+def test_custom_file_dialog_stores_can_be_true(qapp, tmp_path, monkeypatch):
+    """favorites=True / recent=True 면 기본 위치에 저장소를 만들어 준다."""
+    from custom_file_dialog import (
+        CustomFileDialog,
+        FavoritesStore,
+        RecentStore,
+        configure_favorites,
+    )
+
+    monkeypatch.setattr(
+        recent_module, "default_recent_dir", lambda: str(tmp_path / "recent")
+    )
+    configure_favorites(str(tmp_path / "favorites"))
+    try:
+        dialog = CustomFileDialog(None, mode="open_file", favorites=True, recent=True)
+        places = dialog.places()
+        assert isinstance(places.favorites_store(), FavoritesStore)
+        assert isinstance(places.recent, RecentStore)
+
+        # 개수도 지정할 수 있다
+        assert CustomFileDialog(
+            None, mode="open_file", recent=True, recent_max=5
+        ).places().recent.max_items == 5
+
+        # 인스턴스를 직접 주면 그대로 쓴다
+        store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+        assert (
+            CustomFileDialog(None, mode="open_file", favorites=store)
+            .places()
+            .favorites_store()
+            is store
+        )
+
+        # 안 주면 없다
+        empty = CustomFileDialog(None, mode="open_file").places()
+        assert empty.favorites_store() is None
+        assert empty.recent is None
+    finally:
+        configure_favorites(None)
+
+
+def test_custom_file_dialog_store_contents_persist(qapp, tmp_path, monkeypatch):
+    """띄울 때마다 저장소를 새로 만들어도 등록해 둔 것은 그대로다."""
+    from qtpy.QtWidgets import QListView
+
+    from custom_file_dialog import CustomFileDialog, configure_favorites
+
+    design, _report, _output = _make_tree(tmp_path)
+    configure_favorites(str(tmp_path / "favorites"))
+    try:
+        from custom_file_dialog import FavoritesStore
+
+        FavoritesStore().add("설계", design)
+
+        # 세 번 새로 띄워도 분류가 계속 보인다
+        for _ in range(3):
+            dialog = CustomFileDialog(None, mode="open_file", favorites=True)
+            model = dialog.findChild(QListView, "sidebar").model()
+            names = [model.index(r, 0).data() for r in range(model.rowCount())]
+            assert "설계" in names
+    finally:
+        configure_favorites(None)
 
 
 def test_custom_file_dialog_resolves_links(qapp, tmp_path):

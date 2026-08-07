@@ -12,7 +12,9 @@ from qtpy.QtWidgets import QFileDialog
 
 from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
+from .favorites import FavoritesStore
 from .places import Places
+from .recent import DEFAULT_RECENT_MAX, RecentStore
 from .util import to_urls
 from .filters import build_filter, ensure_suffix, suffix_of
 
@@ -181,6 +183,18 @@ def _run_dialog(
     return ([path] if path else []), (chosen or selected_filter)
 
 
+def _store_or_none(value, factory, **kwargs):
+    """저장소 인자를 정리한다 — ``True`` 면 **기본 위치**에 하나 만들어 준다.
+
+    저장소는 디스크의 폴더를 가리키는 손잡이일 뿐이라, 매번 새로 만들어도 안에
+    든 것은 그대로다(``FavoritesStore()`` 200회에 4ms). 그래서 다이얼로그를 띄울
+    때마다 만들어 넘겨도 되고, ``True`` 만 줘서 맡겨도 된다.
+    """
+    if value is True:
+        return factory(**kwargs)
+    return value or None
+
+
 # 모드별 (AcceptMode, FileMode) 설정값
 _INSTANCE_MODES = {
     SelectMode.OPEN_FILE: ("AcceptOpen", "ExistingFile"),
@@ -230,8 +244,12 @@ class CustomFileDialog(QFileDialog):
         options: 추가 ``QFileDialog.Option``.
         places: :class:`~custom_file_dialog.places.Places` 를 직접 줄 때. 주면
             아래 favorites/recent/… 인자는 무시한다.
-        favorites: :class:`~custom_file_dialog.favorites.FavoritesStore`.
-        recent: :class:`~custom_file_dialog.recent.RecentStore`.
+        favorites: :class:`~custom_file_dialog.favorites.FavoritesStore`, 또는
+            ``True`` 면 **기본 위치**(앱 데이터 폴더)에 하나 만들어 쓴다.
+            저장소는 디스크 폴더를 가리키는 손잡이라 띄울 때마다 새로 만들어도
+            등록해 둔 것은 그대로 남는다.
+        recent: :class:`~custom_file_dialog.recent.RecentStore`, 또는 ``True``.
+        recent_max: ``recent=True`` 로 만들 때 기억할 개수.
         sidebar_urls: 사이드바 기준 목록 (None 이면 홈 + 현재 위치).
         fixed_sidebar_urls: 사이드바에서 제거를 막을 위치 (None 이면 홈만).
         favorites_icon: 분류·홈 아이콘 (True / QIcon / False).
@@ -257,6 +275,7 @@ class CustomFileDialog(QFileDialog):
         places=None,
         favorites=None,
         recent=None,
+        recent_max=DEFAULT_RECENT_MAX,
         sidebar_urls=None,
         fixed_sidebar_urls=None,
         favorites_icon=True,
@@ -271,8 +290,8 @@ class CustomFileDialog(QFileDialog):
         self._settings_key = settings_key
         self._path_timeout = None if path_timeout is None else float(path_timeout)
         self._places = places if places is not None else Places(
-            favorites=favorites,
-            recent=recent,
+            favorites=_store_or_none(favorites, FavoritesStore),
+            recent=_store_or_none(recent, RecentStore, max_items=recent_max),
             sidebar_urls=sidebar_urls,
             fixed_urls=fixed_sidebar_urls,
             icon=favorites_icon,
