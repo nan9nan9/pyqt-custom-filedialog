@@ -198,6 +198,10 @@ def _store_or_none(value, factory, **kwargs):
 # 사이드바 폭을 항목에 맞출 때 글자 오른쪽에 남기는 여백(px)
 SIDEBAR_PADDING = 8
 
+# 사이드바 최소 폭(px). 설정이 하나도 없는 새 프로필에서 Qt 는 79px 로 여는데
+# 너무 좁다. 한 번이라도 다이얼로그를 닫으면 Qt 가 저장하는 값(115)에 맞춘다.
+MIN_SIDEBAR_WIDTH = 115
+
 # 사이드바를 넓히더라도 파일 목록에 최소한 남겨 둘 폭(px)
 MIN_FILE_LIST_WIDTH = 260
 
@@ -269,8 +273,9 @@ class CustomFileDialog(QFileDialog):
             (:func:`~custom_file_dialog.history.last_dir` 참고).
         path_timeout: 죽은 네트워크 경로에서 멈추지 않도록 하는 제한 시간(초).
         sidebar_width: 사이드바 폭(px). ``None``(기본)이면 **항목이 잘리지 않을
-            만큼** 자동으로 넓힌다(이미 넓으면 그대로 둔다). 숫자를 주면 그
-            폭으로, ``0`` 이면 Qt 가 정한 대로 둔다.
+            만큼** 자동으로 넓힌다(이미 넓으면 그대로 둔다). ``0`` 이면 내용에는
+            맞추지 않는다. 둘 다 :data:`MIN_SIDEBAR_WIDTH` 아래로는 내려가지
+            않는다. 숫자를 주면 그 폭을 그대로 쓴다.
     """
 
     def __init__(
@@ -406,9 +411,12 @@ class CustomFileDialog(QFileDialog):
             self._fit_sidebar(self._sidebar_width)
 
     def _fit_sidebar(self, width):
-        """사이드바 폭을 정한다. ``None`` 이면 항목이 잘리지 않을 만큼만 넓힌다."""
-        if width == 0:
-            return                          # 0 = Qt 가 정한 대로 둔다
+        """사이드바 폭을 정한다.
+
+        ``None`` 이면 항목이 잘리지 않을 만큼 넓히고, ``0`` 이면 내용에는 맞추지
+        않는다. 둘 다 :data:`MIN_SIDEBAR_WIDTH` 아래로는 내려가지 않는다.
+        숫자를 주면 그 값을 그대로 쓴다.
+        """
         splitter = self.findChild(QSplitter, "splitter")
         sidebar = self.findChild(QListView, "sidebar")
         if splitter is None or sidebar is None:
@@ -418,13 +426,17 @@ class CustomFileDialog(QFileDialog):
         if len(sizes) < 2 or total <= 0:
             return                          # 아직 자리가 안 잡혔다
 
-        if width is None:
-            needed = (
-                sidebar.sizeHintForColumn(0)
-                + 2 * sidebar.frameWidth()
-                + SIDEBAR_PADDING
-            )
-            width = max(sizes[0], needed)   # 이미 충분히 넓으면 그대로 둔다
+        if width is None or width == 0:
+            floor = MIN_SIDEBAR_WIDTH
+            if width is None:               # 항목이 잘리지 않게
+                floor = max(
+                    floor,
+                    sidebar.sizeHintForColumn(0)
+                    + 2 * sidebar.frameWidth()
+                    + SIDEBAR_PADDING,
+                )
+            # 이미 충분히 넓으면 그대로 둔다(좁히지 않는다)
+            width = max(sizes[0], floor)
 
         # 넓히더라도 파일 목록 자리는 남겨 둔다
         width = max(0, min(int(width), max(0, total - MIN_FILE_LIST_WIDTH)))

@@ -1393,13 +1393,14 @@ def test_sidebar_width_fits_items(qapp, tmp_path):
     # 기본: 내용이 필요한 만큼은 확보된다
     width, _files, needed = widths()
     assert width >= needed
+    assert width >= dialog_module.MIN_SIDEBAR_WIDTH
 
     # 직접 지정하면 그대로
     assert widths(sidebar_width=220)[0] == 220
 
-    # 0 이면 Qt 가 정한 대로 두므로 내용보다 좁을 수 있다
-    untouched, _files, needed = widths(sidebar_width=0)
-    assert untouched < needed
+    # 0 이면 내용에 맞추지는 않지만, 최소 폭 아래로는 내려가지 않는다
+    untouched = widths(sidebar_width=0)[0]
+    assert untouched >= dialog_module.MIN_SIDEBAR_WIDTH
 
     # 아무리 넓게 줘도 파일 목록 자리는 남긴다
     assert widths(sidebar_width=5000)[1] >= 200

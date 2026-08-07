@@ -463,7 +463,7 @@ dlg = CustomFileDialog(
 | `sidebar_urls` | 기준 목록을 통째로 지정 | 홈 + 현재 위치 |
 | `fixed_sidebar_urls` | 우클릭 "사이드바에서 제거" 를 막을 위치 | 홈만 보호 |
 | `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) | `True` (별표·시계·집) |
-| `sidebar_width` | 사이드바 폭(px). `0` 이면 Qt 가 정한 대로 | 항목에 맞춰 자동 |
+| `sidebar_width` | 사이드바 폭(px). `0` 이면 내용에 안 맞춤(최소 115) | 항목에 맞춰 자동 |
 | `places` | 위 여섯 개 대신 `Places` 를 통째로 | — |
 
 저장소는 **디스크 폴더를 가리키는 손잡이**일 뿐이라 만드는 비용도 거의 없습니다
@@ -529,9 +529,19 @@ Qt 기본 항목("Computer", 홈)에는 맞지만, 여기서 얹는 "현재 위�
 ```python
 CustomFileDialog(self, favorites=store)                     # 자동 (기본)
 CustomFileDialog(self, favorites=store, sidebar_width=220)  # 직접 지정
-CustomFileDialog(self, favorites=store, sidebar_width=0)    # Qt 가 정한 대로
+CustomFileDialog(self, favorites=store, sidebar_width=0)    # 내용에 맞추지 않음
 ```
 
+설정이 하나도 없는 새 프로필에서 실제로 잰 값입니다.
+
+| | 사이드바 폭 |
+| --- | --- |
+| Qt 날것 (`sidebar_width=0` 이 하던 일) | 79 — 너무 좁음 |
+| `sidebar_width=0` (지금) | **115** — 최소 폭 |
+| 자동 (항목 5개) | **143** — 내용에 맞춤 |
+| `sidebar_width=220` | 220 |
+
+- **115px 아래로는 내려가지 않습니다** (`MIN_SIDEBAR_WIDTH`).
 - 이미 충분히 넓으면 **그대로 둡니다**(좁히지 않습니다).
 - 아무리 넓게 줘도 파일 목록 자리는 남깁니다.
 - 사용자가 경계를 끌어 조절하면 그 뒤로는 건드리지 않습니다.
@@ -1341,7 +1351,7 @@ if dlg.exec():
 | `options` | 추가 `QFileDialog.Option` |
 | `favorites` / `recent` | `True` (기본 위치에 자동 생성) 또는 `FavoritesStore` / `RecentStore` |
 | `recent_max` | `recent=True` 로 만들 때 기억할 개수 (기본 20) |
-| `sidebar_width` | 사이드바 폭(px). 기본은 항목에 맞춰 자동, `0` 이면 Qt 기본값 |
+| `sidebar_width` | 사이드바 폭(px). 기본은 항목에 맞춰 자동, 최소 115 |
 | `sidebar_urls` / `fixed_sidebar_urls` | 사이드바 기준 목록 / 제거를 막을 위치 |
 | `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) |
 | `places` | 위 다섯 개 대신 `Places` 를 통째로 |
