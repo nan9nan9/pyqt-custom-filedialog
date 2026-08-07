@@ -15,8 +15,33 @@ import os
 
 from qtpy.QtCore import QDir, QSettings, QUrl
 
+from .favorites import FavoritesStore
 from .icons import CategoryIconProvider, clock_icon, home_icon
+from .recent import RecentStore
 from .util import abspath, to_urls, url_path
+
+
+def as_favorites_store(value):
+    """``favorites`` 인자를 :class:`FavoritesStore` (또는 None) 로 정규화한다.
+
+    ``True`` 면 **기본 위치**(앱 데이터 폴더)에 하나 만들어 준다. 저장소는
+    디스크의 폴더를 가리키는 손잡이일 뿐이라, 매번 새로 만들어도 안에 든 것은
+    그대로다(``FavoritesStore()`` 200회에 4ms).
+    """
+    if value is True:
+        return FavoritesStore()
+    return value or None
+
+
+def as_recent_store(value, max_items=None):
+    """``recent`` 인자를 :class:`RecentStore` (또는 None) 로 정규화한다.
+
+    ``True`` 면 기본 위치에 하나 만들고, ``max_items`` 로 기억할 개수를 정한다
+    (None 이면 :data:`~custom_file_dialog.recent.DEFAULT_RECENT_MAX`).
+    """
+    if value is True:
+        return RecentStore() if max_items is None else RecentStore(max_items=max_items)
+    return value or None
 
 # 기본으로 "사이드바에서 제거"를 막을 위치 — 사용자 홈.
 DEFAULT_FIXED = ("~",)
@@ -99,6 +124,31 @@ class Places:
         }
         self._provider = None
         self._home_icon = None
+
+    @classmethod
+    def from_options(
+        cls,
+        favorites=None,
+        recent=None,
+        recent_max=None,
+        sidebar_urls=None,
+        fixed_urls=None,
+        icon=True,
+    ):
+        """다이얼로그·위젯 생성자 인자를 그대로 받아 :class:`Places` 를 만든다.
+
+        저장소 인자는 ``True`` (기본 위치에 자동 생성) · 인스턴스 · None 세 가지를
+        받는다 (:func:`as_favorites_store` · :func:`as_recent_store` 와 같은 규칙).
+        ``CustomFileDialog`` 와 ``FilePathEdit`` 이 같은 조립을 두 번 들고 있지
+        않도록 여기 한곳에 둔다.
+        """
+        return cls(
+            favorites=as_favorites_store(favorites),
+            recent=as_recent_store(recent, recent_max),
+            sidebar_urls=sidebar_urls,
+            fixed_urls=fixed_urls,
+            icon=icon,
+        )
 
     def __bool__(self):
         """사이드바에 얹을 게 하나라도 있는지."""

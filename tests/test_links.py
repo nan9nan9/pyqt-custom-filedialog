@@ -1,0 +1,298 @@
+"""심볼릭 링크 추적 — Look in 표시 · 진입 · 상위 폴더."""
+
+import os
+import shutil
+import tempfile
+import time
+
+import pytest
+
+from qtpy.QtCore import QDir, QMimeData, QPoint, QSettings, QUrl
+from qtpy.QtGui import QDropEvent
+from qtpy.QtWidgets import QApplication
+
+from custom_file_dialog import (
+    FavoritesError,
+    FavoritesStore,
+    FilePathEdit,
+    FilePathForm,
+    Places,
+    RecentStore,
+    SelectMode,
+    build_filter,
+    ensure_suffix,
+    home_icon,
+    suffix_of,
+    to_urls,
+    validate_paths,
+)
+from custom_file_dialog import dialog as dialog_module
+from custom_file_dialog import history as history_module
+from custom_file_dialog import hooks as hooks_module
+from custom_file_dialog import places as places_module
+from custom_file_dialog import qt_compat
+from custom_file_dialog import recent as recent_module
+from custom_file_dialog import sidebar as sidebar_module
+from custom_file_dialog.history import PathHistory
+from helpers import (
+    _assert_at_end,
+    _close_soon,
+    _dialog_start_dirs,
+    _drop,
+    _guarded_dialog_in,
+    _make_tree,
+    _menu_dialog,
+    _menu_labels,
+    _places_of,
+    _run,
+    _spin,
+    _submenu_of,
+    _touch,
+    _view_menu,
+)
+
+
+def test_link_target(qapp, tmp_path):
+    """분류 안의 링크 폴더만 원본 위치로 매핑된다."""
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, output = _make_tree(tmp_path)
+    favorites.add("설계", output)
+    recent.record(design)
+    places = Places(favorites=favorites, recent=recent)
+
+    category = favorites.category_dir("설계")
+    link = os.path.join(category, "산출물")
+
+    # 링크 폴더 -> 원본
+    assert places.link_target(link) == output
+    # 링크 아래 하위 경로도 원본 기준으로 풀린다
+    inner = os.path.join(link, "안쪽")
+    os.mkdir(os.path.join(output, "안쪽"))
+    assert places.link_target(inner) == os.path.join(output, "안쪽")
+
+    # 분류 폴더 자체와 뿌리 폴더는 진짜 폴더이므로 그대로 둔다
+    assert places.link_target(category) is None
+    assert places.link_target(favorites.base_dir) is None
+    assert places.link_target(recent.category_dir(recent.name)) is None
+
+    # 저장소 밖은 손대지 않는다
+    assert places.link_target(str(tmp_path)) is None
+    assert places.link_target("") is None
+    assert Places().link_target(link) is None
+
+
+def test_follow_link_directories(qapp, tmp_path):
+    """링크 폴더로 들어가면 Look in 에 실제 경로가 보이도록 옮겨 준다."""
+    from qtpy.QtWidgets import QFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    _design, _report, output = _make_tree(tmp_path)
+    favorites.add("설계", output)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(str(tmp_path))
+    assert hooks_module.follow_link_directories(dialog, Places(favorites=favorites))
+
+    def go(path):
+        dialog.setDirectory(path)
+        dialog.directoryEntered.emit(path)       # 사용자 이동이면 Qt 가 내는 시그널
+        return dialog.directory().absolutePath()
+
+    # 링크 폴더 -> 원본 경로로 옮겨진다
+    assert go(os.path.join(category, "산출물")) == output
+    assert not favorites.is_inside(dialog.directory().absolutePath())
+
+    # 분류 폴더 자체는 그대로 (진짜 폴더라 보여 줄 다른 경로가 없다)
+    assert go(category) == category
+
+    # 저장소 밖은 손대지 않는다
+    plain = str(tmp_path / "projA")
+    assert go(plain) == plain
+
+    # 얹을 게 없는 Places 는 거짓이라 install_hooks 가 링크 추적을 건너뛴다
+    assert not Places()
+
+
+def test_follow_link_on_parent(qapp, tmp_path):
+    """분류 폴더에서 링크를 고르고 "상위 폴더"를 누르면 원본 쪽으로 올라간다."""
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    favorites.add("설계", output)
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.follow_link_on_parent(dialog, places)
+    button = dialog.findChild(QToolButton, "toParentButton")
+
+    def press_up(selected=None):
+        """항목을 고른 뒤 "상위 폴더"를 누른 상황을 그대로 재현한다."""
+        dialog.setDirectory(category)
+        if selected is not None:
+            dialog.currentChanged.emit(selected)
+        button.click()                      # Qt 가 분류 폴더의 부모로 옮긴 뒤...
+        return dialog.directory().absolutePath()
+
+    # 파일 링크 -> 원본 파일이 있는 폴더
+    assert press_up(os.path.join(category, "설계도.csv")) == os.path.dirname(design)
+    # 폴더 링크 -> 원본 폴더가 있는 폴더
+    assert press_up(os.path.join(category, "산출물")) == os.path.dirname(output)
+
+    # 아무것도 고르지 않았으면 Qt 기본 동작 그대로(저장소로 올라간다)
+    assert press_up() == os.path.normpath(favorites.base_dir)
+    # 링크가 아닌 것을 골랐을 때도 기본 동작
+    assert press_up(os.path.join(category, "없는것")) == os.path.normpath(
+        favorites.base_dir
+    )
+
+
+def test_follow_link_on_parent_outside_store(qapp, tmp_path):
+    """저장소 밖에서는 손대지 않는다 — 묵은 선택이 새어 나가지 않는다."""
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.follow_link_on_parent(dialog, places)
+    button = dialog.findChild(QToolButton, "toParentButton")
+
+    # 링크를 고른 뒤 저장소 밖으로 옮기고 상위 폴더를 누른다
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    inner = tmp_path / "projA" / "안쪽"
+    inner.mkdir()
+    dialog.setDirectory(str(inner))
+    button.click()
+    assert dialog.directory().absolutePath() == str(tmp_path / "projA")
+
+
+def test_follow_link_on_parent_installed_by_hooks(qapp, tmp_path):
+    """install_hooks 가 함께 걸어 준다."""
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    hooks_module.install_hooks(dialog, places, category)
+
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    dialog.findChild(QToolButton, "toParentButton").click()
+    assert dialog.directory().absolutePath() == os.path.dirname(design)
+
+
+def test_show_link_target_in_combo(qapp, tmp_path):
+    """항목을 고르면 콤보 표시만 실제 위치로 바뀌고, 폴더는 그대로 있는다."""
+    from qtpy.QtWidgets import QComboBox, QFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    favorites.add("설계", output)
+    recent.record(design)
+    places = Places(favorites=favorites, recent=recent)
+
+    category = favorites.category_dir("설계")
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.show_link_target_in_combo(dialog, places)
+    combo = dialog.findChild(QComboBox, "lookInCombo")
+
+    # 파일 링크 -> 콤보에 원본 파일 경로
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    assert combo.currentText() == design
+    # 폴더는 그대로 분류에 머문다 (이동하지 않는다)
+    assert dialog.directory().absolutePath() == category
+
+    # 폴더 링크 -> 콤보에 원본 폴더 경로
+    dialog.currentChanged.emit(os.path.join(category, "산출물"))
+    assert combo.currentText() == output
+    assert dialog.directory().absolutePath() == category
+
+    # 링크가 아닌 항목을 고르면 현재 폴더 경로로 되돌아온다
+    dialog.currentChanged.emit(os.path.join(category, "없는것"))
+    assert combo.currentText() == category
+
+    # 최근 파일 쪽도 동작한다
+    recent_category = recent.category_dir(recent.name)
+    dialog.setDirectory(recent_category)
+    dialog.currentChanged.emit(os.path.join(recent_category, "설계도.csv"))
+    assert combo.currentText() == design
+    assert dialog.directory().absolutePath() == recent_category
+
+
+def test_combo_display_restores_on_navigation(qapp, tmp_path):
+    """폴더를 옮기면 Qt 가 콤보를 다시 채워 표시가 저절로 되돌아온다."""
+    from qtpy.QtWidgets import QComboBox, QFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    hooks_module.show_link_target_in_combo(dialog, Places(favorites=favorites))
+    dialog.show()
+    _spin(qapp, 300)
+
+    combo = dialog.findChild(QComboBox, "lookInCombo")
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    assert combo.currentText() == design
+
+    # 다른 폴더로 이동 -> 원래대로 현재 폴더가 표시된다
+    plain = str(tmp_path / "projA")
+    dialog.setDirectory(plain)
+    dialog.directoryEntered.emit(plain)
+    _spin(qapp, 300)
+    assert combo.currentText() == plain
+
+    # 콤보를 갈아 끼우지 않으므로 위젯은 그대로 살아 있다
+    assert combo.isVisible()
+    dialog.close()
+
+
+def test_widget_follows_links(qapp, tmp_path, monkeypatch):
+    """FilePathEdit 이 연 다이얼로그에도 걸린다."""
+    from qtpy.QtWidgets import QFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    _design, _report, output = _make_tree(tmp_path)
+    favorites.add("설계", output)
+    link = os.path.join(favorites.category_dir("설계"), "산출물")
+
+    shown = {}
+
+    def fake_exec(self):
+        self.setDirectory(link)
+        self.directoryEntered.emit(link)
+        shown["path"] = self.directory().absolutePath()
+        return 0
+
+    monkeypatch.setattr(QFileDialog, "exec_", fake_exec, raising=False)
+    monkeypatch.setattr(QFileDialog, "exec", fake_exec, raising=False)
+
+    FilePathEdit(mode="open_file", favorites=favorites).browse()
+    assert shown["path"] == output
+

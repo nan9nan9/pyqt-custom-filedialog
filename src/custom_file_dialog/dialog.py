@@ -24,11 +24,10 @@ from qtpy.QtWidgets import QFileDialog
 
 from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
-from .favorites import FavoritesStore
 from .filters import build_filter, ensure_suffix, suffix_of
 from .places import Places
 from .qt_compat import enum_value, exec_dialog, make_options
-from .recent import DEFAULT_RECENT_MAX, RecentStore
+from .recent import DEFAULT_RECENT_MAX
 from .sidebar import fit_sidebar
 from .util import to_urls
 
@@ -182,18 +181,6 @@ def _run_dialog(
     return ([path] if path else []), (chosen or selected_filter)
 
 
-def _store_or_none(value, factory, **kwargs):
-    """저장소 인자를 정리한다 — ``True`` 면 **기본 위치**에 하나 만들어 준다.
-
-    저장소는 디스크의 폴더를 가리키는 손잡이일 뿐이라, 매번 새로 만들어도 안에
-    든 것은 그대로다(``FavoritesStore()`` 200회에 4ms). 그래서 다이얼로그를 띄울
-    때마다 만들어 넘겨도 되고, ``True`` 만 줘서 맡겨도 된다.
-    """
-    if value is True:
-        return factory(**kwargs)
-    return value or None
-
-
 # 모드별 (AcceptMode, FileMode) 설정값
 _INSTANCE_MODES = {
     SelectMode.OPEN_FILE: ("AcceptOpen", "ExistingFile"),
@@ -298,9 +285,10 @@ class CustomFileDialog(QFileDialog):
         self._sidebar_width = sidebar_width
         self._sidebar_fitted = False
         self._path_timeout = None if path_timeout is None else float(path_timeout)
-        self._places = places if places is not None else Places(
-            favorites=_store_or_none(favorites, FavoritesStore),
-            recent=_store_or_none(recent, RecentStore, max_items=recent_max),
+        self._places = places if places is not None else Places.from_options(
+            favorites=favorites,
+            recent=recent,
+            recent_max=recent_max,
             sidebar_urls=sidebar_urls,
             fixed_urls=fixed_sidebar_urls,
             icon=favorites_icon,

@@ -1447,10 +1447,10 @@ ok, reason = validate_paths(paths, mode="open_files")
    validators  경로 유효성 판정
 
 2  menus       우클릭 메뉴 (즐겨찾기 추가 · 항목 제거 · 분류 삭제)
-   places      사이드바에 얹는 것들의 묶음
    recent      최근 파일 저장소 (favorites 를 물려받음)
 
 3  hooks       위 장치들을 한 번에 걸어 주는 설치기
+   places      사이드바에 얹는 것들의 묶음 + 저장소 인자 정규화(from_options)
 
 4  dialog      CustomFileDialog · exec_file_dialog · resolve_start_dir
    path_edit   FilePathEdit
@@ -1473,6 +1473,24 @@ ok, reason = validate_paths(paths, mode="open_files")
 
 ```bash
 QT_QPA_PLATFORM=offscreen python -m pytest -q
+```
+
+테스트도 소스와 같은 기준으로 나뉘어 있습니다. 공용 부트스트랩(QSettings 를
+임시 폴더로 돌리는 것 포함)은 `conftest.py`, 파일을 넘나드는 도우미는
+`helpers.py` 에 있습니다.
+
+```
+tests/
+  conftest.py                 부트스트랩 · 공용 픽스처 (qapp · 저장소 · 죽은 NFS 흉내)
+  helpers.py                  공용 도우미 (_make_tree · _spin · _menu_dialog …)
+  test_filters_validators.py  필터 조립 · 경로 유효성
+  test_safety.py              죽은 마운트 방어 · 차단 경로 · 자동완성 제한
+  test_dialog.py              exec_file_dialog · CustomFileDialog · settings_key
+  test_sidebar.py             사이드바 항목 · 순서 · 표시 · 폭 · 아이콘
+  test_stores.py              즐겨찾기 · 최근 파일 저장소
+  test_links.py               심볼릭 링크 추적
+  test_menus.py               우클릭 메뉴
+  test_widget.py              FilePathEdit · FilePathForm
 ```
 
 ## 라이선스

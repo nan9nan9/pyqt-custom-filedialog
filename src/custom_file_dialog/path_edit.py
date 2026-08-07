@@ -30,20 +30,19 @@ from .constants import (
 from . import safety
 from .hooks import GuardedFileSystemModel
 from .icons import standard_icon
-from .places import Places
-from .recent import DEFAULT_RECENT_MAX, RecentStore
+from .places import Places, as_recent_store
 from .filters import build_filter, ensure_suffix, suffix_of
 from .history import PathHistory
 from .validators import join_paths, split_paths, validate_paths
 
 
 def _make_recent_store(recent_files, recent_max=None):
-    """``recent_files`` 인자를 :class:`RecentStore` (또는 None) 로 바꾼다."""
-    if not recent_files:
-        return None
-    if recent_files is True:
-        return RecentStore(max_items=recent_max or DEFAULT_RECENT_MAX)
-    return recent_files      # 이미 만들어 둔 저장소
+    """``recent_files`` 인자를 :class:`RecentStore` (또는 None) 로 바꾼다.
+
+    규칙(True=기본 위치에 자동 생성)은 다이얼로그와 같으므로
+    :func:`~custom_file_dialog.places.as_recent_store` 하나만 쓴다.
+    """
+    return as_recent_store(recent_files, recent_max)
 
 
 class FilePathEdit(QWidget):
