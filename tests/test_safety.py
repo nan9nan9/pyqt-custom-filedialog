@@ -880,3 +880,32 @@ def test_is_reachable_passes_fstype(monkeypatch, tmp_path):
         assert seen["fstype"] == "cifs"
     finally:
         safety.clear_cache()
+
+
+def test_mountinfo_parser_survives_malformed_lines(monkeypatch, tmp_path):
+    """깨진 mountinfo 줄에서 예외가 나면 안 된다(퍼징으로 발견).
+
+    구분자("-")가 마운트지점(fields[4])보다 앞에 오는 줄에서 IndexError 가
+    났다. /proc 이 아니라도 MOUNTINFO 를 갈아 끼울 수 있으므로 어떤 입력에도
+    조용히 건너뛰어야 한다.
+    """
+    from custom_file_dialog import safety
+
+    fake = tmp_path / "mountinfo"
+    fake.write_text(
+        "- - -\n"                                     # 구분자가 맨 앞
+        "a - b c\n"                                   # 구분자 뒤는 있는데 앞이 짧다
+        "짧은줄\n"
+        "\n"
+        "36 25 0:32 / /mnt/ok rw - nfs4 srv:/e rw\n"   # 정상 줄 하나
+        "37 25 0:33 / /mnt/short rw - nfs4\n",         # 구분자 뒤가 짧다
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(safety, "MOUNTINFO", str(fake))
+    safety.clear_cache()
+    try:
+        mounts = safety.iter_mounts(refresh=True)
+        assert mounts == [("/mnt/ok", "nfs4", "srv:/e")]   # 정상 줄만 남는다
+        assert safety.mount_for("/mnt/ok/a")[0] == "/mnt/ok"
+    finally:
+        safety.clear_cache()

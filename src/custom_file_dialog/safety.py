@@ -314,7 +314,9 @@ def iter_mounts(refresh=False):
             separator = fields.index("-")
         except ValueError:
             continue
-        if len(fields) < separator + 3:
+        # 마운트지점은 fields[4] 다. 구분자가 그보다 앞이거나(깨진 줄) 구분자
+        # 뒤에 종류·원본이 없으면 건너뛴다 — 어떤 줄에서도 예외가 나면 안 된다.
+        if separator < 5 or len(fields) < separator + 3:
             continue
         mounts.append(
             (

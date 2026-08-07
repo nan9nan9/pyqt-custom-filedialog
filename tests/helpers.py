@@ -161,13 +161,17 @@ def _submenu_of(menu):
 
 
 def _drop(widget, paths):
-    """실제 드롭 이벤트를 만들어 위젯에 전달한다."""
+    """실제 드롭 이벤트를 만들어 위젯에 전달한다.
+
+    Qt6 은 QPointF 만 받는다(QPoint 는 Qt5 의 암묵 변환에 기대던 것이라
+    PyQt6 에서 TypeError). QPointF 는 세 바인딩 모두에서 통한다.
+    """
+    from qtpy.QtCore import QPointF, Qt
+
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
-    from qtpy.QtCore import Qt
-
     event = QDropEvent(
-        QPoint(5, 5),
+        QPointF(5, 5),
         Qt.DropAction.CopyAction,
         mime,
         Qt.MouseButton.LeftButton,
