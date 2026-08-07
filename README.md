@@ -360,6 +360,52 @@ if not form.is_valid():
 
 ## 사이드바(왼쪽 즐겨찾기) 커스터마이즈
 
+**생성자 인자만으로 다 됩니다.** 사이드바를 위해 따로 위젯을 만들 필요는 없습니다.
+
+```python
+dlg = CustomFileDialog(
+    self,
+    mode="open_file",
+    favorites=store,                        # 즐겨찾기 분류 -> 사이드바에 ★
+    recent=recent,                          # 최근 파일     -> 🕘
+    sidebar_urls=["~", "/mnt/data"],        # 기준 목록 통째로 교체
+    fixed_sidebar_urls=["~", "/mnt/data"],  # 우클릭 "제거" 잠금
+    favorites_icon=False,                   # 아이콘 끄기 (Qt 기본 폴더 아이콘)
+)
+if dlg.exec():
+    paths = dlg.selectedFiles()
+```
+
+| 인자 | 하는 일 | 생략하면 |
+| --- | --- | --- |
+| `favorites` | `FavoritesStore` 의 분류를 사이드바에 올림 | 안 올림 |
+| `recent` | `RecentStore` 를 "최근 파일" 항목 하나로 | 안 올림 |
+| `sidebar_urls` | 기준 목록을 통째로 지정 | 홈 + 현재 위치 |
+| `fixed_sidebar_urls` | 우클릭 "사이드바에서 제거" 를 막을 위치 | 홈만 보호 |
+| `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) | `True` (별표·시계·집) |
+| `places` | 위 다섯 개 대신 `Places` 를 통째로 | — |
+
+`QFileDialog` 를 물려받았으므로 띄우기 전에 **원래 API 로 더 만져도** 됩니다.
+
+```python
+dlg = CustomFileDialog(self, mode="open_file", favorites=store)
+dlg.setSidebarUrls(dlg.sidebarUrls() + [QUrl.fromLocalFile("/mnt/data")])
+dlg.exec()
+```
+
+`exec_file_dialog()` 로 쓸 때는 `places=` 에 `Places` 를 넘깁니다.
+
+```python
+exec_file_dialog(
+    mode="open_file",
+    places=Places(favorites=store, recent=recent, sidebar_urls=["~", "/mnt/data"]),
+)
+```
+
+`FilePathEdit` 도 같은 이름의 인자를 받습니다 (`recent` 대신 `recent_files`).
+위젯에만 있는 것은 **실행 중에 바꾸는 setter** (`set_sidebar_urls()` 등)뿐인데,
+다이얼로그는 띄울 때마다 새로 만드니 생성자로 충분합니다.
+
 ### 항목 순서
 
 즐겨찾기·최근 파일을 쓰면 사이드바가 이 순서로 구성됩니다:
@@ -378,13 +424,15 @@ if not form.is_valid():
 - `sidebar_urls` 로 기준 목록을 직접 주면 **그 목록을 그대로 존중**합니다
   (홈·현재 위치를 끼워 넣지 않습니다). 최근 파일·북마크는 그 뒤에 붙습니다.
 
-최종 결과는 `edit.effective_sidebar_urls()` 로 확인할 수 있습니다.
+최종 결과는 다이얼로그를 만든 뒤 `sidebarUrls()` 로 확인할 수 있습니다.
 
 ```python
-edit = FilePathEdit(mode="open_file", favorites=store, recent_files=True)
-edit.effective_sidebar_urls()
+dlg = CustomFileDialog(self, mode="open_file", favorites=store, recent=recent)
+[u.toLocalFile() for u in dlg.sidebarUrls()]
 # [홈, 현재 위치, 최근 파일, 북마크/분류A, 북마크/분류B]
 ```
+
+위젯 쪽은 띄우기 전에도 미리 볼 수 있습니다 — `edit.effective_sidebar_urls()`.
 
 ### 홈과 현재 위치 표시
 
@@ -405,24 +453,23 @@ edit.effective_sidebar_urls()
 - `sidebar_urls` 로 기준 목록을 직접 주면 "현재 위치" 항목을 붙이지 않으므로
   이름도 바꾸지 않습니다. 홈 아이콘은 그대로 씌웁니다.
 
-`icon=False`(위젯에서는 `favorites_icon=False`)를 주면 집 아이콘도 끄고 Qt 기본
-폴더 아이콘을 씁니다. 이름 바꾸기는 아이콘 설정과 무관하게 동작합니다.
-이름 문자열은 `CURRENT_LABEL` 로 노출되어 있습니다.
+`favorites_icon=False` 를 주면 집 아이콘도 끄고 Qt 기본 폴더 아이콘을 씁니다.
+이름 바꾸기는 아이콘 설정과 무관하게 동작합니다. 이름 문자열은 `CURRENT_LABEL`
+로 노출되어 있습니다.
 
 ### 기준 목록 직접 지정
 
 기본 구성 대신 원하는 폴더 목록을 쓸 수 있습니다.
 
 ```python
-edit = FilePathEdit(
+dlg = CustomFileDialog(
+    self,
     mode="open_file",
     sidebar_urls=["~", "~/프로젝트", "/mnt/data"],   # 통째로 교체
 )
 
-# 실행 중 변경
-edit.set_sidebar_urls(["/srv/입력", "/srv/출력"])
-edit.set_sidebar_urls([])        # 사이드바 비우기
-edit.set_sidebar_urls(None)      # 커스터마이즈 끄기
+CustomFileDialog(self, sidebar_urls=[])      # 사이드바 비우기
+CustomFileDialog(self, sidebar_urls=None)    # 커스터마이즈 끄기 (Qt 저장값 그대로)
 ```
 
 기존 항목을 남기고 뒤에 덧붙이려면:
@@ -430,8 +477,10 @@ edit.set_sidebar_urls(None)      # 커스터마이즈 끄기
 ```python
 from custom_file_dialog import current_sidebar_urls
 
-edit.set_sidebar_urls(current_sidebar_urls() + ["/mnt/data"])
+CustomFileDialog(self, sidebar_urls=current_sidebar_urls() + ["/mnt/data"])
 ```
+
+위젯은 실행 중에도 바꿀 수 있습니다 — `edit.set_sidebar_urls([...])`.
 
 경로 문자열과 `QUrl` 을 섞어 줄 수 있고, `~` 는 홈 디렉터리로 펼쳐집니다.
 `current_sidebar_urls()` 는 Qt가 사이드바를 저장하는 설정 키를 **읽기만** 하므로
@@ -441,12 +490,13 @@ edit.set_sidebar_urls(current_sidebar_urls() + ["/mnt/data"])
 > **꼭 알아 둘 두 가지**
 >
 > 1. **네이티브 다이얼로그에서는 불가능합니다.** OS가 그리는 창이라 Qt가 사이드바를
->    바꿀 수 없습니다. 그래서 `sidebar_urls` 를 지정하면 `native` 설정과 무관하게
->    **Qt 자체 다이얼로그**로 열립니다(정적 메서드 대신 `QFileDialog` 인스턴스를 사용).
+>    바꿀 수 없습니다. 그래서 `CustomFileDialog` 는 **항상 Qt 자체 다이얼로그**로
+>    뜨고, `exec_file_dialog()` 도 `places=` 를 주면 `native` 설정과 무관하게
+>    Qt 자체 다이얼로그로 전환됩니다.
 > 2. **Qt가 사이드바를 영구 저장합니다.** 리눅스 기준 `~/.config/QtProject.conf` 의
 >    `[FileDialog] shortcuts` 에 기록되어, 한 번 지정하면 프로그램을 다시 켜도,
 >    나아가 같은 설정을 공유하는 **다른 Qt 앱에서도** 그 항목이 보입니다.
->    `set_sidebar_urls(None)` 로 되돌려도 이미 저장된 항목은 남습니다.
+>    `sidebar_urls=None` 로 되돌려도 이미 저장된 항목은 남습니다.
 >    (사용자가 사이드바에 폴더를 끌어다 놓는 Qt 기본 동작과 같은 저장소입니다.)
 >
 >    같은 파일의 `sidebarWidth` 키가 있는 상태에서 `shortcuts` 만 없어지면
@@ -481,16 +531,16 @@ from custom_file_dialog import mark_sidebar
 등록해 둔 파일·폴더가 함께 나옵니다.
 
 ```python
-from custom_file_dialog import FavoritesStore, FilePathEdit
+from custom_file_dialog import CustomFileDialog, FavoritesStore
 
 store = FavoritesStore()                        # 앱 데이터 폴더 아래에 생성
 store.add("설계", "/proj/a/설계도.csv")           # 파일
 store.add("설계", "/proj/b/산출물")               # 폴더도 가능
 store.add("보고서", "/proj/b/보고서.md")
 
-edit = FilePathEdit(mode="open_file", favorites=store)
-edit.browse()          # 사이드바에 "설계", "보고서" 가 추가됨
-edit.path()            # -> /proj/a/설계도.csv  (링크가 아니라 원본 경로)
+dlg = CustomFileDialog(self, mode="open_file", favorites=store)
+if dlg.exec():         # 사이드바에 "설계", "보고서" 가 보인다
+    dlg.selectedPath() # -> /proj/a/설계도.csv  (링크가 아니라 원본 경로)
 ```
 
 ```
@@ -577,28 +627,29 @@ default_base_dir()                # -> ~/.local/share/<조직>/<앱>/favorites
 
 ```python
 # 기본 = 별표
-edit = FilePathEdit(mode="open_file", favorites=store)
+CustomFileDialog(self, mode="open_file", favorites=store)
 
 # 다른 아이콘으로
-edit = FilePathEdit(mode="open_file", favorites=store,
-                    favorites_icon=QIcon("/path/to/icon.png"))
+CustomFileDialog(self, mode="open_file", favorites=store,
+                 favorites_icon=QIcon("/path/to/icon.png"))
 
 # 끄기 (Qt 기본 폴더 아이콘)
-edit = FilePathEdit(mode="open_file", favorites=store, favorites_icon=False)
-
-# 실행 중 변경
-edit.set_favorites_icon(True)
+CustomFileDialog(self, mode="open_file", favorites=store, favorites_icon=False)
 ```
+
+위젯은 실행 중에도 바꿀 수 있습니다 — `edit.set_favorites_icon(True)`.
 
 색이나 크기를 바꾸려면 `star_icon()` 을 직접 부르면 됩니다:
 
 ```python
 from custom_file_dialog import star_icon
-edit.set_favorites_icon(star_icon(color="#1565c0", sizes=(16, 24, 32)))
+
+CustomFileDialog(self, favorites=store,
+                 favorites_icon=star_icon(color="#1565c0", sizes=(16, 24, 32)))
 
 # 별 크기 조절: inset 은 반지름에서 빼는 픽셀 수라 지름은 그 두 배만큼 작아진다
-edit.set_favorites_icon(star_icon(inset=0))    # 픽스맵을 꽉 채움 (기본보다 2px 큼)
-edit.set_favorites_icon(star_icon(inset=2))    # 기본보다 2px 더 작게
+star_icon(inset=0)    # 픽스맵을 꽉 채움 (기본보다 2px 큼)
+star_icon(inset=2)    # 기본보다 2px 더 작게
 ```
 
 내부적으로는 `CategoryIconProvider` 가 `QFileDialog.setIconProvider()` 로 걸려,
@@ -734,10 +785,9 @@ jekai (홈)   우클릭 → "사이드바에서 제거" (비활성)  (기본 보
 기본값(`None`)은 **사용자 홈만** 보호합니다.
 
 ```python
-edit = FilePathEdit(mode="open_file")                                # 홈 보호(기본)
-edit = FilePathEdit(mode="open_file", fixed_sidebar_urls=["~", "/srv/공용"])
-edit = FilePathEdit(mode="open_file", fixed_sidebar_urls=[])         # 보호 없음
-edit.set_fixed_sidebar_urls(["~"])                                   # 실행 중 변경
+CustomFileDialog(self, mode="open_file")                                # 홈 보호(기본)
+CustomFileDialog(self, mode="open_file", fixed_sidebar_urls=["~", "/srv/공용"])
+CustomFileDialog(self, mode="open_file", fixed_sidebar_urls=[])         # 보호 없음
 ```
 
 | 값 | 동작 |
@@ -768,8 +818,8 @@ menus.remove_entry(store, "설계", link_path)      # 코드에서 직접 제거
 ### 경로 복원
 
 즐겨찾기에서 고르면 다이얼로그는 **링크 경로**를 돌려줍니다.
-`FilePathEdit(favorites=store)` 는 이를 자동으로 원본으로 되돌리므로 `path()` 에는
-항상 원본이 담깁니다. 직접 `exec_file_dialog()` 를 쓴다면 `places.resolve_all()` 을
+`CustomFileDialog.selectedFiles()` 와 `FilePathEdit.path()` 는 이를 **자동으로**
+원본으로 되돌립니다. 직접 만든 `QFileDialog` 의 결과라면 `places.resolve_all()` 을
 한 번 통과시키세요. 즐겨찾기 폴더 밖의 경로는 그대로 통과하므로 일괄 적용해도 안전합니다.
 
 ### 플랫폼 주의
@@ -786,18 +836,18 @@ menus.remove_entry(store, "설계", link_path)      # 코드에서 직접 제거
 `최근 파일` 항목을 사이드바에 하나 더 띄웁니다. 기본은 **꺼져 있고** 옵션으로 켭니다.
 
 ```python
-from custom_file_dialog import FilePathEdit, RecentStore
+from custom_file_dialog import CustomFileDialog, RecentStore
 
 # 1) 가장 간단하게 — 기본 위치에 저장소를 자동으로 만든다
-edit = FilePathEdit(mode="open_file", recent_files=True, recent_max=20)
+CustomFileDialog(self, mode="open_file", recent=RecentStore(max_items=20))
 
-# 2) 저장소를 직접 만들어 여러 위젯이 같은 목록을 공유
+# 2) 저장소를 직접 만들어 여러 자리가 같은 목록을 공유
 recent = RecentStore(max_items=20)
-edit_in = FilePathEdit(mode="open_file", recent_files=recent)
-edit_out = FilePathEdit(mode="save_file", recent_files=recent)
+CustomFileDialog(self, mode="open_file", recent=recent)
+CustomFileDialog(self, mode="save_file", recent=recent)
 
-edit.recent_items()          # 최신순 원본 경로 목록
-edit.set_recent_files(False) # 실행 중 끄기
+recent.items()               # 최신순 원본 경로 목록
+recent.clear()               # 목록 비우기
 ```
 
 ```
