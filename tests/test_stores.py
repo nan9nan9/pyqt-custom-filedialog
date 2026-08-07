@@ -465,3 +465,44 @@ def test_remove_category_survives_rmdir_failure(store, tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "rmdir", boom)
     store.remove_category("설계")            # 예외 없이 돌아와야 한다
+
+
+def test_stores_survive_non_utf8_filenames(tmp_path):
+    """비UTF-8(서러게이트) 파일명도 등록·기록·복원이 된다.
+
+    옛 공유 폴더의 EUC-KR 파일명은 파이썬에 서러게이트 문자열로 들어온다.
+    인덱스 저장(json -> utf-8)이 이를 인코딩 못 해 add()/record() 가
+    UnicodeEncodeError 로 터졌다 — 우클릭 "즐겨찾기에 추가"와 다이얼로그
+    accept(record_recent) 가 그런 파일에서 죽었다.
+    """
+    if os.name != "posix":
+        pytest.skip("바이트 파일명은 POSIX 전용")
+
+    raw = os.path.join(str(tmp_path).encode(), b"\xbb\xe9\xbc\xad.csv")
+    open(raw, "wb").close()
+    name = next(n for n in os.listdir(str(tmp_path)))
+    path = os.path.join(str(tmp_path), name)
+    assert any(0xDC80 <= ord(c) <= 0xDCFF for c in name)   # 정말 서러게이트인지
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    link = store.add("자료", path)                   # 터지지 않아야 한다
+    assert store.resolve(link) == path
+
+    # 새 인스턴스로 다시 읽어도(=인덱스 파일 왕복) 원본이 복원된다
+    reloaded = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    assert reloaded.items("자료") == [path]
+
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    assert recent.record(path)                       # 터지지 않아야 한다
+    assert recent.items() == [path]
+
+
+def test_safe_name_strips_windows_chars_on_nt(monkeypatch):
+    """윈도우에서는 파일명 금지 문자도 바꾼다(리눅스 동작은 그대로)."""
+    from custom_file_dialog.favorites import _safe_name
+
+    assert _safe_name("시간:분") == "시간:분"          # 리눅스: 합법이라 유지
+
+    monkeypatch.setattr(os, "name", "nt")
+    assert _safe_name('시간:분*?"<>|') == "시간_분" + "_" * 6
+    assert _safe_name("보통이름") == "보통이름"

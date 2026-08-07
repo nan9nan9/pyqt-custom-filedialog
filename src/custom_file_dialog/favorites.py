@@ -94,11 +94,19 @@ def default_base_dir():
 
 
 def _safe_name(name):
-    """분류 이름을 폴더 이름으로 쓸 수 있게 다듬는다."""
+    """분류 이름을 폴더 이름으로 쓸 수 있게 다듬는다.
+
+    경로 구분자는 어디서나 막고, 윈도우에서는 파일명에 못 쓰는 문자
+    (``: * ? " < > |``)도 바꾼다. 리눅스에서는 그 문자들이 합법이라 기존
+    분류 폴더 이름이 달라지지 않도록 건드리지 않는다.
+    """
     text = str(name).strip()
     if not text:
         raise ValueError("분류 이름이 비어 있습니다.")
-    for bad in ("/", "\\", os.sep):
+    bad_chars = ["/", "\\", os.sep]
+    if os.name == "nt":
+        bad_chars += [":", "*", "?", '"', "<", ">", "|"]
+    for bad in bad_chars:
         if bad:
             text = text.replace(bad, "_")
     if text in (".", ".."):
@@ -397,9 +405,16 @@ class FavoritesStore:
     def _index_path(self):
         return os.path.join(self.base_dir, INDEX_FILENAME)
 
+    # 비UTF-8 파일명(옛 공유 폴더의 EUC-KR 등)은 파이썬에 서러게이트 문자열로
+    # 들어온다. 순정 utf-8 로는 인코딩이 안 돼 저장이 터지므로, 원본 바이트를
+    # 그대로 오가는 surrogateescape 로 읽고 쓴다(경로가 바이트 단위로 보존된다).
+    _INDEX_ERRORS = "surrogateescape"
+
     def _load_index(self):
         try:
-            with open(self._index_path(), encoding="utf-8") as handle:
+            with open(
+                self._index_path(), encoding="utf-8", errors=self._INDEX_ERRORS
+            ) as handle:
                 data = json.load(handle)
         except (OSError, ValueError):
             return {}
@@ -408,9 +423,11 @@ class FavoritesStore:
     def _save_index(self, index):
         try:
             os.makedirs(self.base_dir, exist_ok=True)
-            with open(self._index_path(), "w", encoding="utf-8") as handle:
+            with open(
+                self._index_path(), "w", encoding="utf-8", errors=self._INDEX_ERRORS
+            ) as handle:
                 json.dump(index, handle, ensure_ascii=False, indent=1)
-        except OSError:
+        except (OSError, UnicodeError):
             pass        # 인덱스는 보조 수단이라 실패해도 치명적이지 않다
 
 
