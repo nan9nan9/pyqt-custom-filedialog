@@ -1318,6 +1318,52 @@ def test_custom_file_dialog_store_contents_persist(qapp, tmp_path, monkeypatch):
         configure_favorites(None)
 
 
+def test_safety_config_applies_to_dialog_made_after(qapp, guarded_root):
+    """전역 safety 설정은 그 뒤에 만드는 다이얼로그에 자동으로 걸린다."""
+    from qtpy.QtWidgets import QLineEdit
+
+    from custom_file_dialog import CustomFileDialog, GuardedFileSystemModel, safety
+
+    assert safety.is_guarded(guarded_root)
+
+    dialog = CustomFileDialog(None, mode="open_file")
+    name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    model = name_edit.completer().model()
+    assert isinstance(model, GuardedFileSystemModel)
+    assert not model.canFetchMore(model.index(guarded_root))
+
+
+def test_safety_config_after_dialog_is_too_late(qapp, tmp_path):
+    """다이얼로그를 만든 뒤에 부르면 그 다이얼로그에는 안 걸린다(문서화된 함정)."""
+    from qtpy.QtWidgets import QLineEdit
+
+    from custom_file_dialog import CustomFileDialog, GuardedFileSystemModel, safety
+
+    root = tmp_path / "user"
+    root.mkdir()
+    (root / "jekai").mkdir()
+
+    safety.reset()
+    try:
+        dialog = CustomFileDialog(None, mode="open_file")
+        safety.configure(guarded_roots=[str(root)])
+
+        # 판정 자체는 전역이라 최신이지만,
+        assert safety.is_guarded(str(root))
+        # 이미 만든 다이얼로그의 자동완성 모델은 갈아 끼워지지 않았다
+        name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
+        assert not isinstance(name_edit.completer().model(), GuardedFileSystemModel)
+
+        # 그 뒤에 새로 만드는 것은 정상적으로 보호된다
+        later = CustomFileDialog(None, mode="open_file")
+        assert isinstance(
+            later.findChild(QLineEdit, "fileNameEdit").completer().model(),
+            GuardedFileSystemModel,
+        )
+    finally:
+        safety.reset()
+
+
 def test_custom_file_dialog_resolves_links(qapp, tmp_path):
     """즐겨찾기 링크를 골라도 selectedFiles() 는 원본 경로를 돌려준다."""
     from custom_file_dialog import CustomFileDialog

@@ -63,6 +63,9 @@ if dlg.exec():
 `mode` 하나로 네 종류를 다 부릅니다 — `"open_file"` · `"open_files"` ·
 `"save_file"` · `"directory"`.
 
+위험한 경로 방어(`guarded_roots` 등)는 생성자가 아니라 **앱 시작 시 한 번**
+정합니다 — [앱 시작할 때 한 번](#앱-시작할-때-한-번--전역-설정) 참고.
+
 ### 2. `exec_file_dialog()` — 한 줄로 끝내기
 
 띄우고 결과만 받으면 될 때. 안에서 `CustomFileDialog` 를 쓰므로 동작은 같습니다.
@@ -174,6 +177,54 @@ pip install ".[pyqt5]"     # 또는 pyqt6 / pyside2 / pyside6
 
 `qtpy` 만 필수 의존성이며, 실제 Qt 바인딩은 이미 설치된 것을 자동 사용합니다.
 소스 그대로 쓰려면 `src/` 를 `sys.path` 에 추가하면 됩니다.
+
+## 앱 시작할 때 한 번 — 전역 설정
+
+다이얼로그마다 주는 것이 아니라 **앱 전체에 한 번** 정하는 것들이 셋 있습니다.
+셋 다 선택 사항이고, `QApplication` 을 만든 직후에 부르면 됩니다.
+
+```python
+from custom_file_dialog import configure_favorites, configure_settings, safety
+
+app = QApplication([])
+app.setOrganizationName("회사이름")
+app.setApplicationName("앱이름")
+
+# 1) 최근 경로·시작 위치를 저장할 QSettings 위치
+#    (setOrganizationName/setApplicationName 을 했다면 생략해도 됩니다)
+configure_settings("회사이름", "앱이름")
+
+# 2) 즐겨찾기·최근 파일을 저장할 폴더
+#    (생략하면 앱 데이터 폴더 아래에 자동 생성)
+configure_favorites("~/.myapp/favorites")
+
+# 3) 위험한 경로 방어 — 나열만으로 시스템이 주저앉는 자리
+safety.configure(
+    guarded_roots=["/user", "/mnt/nfs", "/net"],  # 그 자리 자체는 열지 않음
+    min_depth=2,                                  # 얕은 자리는 자동완성이 나열 안 함
+    timeout=1.0,                                  # 죽은 마운트 판별 제한 시간
+    probes=[("ldap.corp", 389)],                  # 경로만 봐서는 모르는 의존 서비스
+)
+```
+
+그 뒤로는 다이얼로그를 평소대로 만들면 위 설정이 **자동으로 적용**됩니다.
+
+```python
+dlg = CustomFileDialog(self, mode="open_files", favorites=True, settings_key="입력이미지")
+if dlg.exec():                       # /user 는 이미 막혀 있습니다
+    paths = dlg.selectedFiles()
+```
+
+> **순서가 중요합니다.** `safety.configure()` 는 다이얼로그를 **만들기 전에**
+> 불러야 합니다. 자동완성 모델을 갈아 끼우는 일이 생성 시점에 일어나기 때문에,
+> 이미 만들어 둔 다이얼로그는 나중에 `configure()` 를 불러도 보호되지 않습니다.
+> (그 뒤에 새로 만드는 다이얼로그는 정상적으로 보호됩니다.)
+
+**왜 생성자 인자가 아닌가** — `guarded_roots` 는 *이 다이얼로그*가 아니라
+**이 컴퓨터**의 성질입니다. `/user` 는 어느 다이얼로그가 열든 위험합니다.
+생성자 인자로 두면 한 자리만 보호하고 다른 자리를 빠뜨리기 쉬워서 전역으로
+뒀습니다. 자세한 내용은
+[죽은 네트워크 경로에서 멈추지 않기](#죽은-네트워크-경로에서-멈추지-않기-nfs-등)를 보세요.
 
 ## 위젯으로 쓰기 — `FilePathEdit`
 
@@ -1146,6 +1197,23 @@ safety.configure(
 
 edit = FilePathEdit(mode="open_file", path_timeout=1.0)   # 안전 확인 켜기
 ```
+
+**`QApplication` 을 만든 직후, 다이얼로그를 만들기 전에** 부르세요. 자동완성
+모델을 갈아 끼우는 일이 다이얼로그 생성 시점에 일어나므로, 이미 만들어 둔
+다이얼로그는 나중에 `configure()` 를 불러도 보호되지 않습니다.
+
+```python
+# 이렇게
+safety.configure(guarded_roots=["/user"])
+dlg = CustomFileDialog(self, mode="open_file")     # 보호됨
+
+# 이러면 안 됩니다
+dlg = CustomFileDialog(self, mode="open_file")     # 이 다이얼로그는 보호 안 됨
+safety.configure(guarded_roots=["/user"])          # 다음에 만드는 것부터 적용
+```
+
+`is_guarded()` 같은 **판정 자체는 전역이라 항상 최신**입니다. 늦게 부르면
+"이미 만든 다이얼로그에 장치가 안 걸린" 것이지, 설정이 무시되는 것은 아닙니다.
 
 `path_timeout` 은 **기본으로 켜져 있습니다**(`safety.DEFAULT_TIMEOUT` = 1.0초).
 **유효성 검사**와 **다이얼로그 시작 폴더 결정**에 적용되어, 죽은 마운트를 가리키면
