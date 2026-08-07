@@ -3,14 +3,16 @@
 ``settings_key`` 를 주면 :class:`~qtpy.QtCore.QSettings` 에 저장되어 프로그램을
 다시 켜도 유지되고, 주지 않으면 위젯이 살아 있는 동안만 메모리에 남는다.
 
-**키 하나가 용도 하나**다. 입력 CSV 를 고르는 자리와 결과를 저장하는 자리에 서로
-다른 키를 주면 각자 마지막에 쓰던 폴더에서 열린다::
+**``settings_key`` 하나가 자리 하나**다. 입력 CSV 를 고르는 자리와 결과를 저장하는
+자리에 서로 다른 이름을 주면 각자 마지막에 쓰던 폴더에서 열린다::
 
     FilePathEdit(mode="open_file", settings_key="입력csv")
-    exec_file_dialog(mode="save_file", remember="결과저장")
+    CustomFileDialog(mode="save_file", settings_key="결과저장")
+    exec_file_dialog(mode="save_file", settings_key="결과저장")
 
-위젯이든 다이얼로그든 **같은 키면 같은 기억을 공유**한다. 화면에 남아 있지 않는
-일회성 다이얼로그도 :func:`last_dir` · :func:`remember_dir` 로 같은 저장소를 쓴다.
+위젯이든 다이얼로그든 **같은 이름이면 같은 기억을 공유**한다. 화면에 남아 있지
+않는 일회성 다이얼로그도 :func:`last_dir` · :func:`remember_dir` 로 같은 저장소를
+쓴다. 이름은 미리 등록할 것 없이 아무 문자열이나 정하면 된다.
 """
 
 import os
@@ -120,23 +122,25 @@ class PathHistory:
 
 
 # ------------------------------------------------- 용도별 시작 위치 (키 하나 = 용도 하나)
-def last_dir(key, settings=None):
-    """그 용도로 **마지막에 쓰던 폴더** (기억이 없으면 None).
+def last_dir(settings_key, settings=None):
+    """그 이름으로 **마지막에 쓰던 폴더** (기억이 없으면 None).
 
-    ``FilePathEdit(settings_key=key)`` 가 쓰는 저장소와 같은 곳을 본다. 그래서
-    위젯에서 고른 결과를 일회성 다이얼로그가 이어받고, 그 반대도 된다.
+    ``FilePathEdit(settings_key=...)`` · ``CustomFileDialog(settings_key=...)``
+    가 쓰는 저장소와 같은 곳을 본다. 그래서 위젯에서 고른 결과를 일회성
+    다이얼로그가 이어받고, 그 반대도 된다.
 
     Args:
-        key: 용도 이름. ``"입력csv"``, ``"결과저장"`` 처럼 자리마다 다르게 준다.
+        settings_key: 자리를 구분할 이름. ``"입력csv"``, ``"결과저장"`` 처럼
+            자리마다 다르게 준다. 미리 등록할 것 없이 아무 문자열이나 된다.
         settings: 직접 만든 QSettings (테스트/커스텀 저장 위치용).
     """
-    if not key:
+    if not settings_key:
         return None
-    return PathHistory(key=key, settings=settings).last_dir()
+    return PathHistory(key=settings_key, settings=settings).last_dir()
 
 
-def remember_dir(key, path, settings=None):
-    """그 용도의 마지막 폴더를 기록한다.
+def remember_dir(settings_key, path, settings=None):
+    """그 이름의 마지막 폴더를 기록한다.
 
     ``path`` 가 파일이면 **그 파일이 있는 폴더**를 기억한다. 최근 경로 목록은
     건드리지 않는다(다이얼로그는 목록을 쓰지 않으므로).
@@ -144,11 +148,11 @@ def remember_dir(key, path, settings=None):
     Returns:
         실제로 기억한 폴더 (기억할 것이 없으면 None).
     """
-    if not key or not path:
+    if not settings_key or not path:
         return None
     path = str(path)
     directory = path if os.path.isdir(path) else os.path.dirname(path)
     if not directory:
         return None
-    PathHistory(key=key, settings=settings).set_last_dir(directory)
+    PathHistory(key=settings_key, settings=settings).set_last_dir(directory)
     return directory

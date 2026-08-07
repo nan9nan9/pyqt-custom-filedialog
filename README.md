@@ -53,7 +53,7 @@ dlg = CustomFileDialog(
     filters=[("이미지", ["png", "jpg"])],
     favorites=store,            # 즐겨찾기 분류를 사이드바에
     recent=recent,              # 최근 파일 항목
-    remember="입력이미지",       # 이 용도로 마지막에 쓰던 폴더에서 열기
+    settings_key="입력이미지",   # 이 이름으로 마지막에 쓰던 폴더에서 열기
     default_suffix="png",       # 저장 모드에서 확장자 자동 부착
 )
 if dlg.exec():
@@ -135,7 +135,7 @@ print(edit.path())
   `settings_key` 까지 주면 `QSettings` 에 저장되어 프로그램을 다시 켜도 유지됩니다.
 - **똑똑한 시작 위치** — 다이얼로그는 *현재 값 → `start_dir` → 직전에 쓴 폴더 →
   현재 작업 디렉터리* 순으로 위치를 정합니다. **용도마다 따로 기억**할 수 있어
-  (`settings_key` / `remember`), 입력 CSV 자리와 결과 저장 자리가 각자 마지막에
+  (`settings_key`), 입력 CSV 자리와 결과 저장 자리가 각자 마지막에
   쓰던 폴더에서 열립니다.
 - **저장 확장자 자동 부착** — 저장 모드에서 확장자를 빼고 입력하면
   `default_suffix` 또는 선택된 필터의 확장자를 붙여 줍니다.
@@ -860,10 +860,12 @@ edit = FilePathEdit(
 - `QApplication` 에 `setOrganizationName()` / `setApplicationName()` 을 설정했다면
   `configure_settings()` 없이도 그 값이 쓰입니다.
 
-### 용도마다 다른 시작 위치
+### 용도마다 다른 시작 위치 — `settings_key`
 
-**키 하나가 용도 하나**입니다. 입력 CSV 를 고르는 자리와 결과를 저장하는 자리에
-서로 다른 키를 주면, 각자 마지막에 쓰던 폴더에서 열립니다.
+`settings_key` 는 **이 자리를 구분하는 이름표**입니다. 미리 등록하거나 발급받는
+값이 아니라 아무 문자열이나 정하면 되고, **같은 이름 = 같은 기억**입니다.
+입력 CSV 를 고르는 자리와 결과를 저장하는 자리에 서로 다른 이름을 주면, 각자
+마지막에 쓰던 폴더에서 열립니다.
 
 ```python
 FilePathEdit(mode="open_file", settings_key="입력csv",  filters=[("CSV", ["csv"])])
@@ -877,19 +879,28 @@ FilePathEdit(mode="open_file", settings_key="이미지",   filters=[("이미지"
 이미지   →  마지막에 이미지를 고른 폴더에서 열림
 ```
 
-화면에 위젯을 두지 않고 **`exec_file_dialog()` 를 직접 부르는 경우**(메뉴 항목처럼
-그때그때 띄우는 일회성 다이얼로그)에는 `remember` 에 같은 이름을 줍니다.
+**다이얼로그도 같은 이름**을 씁니다. 화면에 위젯을 두지 않고 메뉴 항목처럼
+그때그때 띄우는 경우입니다.
 
 ```python
-from custom_file_dialog import exec_file_dialog
-
-paths, _ = exec_file_dialog(mode="open_file", remember="입력csv")
-# 열 때: "입력csv" 로 마지막에 쓰던 폴더에서 시작
+CustomFileDialog(self, mode="open_file", settings_key="입력csv")
+exec_file_dialog(mode="open_file", settings_key="입력csv")
+# 열 때  : "입력csv" 로 마지막에 쓰던 폴더에서 시작
 # 닫을 때: 고른 파일이 있는 폴더를 그 이름으로 다시 기억
 ```
 
-`settings_key` 와 `remember` 는 **같은 저장소**를 씁니다. 이름이 같으면 위젯과
-일회성 다이얼로그가 기억을 주고받습니다.
+셋 다 **같은 저장소**를 쓰므로, 위젯에서 고른 폴더를 다이얼로그가 이어받고
+그 반대도 됩니다.
+
+이름에는 아무 문자열이나 쓸 수 있습니다 — 한글·공백·특수문자 모두 Qt 가 알아서
+인코딩해 저장합니다. 다만 슬래시(`/`)는 `QSettings` 에서 **그룹 구분자**로
+해석되므로(동작에는 문제없지만 설정 파일이 지저분해집니다) 피하는 편이 좋습니다.
+
+```python
+settings_key="입력csv"                  # 용도 이름
+settings_key="MainWindow.inputEdit"     # 창.위젯 이름 — 겹칠 일이 없습니다
+settings_key=f"내보내기.{export_type}"   # 동적으로 만들어도 됩니다
+```
 
 직접 읽고 쓰려면:
 
@@ -906,7 +917,7 @@ remember_dir("입력csv", "/data/csv/a.csv")   # 파일을 주면 그 파일이 
 | 기억해 둔 폴더가 사라졌을 때 | 안전한 곳으로 대체 (그 폴더에서 열지 않음) |
 | 기억해 둔 폴더가 죽은 마운트일 때 | `path_timeout` 으로 걸러 내고 대체 |
 | `directory` 를 함께 줬을 때 | `directory` 가 우선. 기억은 그래도 갱신됨 |
-| `remember` 를 안 줬을 때 | 아무것도 기억하지 않음 (기존 동작 그대로) |
+| `settings_key` 를 안 줬을 때 | 아무것도 기억하지 않음 |
 
 ## 죽은 네트워크 경로에서 멈추지 않기 (NFS 등)
 
@@ -1164,7 +1175,7 @@ if dlg.exec():
 | `sidebar_urls` / `fixed_sidebar_urls` | 사이드바 기준 목록 / 제거를 막을 위치 |
 | `favorites_icon` | 분류·홈 아이콘 (`True` / `QIcon` / `False`) |
 | `places` | 위 다섯 개 대신 `Places` 를 통째로 |
-| `remember` | 용도별 시작 위치 기억 ("용도마다 다른 시작 위치" 참고) |
+| `settings_key` | 자리별 시작 위치 기억 ("용도마다 다른 시작 위치" 참고) |
 | `path_timeout` | 죽은 네트워크 경로 방어 제한 시간(초) |
 
 | 메서드 | 설명 |
@@ -1213,7 +1224,7 @@ from custom_file_dialog import Places, exec_file_dialog
 paths, chosen = exec_file_dialog(
     mode="open_file",
     places=Places(favorites=store, recent=recent, sidebar_urls=["~", "/mnt/data"]),
-    remember="입력csv",     # 이 용도의 마지막 폴더에서 열고, 고른 뒤 다시 기억
+    settings_key="입력csv",   # 이 이름의 마지막 폴더에서 열고, 고른 뒤 다시 기억
 )
 ```
 

@@ -1273,8 +1273,8 @@ def test_custom_file_dialog_resolves_links(qapp, tmp_path):
     assert dialog.places().favorites_store() is store
 
 
-def test_custom_file_dialog_sidebar_and_remember(qapp, tmp_path, monkeypatch):
-    """사이드바가 구성되고, remember 로 시작 위치를 주고받는다."""
+def test_custom_file_dialog_sidebar_and_settings_key(qapp, tmp_path, monkeypatch):
+    """사이드바가 구성되고, settings_key 로 시작 위치를 주고받는다."""
     from qtpy.QtWidgets import QListView
 
     from custom_file_dialog import CustomFileDialog, last_dir
@@ -1288,7 +1288,7 @@ def test_custom_file_dialog_sidebar_and_remember(qapp, tmp_path, monkeypatch):
 
     dialog = CustomFileDialog(
         None, mode="open_file", directory=os.path.dirname(design),
-        favorites=store, remember="입력csv",
+        favorites=store, settings_key="입력csv",
     )
     sidebar = dialog.findChild(QListView, "sidebar")
     model = sidebar.model()
@@ -1301,12 +1301,12 @@ def test_custom_file_dialog_sidebar_and_remember(qapp, tmp_path, monkeypatch):
     assert last_dir("입력csv") == os.path.dirname(design)
 
     # 다음에 열면 거기서 시작한다 (directory 를 주지 않았을 때)
-    again = CustomFileDialog(None, mode="open_file", remember="입력csv")
+    again = CustomFileDialog(None, mode="open_file", settings_key="입력csv")
     assert again.directory().absolutePath() == os.path.dirname(design)
 
     # directory 를 주면 그쪽이 이긴다
     forced = CustomFileDialog(
-        None, mode="open_file", directory=str(tmp_path), remember="입력csv"
+        None, mode="open_file", directory=str(tmp_path), settings_key="입력csv"
     )
     assert forced.directory().absolutePath() == str(tmp_path)
 
@@ -3148,8 +3148,8 @@ def _dialog_start_dirs(monkeypatch):
     return seen, result
 
 
-def test_remember_keeps_start_dir_per_purpose(qapp, tmp_path, monkeypatch):
-    """용도(remember)마다 마지막에 쓰던 폴더를 따로 기억한다."""
+def test_settings_key_keeps_start_dir_per_purpose(qapp, tmp_path, monkeypatch):
+    """settings_key 마다 마지막에 쓰던 폴더를 따로 기억한다."""
     from custom_file_dialog import exec_file_dialog, last_dir
 
     settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
@@ -3166,18 +3166,18 @@ def test_remember_keeps_start_dir_per_purpose(qapp, tmp_path, monkeypatch):
 
     # 기억이 없으면 현재 작업 디렉터리에서 연다
     result["paths"] = [str(csv_dir / "a.csv")]
-    exec_file_dialog(mode="open_file", remember="입력csv")
+    exec_file_dialog(mode="open_file", settings_key="입력csv")
     assert seen[-1] == os.getcwd()
 
     result["paths"] = [str(out_dir / "r.json")]
-    exec_file_dialog(mode="save_file", remember="결과저장")
+    exec_file_dialog(mode="save_file", settings_key="결과저장")
     assert seen[-1] == os.getcwd()
 
     # 다시 열면 각자 자기가 마지막에 쓰던 폴더에서 연다
     result["paths"] = []
-    exec_file_dialog(mode="open_file", remember="입력csv")
+    exec_file_dialog(mode="open_file", settings_key="입력csv")
     assert seen[-1] == str(csv_dir)
-    exec_file_dialog(mode="save_file", remember="결과저장")
+    exec_file_dialog(mode="save_file", settings_key="결과저장")
     assert seen[-1] == str(out_dir)
 
     # 서로 섞이지 않는다
@@ -3186,8 +3186,8 @@ def test_remember_keeps_start_dir_per_purpose(qapp, tmp_path, monkeypatch):
     assert last_dir("한번도안쓴용도") is None
 
 
-def test_remember_off_by_default(qapp, tmp_path, monkeypatch):
-    """remember 를 주지 않으면 아무것도 기억하지 않는다(기존 동작)."""
+def test_settings_key_off_by_default(qapp, tmp_path, monkeypatch):
+    """settings_key 를 주지 않으면 아무것도 기억하지 않는다."""
     from custom_file_dialog import exec_file_dialog, last_dir
 
     settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
@@ -3203,7 +3203,7 @@ def test_remember_off_by_default(qapp, tmp_path, monkeypatch):
     assert last_dir("") is None
 
 
-def test_remember_respects_explicit_directory(qapp, tmp_path, monkeypatch):
+def test_settings_key_respects_explicit_directory(qapp, tmp_path, monkeypatch):
     """directory 를 직접 주면 그쪽이 우선이고, 기억은 그래도 갱신된다."""
     from custom_file_dialog import exec_file_dialog, last_dir
 
@@ -3218,17 +3218,17 @@ def test_remember_respects_explicit_directory(qapp, tmp_path, monkeypatch):
 
     seen, result = _dialog_start_dirs(monkeypatch)
     result["paths"] = [str(first / "a.csv")]
-    exec_file_dialog(mode="open_file", remember="용도")
+    exec_file_dialog(mode="open_file", settings_key="용도")
     assert last_dir("용도") == str(first)
 
     # 기억이 있어도 directory 가 이긴다
     result["paths"] = [str(forced / "b.csv")]
-    exec_file_dialog(mode="open_file", remember="용도", directory=str(forced))
+    exec_file_dialog(mode="open_file", settings_key="용도", directory=str(forced))
     assert seen[-1] == str(forced)
     assert last_dir("용도") == str(forced)      # 기억은 갱신된다
 
 
-def test_remember_falls_back_when_dir_is_gone(qapp, tmp_path, monkeypatch):
+def test_settings_key_falls_back_when_dir_is_gone(qapp, tmp_path, monkeypatch):
     """기억해 둔 폴더가 사라졌으면 안전한 곳으로 대체한다."""
     from custom_file_dialog import exec_file_dialog, remember_dir
 
@@ -3241,12 +3241,12 @@ def test_remember_falls_back_when_dir_is_gone(qapp, tmp_path, monkeypatch):
     gone.rmdir()
 
     seen, _result = _dialog_start_dirs(monkeypatch)
-    exec_file_dialog(mode="open_file", remember="용도")
+    exec_file_dialog(mode="open_file", settings_key="용도")
     assert seen[-1] == os.getcwd()
 
 
-def test_remember_shares_store_with_widget(qapp, tmp_path, monkeypatch):
-    """같은 이름이면 위젯(settings_key)과 다이얼로그(remember)가 기억을 주고받는다."""
+def test_settings_key_shares_store_with_widget(qapp, tmp_path, monkeypatch):
+    """같은 settings_key 면 위젯과 다이얼로그가 기억을 주고받는다."""
     from custom_file_dialog import exec_file_dialog, last_dir, remember_dir
 
     settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
@@ -3262,7 +3262,7 @@ def test_remember_shares_store_with_widget(qapp, tmp_path, monkeypatch):
     # 다이얼로그가 고른 것을 위젯이 이어받는다
     _seen, result = _dialog_start_dirs(monkeypatch)
     result["paths"] = [str(from_dialog / "a.csv")]
-    exec_file_dialog(mode="open_file", remember="공용")
+    exec_file_dialog(mode="open_file", settings_key="공용")
 
     edit = FilePathEdit(mode="open_file", settings_key="공용")
     assert edit._start_dir_now() == str(from_dialog)

@@ -973,7 +973,7 @@ def build_history_section(track, append):
             "키 하나가 용도 하나입니다. 서로 다른 settings_key 를 주면 각자 "
             "마지막에 쓰던 폴더에서 열립니다. 아래 셋을 각각 다른 폴더에서 "
             "고른 다음 다시 열어 보세요 — 서로 섞이지 않습니다.\n"
-            "위젯 없이 exec_file_dialog(remember=\"입력csv\") 로 띄우는 "
+            "위젯 없이 CustomFileDialog(settings_key=\"입력csv\") 로 띄우는 "
             "일회성 다이얼로그도 같은 저장소를 씁니다."
         )
     )

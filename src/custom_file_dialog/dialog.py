@@ -71,7 +71,7 @@ def exec_file_dialog(
     show_dirs_only=True,
     extra_options=None,
     places=None,
-    remember=None,
+    settings_key=None,
     path_timeout=safety.DEFAULT_TIMEOUT,
     add_all_files_filter=False,
     name_filter=None,
@@ -98,16 +98,16 @@ def exec_file_dialog(
             주면 **네이티브 다이얼로그를 쓸 수 없어** 자동으로 Qt 자체
             다이얼로그로 전환된다(네이티브 창은 OS 가 그리므로 Qt 가 사이드바를
             바꿀 수 없다).
-        remember: **용도 이름.** 주면 그 용도로 마지막에 쓰던 폴더에서 열고,
-            고르고 나면 그 폴더를 다시 기억한다. 자리마다 다른 이름을 주면
-            (``"입력csv"`` · ``"결과저장"``) 각자 따로 기억한다.
+        settings_key: **이 자리를 구분할 이름.** 주면 그 이름으로 마지막에 쓰던
+            폴더에서 열고, 고르고 나면 그 폴더를 다시 기억한다. 자리마다 다른
+            이름을 주면 (``"입력csv"`` · ``"결과저장"``) 각자 따로 기억한다.
 
             ``directory`` 를 함께 주면 그쪽이 우선이다(기억은 그래도 갱신된다).
             ``FilePathEdit(settings_key=...)`` 와 **같은 저장소**를 쓰므로 같은
             이름을 주면 위젯과 다이얼로그가 기억을 주고받는다.
         path_timeout: 기억해 둔 폴더가 죽은 마운트를 가리킬 때 멈추지 않도록
-            하는 제한 시간(초). ``None`` 이면 확인하지 않는다. ``remember`` 를
-            쓸 때만 의미가 있다.
+            하는 제한 시간(초). ``None`` 이면 확인하지 않는다. ``settings_key``
+            를 쓸 때만 의미가 있다.
         add_all_files_filter: 필터 끝에 "모든 파일 (*)" 을 붙일지.
             (위젯은 기본 True 지만, 여기서는 넘긴 필터를 그대로 쓰는 편이
             QFileDialog 를 직접 부르던 코드와 덜 어긋난다.)
@@ -118,10 +118,10 @@ def exec_file_dialog(
     """
     if caption is None:
         caption = DEFAULT_CAPTIONS.get(mode, "선택")
-    if remember and not directory:
+    if settings_key and not directory:
         # 기억해 둔 폴더가 사라졌거나 죽은 마운트면 안전한 곳으로 대체된다
         directory = resolve_start_dir(
-            [], last_dir=history.last_dir(remember), mode=mode, timeout=path_timeout
+            [], last_dir=history.last_dir(settings_key), mode=mode, timeout=path_timeout
         )
     # 위젯과 같은 형태를 받아 준다: 문자열 · [(설명, 확장자들)] · dict …
     name_filter = build_filter(
@@ -134,8 +134,8 @@ def exec_file_dialog(
         selected_filter or "", native, default_suffix, show_dirs_only,
         extra_options, places,
     )
-    if remember and paths:
-        history.remember_dir(remember, paths[0])
+    if settings_key and paths:
+        history.remember_dir(settings_key, paths[0])
     return paths, chosen
 
 
@@ -199,7 +199,7 @@ class CustomFileDialog(QFileDialog):
             caption="입력 파일 선택",
             filters=[("CSV", ["csv"]), ("엑셀", ["xlsx", "xls"])],
             favorites=store,
-            remember="입력csv",
+            settings_key="입력csv",
         )
         if dlg.exec():
             paths = dlg.selectedFiles()      # 원본 경로로 복원되어 나온다
@@ -235,9 +235,10 @@ class CustomFileDialog(QFileDialog):
         sidebar_urls: 사이드바 기준 목록 (None 이면 홈 + 현재 위치).
         fixed_sidebar_urls: 사이드바에서 제거를 막을 위치 (None 이면 홈만).
         favorites_icon: 분류·홈 아이콘 (True / QIcon / False).
-        remember: 용도 이름. 주면 그 용도로 마지막에 쓰던 폴더에서 열고,
-            고르고 나면 그 폴더를 다시 기억한다
-            (:func:`~custom_file_dialog.history.last_dir` 와 같은 저장소).
+        settings_key: 이 자리를 구분할 이름. 주면 그 이름으로 마지막에 쓰던
+            폴더에서 열고, 고르고 나면 그 폴더를 다시 기억한다.
+            ``FilePathEdit(settings_key=...)`` 와 같은 저장소를 쓴다
+            (:func:`~custom_file_dialog.history.last_dir` 참고).
         path_timeout: 죽은 네트워크 경로에서 멈추지 않도록 하는 제한 시간(초).
     """
 
@@ -259,7 +260,7 @@ class CustomFileDialog(QFileDialog):
         sidebar_urls=None,
         fixed_sidebar_urls=None,
         favorites_icon=True,
-        remember=None,
+        settings_key=None,
         path_timeout=safety.DEFAULT_TIMEOUT,
     ):
         mode = normalize_mode(mode)
@@ -267,7 +268,7 @@ class CustomFileDialog(QFileDialog):
 
         self._mode = mode
         self._default_suffix = default_suffix
-        self._remember = remember
+        self._settings_key = settings_key
         self._path_timeout = None if path_timeout is None else float(path_timeout)
         self._places = places if places is not None else Places(
             favorites=favorites,
@@ -297,9 +298,9 @@ class CustomFileDialog(QFileDialog):
         if default_suffix:
             self.setDefaultSuffix(default_suffix)
 
-        if not directory and remember:
+        if not directory and settings_key:
             directory = resolve_start_dir(
-                [], last_dir=history.last_dir(remember), mode=mode,
+                [], last_dir=history.last_dir(settings_key), mode=mode,
                 timeout=self._path_timeout,
             )
         if directory:
@@ -370,10 +371,10 @@ class CustomFileDialog(QFileDialog):
         self.selectFile(os.path.basename(directory))
 
     def _on_accepted(self):
-        if self._remember:
+        if self._settings_key:
             paths = self.selectedFiles()
             if paths:
-                history.remember_dir(self._remember, paths[0])
+                history.remember_dir(self._settings_key, paths[0])
 
 
 def _exec_instance_dialog(
@@ -396,7 +397,7 @@ def _exec_instance_dialog(
         show_dirs_only=show_dirs_only,
         options=extra_options,
         places=places,
-        # remember 는 exec_file_dialog 이 이미 처리했다(두 번 기억하지 않게)
+        # settings_key 는 exec_file_dialog 이 이미 처리했다(두 번 기억하지 않게)
     )
     run = getattr(dialog, "exec_", None) or dialog.exec
     if not run():
