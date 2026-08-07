@@ -1364,6 +1364,77 @@ def test_safety_config_after_dialog_is_too_late(qapp, tmp_path):
         safety.reset()
 
 
+def test_sidebar_width_fits_items(qapp, tmp_path):
+    """사이드바가 처음 열릴 때 항목이 잘리지 않을 만큼 넓어진다."""
+    from qtpy.QtWidgets import QListView, QSplitter
+
+    from custom_file_dialog import CustomFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("아주긴분류이름입니다", design)
+    recent.record(design)
+
+    def widths(**kwargs):
+        dialog = CustomFileDialog(
+            None, mode="open_file", directory=os.path.dirname(design),
+            favorites=favorites, recent=recent, **kwargs
+        )
+        dialog.resize(900, 600)
+        dialog.show()
+        _spin(qapp, 300)
+        sidebar = dialog.findChild(QListView, "sidebar")
+        splitter = dialog.findChild(QSplitter, "splitter")
+        result = (sidebar.width(), splitter.sizes()[1], sidebar.sizeHintForColumn(0))
+        dialog.close()
+        return result
+
+    # 기본: 내용이 필요한 만큼은 확보된다
+    width, _files, needed = widths()
+    assert width >= needed
+
+    # 직접 지정하면 그대로
+    assert widths(sidebar_width=220)[0] == 220
+
+    # 0 이면 Qt 가 정한 대로 두므로 내용보다 좁을 수 있다
+    untouched, _files, needed = widths(sidebar_width=0)
+    assert untouched < needed
+
+    # 아무리 넓게 줘도 파일 목록 자리는 남긴다
+    assert widths(sidebar_width=5000)[1] >= 200
+
+
+def test_sidebar_width_respects_user_drag(qapp, tmp_path):
+    """사용자가 경계를 끌어 좁힌 뒤 다시 열어도 되돌리지 않는다."""
+    from qtpy.QtWidgets import QListView, QSplitter
+
+    from custom_file_dialog import CustomFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=os.path.dirname(design), favorites=favorites
+    )
+    dialog.resize(900, 600)
+    dialog.show()
+    _spin(qapp, 300)
+
+    splitter = dialog.findChild(QSplitter, "splitter")
+    total = sum(splitter.sizes())
+    splitter.setSizes([60, total - 60])          # 사용자가 끌어서 좁혔다
+    _spin(qapp, 100)
+    narrowed = dialog.findChild(QListView, "sidebar").width()
+
+    dialog.hide()
+    dialog.show()                                 # 다시 열어도
+    _spin(qapp, 300)
+    assert dialog.findChild(QListView, "sidebar").width() == narrowed
+    dialog.close()
+
+
 def test_custom_file_dialog_resolves_links(qapp, tmp_path):
     """즐겨찾기 링크를 골라도 selectedFiles() 는 원본 경로를 돌려준다."""
     from custom_file_dialog import CustomFileDialog

@@ -8,7 +8,7 @@
 
 import os
 
-from qtpy.QtWidgets import QFileDialog
+from qtpy.QtWidgets import QFileDialog, QListView, QSplitter
 
 from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
@@ -195,6 +195,13 @@ def _store_or_none(value, factory, **kwargs):
     return value or None
 
 
+# 사이드바 폭을 항목에 맞출 때 글자 오른쪽에 남기는 여백(px)
+SIDEBAR_PADDING = 8
+
+# 사이드바를 넓히더라도 파일 목록에 최소한 남겨 둘 폭(px)
+MIN_FILE_LIST_WIDTH = 260
+
+
 # 모드별 (AcceptMode, FileMode) 설정값
 _INSTANCE_MODES = {
     SelectMode.OPEN_FILE: ("AcceptOpen", "ExistingFile"),
@@ -261,6 +268,9 @@ class CustomFileDialog(QFileDialog):
             ``FilePathEdit(settings_key=...)`` 와 같은 저장소를 쓴다
             (:func:`~custom_file_dialog.history.last_dir` 참고).
         path_timeout: 죽은 네트워크 경로에서 멈추지 않도록 하는 제한 시간(초).
+        sidebar_width: 사이드바 폭(px). ``None``(기본)이면 **항목이 잘리지 않을
+            만큼** 자동으로 넓힌다(이미 넓으면 그대로 둔다). 숫자를 주면 그
+            폭으로, ``0`` 이면 Qt 가 정한 대로 둔다.
     """
 
     def __init__(
@@ -284,6 +294,7 @@ class CustomFileDialog(QFileDialog):
         favorites_icon=True,
         settings_key=None,
         path_timeout=safety.DEFAULT_TIMEOUT,
+        sidebar_width=None,
     ):
         mode = normalize_mode(mode)
         super().__init__(parent, caption or DEFAULT_CAPTIONS.get(mode, "선택"))
@@ -291,6 +302,8 @@ class CustomFileDialog(QFileDialog):
         self._mode = mode
         self._default_suffix = default_suffix
         self._settings_key = settings_key
+        self._sidebar_width = sidebar_width
+        self._sidebar_fitted = False
         self._path_timeout = None if path_timeout is None else float(path_timeout)
         self._places = places if places is not None else Places(
             favorites=_store_or_none(favorites, FavoritesStore),
@@ -375,6 +388,48 @@ class CustomFileDialog(QFileDialog):
         """고른 경로 하나 (없으면 None). 여러 개 모드에서는 첫 번째."""
         paths = self.selectedFiles()
         return paths[0] if paths else None
+
+    def showEvent(self, event):     # noqa: N802 (Qt 시그니처)
+        """처음 보일 때 사이드바 폭을 항목에 맞춘다.
+
+        Qt 는 사이드바를 내용과 무관한 고정 폭으로 연다(측정값 79~115px).
+        Qt 기본 항목("Computer", 홈)에는 맞지만, 여기서 얹는 "현재 위치" ·
+        "최근 파일" · 분류 이름은 잘려서 ``현…`` 처럼 보인다.
+
+        스플리터 크기는 **보이기 전에는 정해지지 않으므로**(생성 직후엔 ``[0, 0]``)
+        생성자가 아니라 여기서 맞춘다. 한 번만 하므로, 사용자가 경계를 끌어
+        조절한 뒤 창을 다시 열어도 그 폭이 유지된다.
+        """
+        super().showEvent(event)
+        if not self._sidebar_fitted:
+            self._sidebar_fitted = True
+            self._fit_sidebar(self._sidebar_width)
+
+    def _fit_sidebar(self, width):
+        """사이드바 폭을 정한다. ``None`` 이면 항목이 잘리지 않을 만큼만 넓힌다."""
+        if width == 0:
+            return                          # 0 = Qt 가 정한 대로 둔다
+        splitter = self.findChild(QSplitter, "splitter")
+        sidebar = self.findChild(QListView, "sidebar")
+        if splitter is None or sidebar is None:
+            return
+        sizes = splitter.sizes()
+        total = sum(sizes)
+        if len(sizes) < 2 or total <= 0:
+            return                          # 아직 자리가 안 잡혔다
+
+        if width is None:
+            needed = (
+                sidebar.sizeHintForColumn(0)
+                + 2 * sidebar.frameWidth()
+                + SIDEBAR_PADDING
+            )
+            width = max(sizes[0], needed)   # 이미 충분히 넓으면 그대로 둔다
+
+        # 넓히더라도 파일 목록 자리는 남겨 둔다
+        width = max(0, min(int(width), max(0, total - MIN_FILE_LIST_WIDTH)))
+        if width and width != sizes[0]:
+            splitter.setSizes([width, total - width])
 
     # ------------------------------------------------------------- 내부
     def _start_at(self, directory):
