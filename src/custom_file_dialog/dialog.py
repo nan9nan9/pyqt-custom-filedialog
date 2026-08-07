@@ -13,7 +13,7 @@ from qtpy.QtWidgets import QFileDialog
 from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode
 from .util import to_urls
-from .filters import ensure_suffix, suffix_of
+from .filters import build_filter, ensure_suffix, suffix_of
 
 
 def _enum(enum_name, value_name):
@@ -63,7 +63,7 @@ def exec_file_dialog(
     mode=SelectMode.OPEN_FILE,
     caption=None,
     directory=None,
-    name_filter=None,
+    filters=None,
     selected_filter=None,
     native=True,
     default_suffix=None,
@@ -72,6 +72,8 @@ def exec_file_dialog(
     places=None,
     remember=None,
     path_timeout=safety.DEFAULT_TIMEOUT,
+    add_all_files_filter=False,
+    name_filter=None,
 ):
     """모드에 맞는 QFileDialog 를 띄우고 결과를 반환한다.
 
@@ -80,7 +82,10 @@ def exec_file_dialog(
         mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
         caption: 다이얼로그 제목. None 이면 모드별 기본 제목.
         directory: 처음 열릴 디렉터리(또는 파일 경로).
-        name_filter: Qt 필터 문자열 (``"이미지 (*.png);;모든 파일 (*)"``).
+        filters: 파일 필터. ``FilePathEdit(filters=...)`` 와 **같은 형태를 모두**
+            받는다 — Qt 필터 문자열은 물론 ``[("이미지", ["png", "jpg"])]``
+            처럼 파이썬스럽게 써도 된다
+            (:func:`~custom_file_dialog.filters.build_filter` 참고).
         selected_filter: 처음 선택되어 있을 필터 항목.
         native: OS 네이티브 다이얼로그 사용 여부.
         default_suffix: 저장 모드에서 확장자가 없을 때 붙일 확장자.
@@ -102,6 +107,10 @@ def exec_file_dialog(
         path_timeout: 기억해 둔 폴더가 죽은 마운트를 가리킬 때 멈추지 않도록
             하는 제한 시간(초). ``None`` 이면 확인하지 않는다. ``remember`` 를
             쓸 때만 의미가 있다.
+        add_all_files_filter: 필터 끝에 "모든 파일 (*)" 을 붙일지.
+            (위젯은 기본 True 지만, 여기서는 넘긴 필터를 그대로 쓰는 편이
+            QFileDialog 를 직접 부르던 코드와 덜 어긋난다.)
+        name_filter: ``filters`` 의 예전 이름. 둘 다 주면 ``filters`` 가 이긴다.
 
     Returns:
         ``(paths, selected_filter)`` 튜플. 취소하면 ``([], selected_filter)``.
@@ -113,6 +122,12 @@ def exec_file_dialog(
         directory = resolve_start_dir(
             [], last_dir=history.last_dir(remember), mode=mode, timeout=path_timeout
         )
+    # 위젯과 같은 형태를 받아 준다: 문자열 · [(설명, 확장자들)] · dict …
+    name_filter = build_filter(
+        filters if filters is not None else name_filter,
+        add_all_files=add_all_files_filter,
+    )
+
     paths, chosen = _run_dialog(
         parent, mode, caption, directory or "", name_filter or "",
         selected_filter or "", native, default_suffix, show_dirs_only,

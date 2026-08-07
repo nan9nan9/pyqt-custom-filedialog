@@ -1,8 +1,56 @@
 # custom-file-dialog
 
-`QFileDialog` 를 감싼 **경로 선택 위젯**입니다. 입력창 + 찾아보기 버튼 한 줄로
-파일/폴더를 고르게 해 주며, `qtpy` 를 사용하여 **PyQt5 / PyQt6 / PySide2 / PySide6**
-모두에서 동작합니다.
+`QFileDialog` 를 감싼 라이브러리입니다. `qtpy` 를 사용하여
+**PyQt5 / PyQt6 / PySide2 / PySide6** 모두에서 동작합니다.
+
+**쓰는 방법은 두 가지**입니다. 필요한 쪽만 골라 쓰면 되고, 섞어 써도 됩니다.
+
+### 1. 다이얼로그를 그냥 띄우기 — `exec_file_dialog()`
+
+`QFileDialog.getOpenFileName()` 자리에 그대로 갈아 끼우는 방식입니다.
+위젯을 배치할 필요가 없습니다.
+
+```python
+from custom_file_dialog import exec_file_dialog
+
+paths, chosen = exec_file_dialog(
+    parent=self,
+    mode="open_file",
+    filters=[("CSV", ["csv"])],
+)
+if paths:
+    print(paths[0])
+```
+
+`QFileDialog` 정적 메서드와 나란히 두면 이렇습니다.
+
+```python
+# Qt 기본
+path, _ = QFileDialog.getOpenFileName(self, "파일 선택", "", "CSV (*.csv)")
+
+# 이 라이브러리 — 모드만 바꾸면 네 종류를 같은 함수로 부릅니다
+paths, _ = exec_file_dialog(self, "open_file",  filters=[("CSV", ["csv"])])
+paths, _ = exec_file_dialog(self, "open_files", filters=[("CSV", ["csv"])])
+paths, _ = exec_file_dialog(self, "save_file",  filters=[("CSV", ["csv"])])
+paths, _ = exec_file_dialog(self, "directory")
+```
+
+| | `QFileDialog` 정적 메서드 | `exec_file_dialog()` |
+| --- | --- | --- |
+| 함수 | 모드마다 다름 (`getOpenFileName` …) | 하나 (`mode=` 로 구분) |
+| 반환 | 바인딩·모드마다 다름 (문자열 / 리스트 / 튜플) | 언제나 `(경로 리스트, 선택된 필터)` |
+| 취소했을 때 | `""` 또는 `[]` | 언제나 `([], 필터)` |
+| 필터 | Qt 문자열만 | 파이썬 리스트·dict·문자열 다 됨 |
+| 저장 확장자 | 플랫폼마다 붙기도 안 붙기도 | 항상 붙여 줌 |
+
+여기에 시작 위치 기억(`remember=`), 사이드바 커스터마이즈(`places=`),
+죽은 네트워크 경로 방어가 필요하면 인자만 더 주면 됩니다.
+자세한 내용은 [다이얼로그로 쓰기](#다이얼로그로-쓰기)를 보세요.
+
+### 2. 화면에 붙이는 경로 입력 줄 — `FilePathEdit`
+
+설정 화면처럼 **경로가 폼에 남아 있어야 할 때** 쓰는 위젯입니다.
+입력창 + 찾아보기 버튼 한 줄이고, `[...]` 를 누르면 위와 같은 다이얼로그가 뜹니다.
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -11,6 +59,23 @@
 └─────────────────────────────────────────────┘
         → [...] 클릭 시 QFileDialog 팝업
 ```
+
+```python
+edit = FilePathEdit(mode="open_file", label="입력 파일:", filters=[("CSV", ["csv"])])
+layout.addWidget(edit)
+print(edit.path())
+```
+
+유효성 표시(빨간 테두리) · 드래그&드롭 · 경로 자동완성 · 최근 경로 드롭다운처럼
+**입력창이 있어야 성립하는 기능**은 이쪽에만 있습니다.
+
+| 이럴 때 | 쓸 것 |
+| --- | --- |
+| 버튼을 누르면 파일 하나 고르고 끝 | `exec_file_dialog()` |
+| 메뉴 항목 · 툴바에서 여는 일회성 다이얼로그 | `exec_file_dialog()` |
+| 설정 화면에 경로가 계속 보여야 함 | `FilePathEdit` |
+| 사용자가 경로를 직접 타이핑하거나 끌어다 놓음 | `FilePathEdit` |
+| 여러 경로를 폼으로 묶어 한 번에 꺼냄 | `FilePathForm` |
 
 ## 특징
 
@@ -68,7 +133,7 @@ pip install ".[pyqt5]"     # 또는 pyqt6 / pyside2 / pyside6
 `qtpy` 만 필수 의존성이며, 실제 Qt 바인딩은 이미 설치된 것을 자동 사용합니다.
 소스 그대로 쓰려면 `src/` 를 `sys.path` 에 추가하면 됩니다.
 
-## 사용법
+## 위젯으로 쓰기 — `FilePathEdit`
 
 ```python
 from qtpy.QtWidgets import QApplication, QVBoxLayout, QWidget
@@ -134,7 +199,8 @@ FilePathEdit(mode=SelectMode.DIRECTORY)   # 문자열 "directory" 와 동일
 
 ## 필터 지정
 
-`filters` 는 아래 어떤 형태로 줘도 됩니다.
+`filters` 는 아래 어떤 형태로 줘도 됩니다. **`FilePathEdit` 과
+`exec_file_dialog()` 가 똑같이 받습니다.**
 
 ```python
 filters=[("이미지", ["png", "jpg"])]        # (설명, 확장자 목록)  ← 권장
@@ -145,8 +211,11 @@ filters="이미지 (*.png);;모든 파일 (*)"      # 이미 Qt 필터 문자열
 ```
 
 확장자는 `"png"` / `".png"` / `"*.png"` 아무 형태나 됩니다.
-기본적으로 `"모든 파일 (*)"` 이 목록 끝에 자동으로 붙으며,
-`add_all_files_filter=False` 로 끌 수 있습니다.
+
+`"모든 파일 (*)"` 을 끝에 붙일지는 `add_all_files_filter` 로 정합니다.
+**기본값이 서로 다릅니다** — `FilePathEdit` 은 `True`(붙임), `exec_file_dialog()` 는
+`False`(넘긴 그대로)입니다. 다이얼로그 쪽은 `QFileDialog` 를 직접 부르던 코드를
+옮겨 올 때 필터가 늘어나지 않는 편이 덜 놀랍기 때문입니다.
 
 ## 주요 API
 
@@ -1018,28 +1087,52 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 `~` 로 시작하는 경로는 판정 시 홈 디렉터리로 확장해서 검사하지만,
 `path()` 는 사용자가 입력한 원본 문자열을 그대로 돌려줍니다.
 
-## 위젯 없이 쓰기
+## 다이얼로그로 쓰기
 
-내부 헬퍼는 위젯과 독립적이라 그대로 가져다 쓸 수 있습니다.
+위젯을 배치하지 않고 `QFileDialog` 처럼 그때그때 띄우는 방식입니다.
 
 ```python
-from custom_file_dialog import build_filter, exec_file_dialog, validate_paths
-
-name_filter = build_filter([("이미지", ["png", "jpg"])])   # "이미지 (*.png *.jpg);;모든 파일 (*)"
+from custom_file_dialog import exec_file_dialog
 
 paths, chosen = exec_file_dialog(
-    parent=self, mode="open_files", directory="/home/user", name_filter=name_filter
+    parent=self,
+    mode="open_files",
+    caption="이미지 고르기",              # 생략하면 모드별 한국어 기본 제목
+    directory="/home/user",
+    filters=[("이미지", ["png", "jpg"])],
 )
-
-ok, reason = validate_paths(paths, mode="open_files")
 ```
 
-`exec_file_dialog()` 는 모드에 따라 다른 `QFileDialog` 정적 메서드를 호출하고,
-바인딩마다 다른 반환 형태를 항상 `(경로 리스트, 선택된 필터)` 로 정규화합니다.
+반환은 **언제나** `(경로 리스트, 선택된 필터)` 입니다. 취소하면 `([], 필터)` 이므로
+`if paths:` 하나로 모든 모드를 똑같이 처리할 수 있습니다. 바인딩(PyQt5/6·PySide2/6)과
+모드마다 다른 Qt 의 반환 형태를 여기서 흡수합니다.
 
-사이드바를 손보려면 `places=` 에 `Places` 를 넘깁니다. 이때만 정적 메서드 대신
-인스턴스 다이얼로그를 띄우고(네이티브 창으로는 사이드바를 못 바꾸므로) 링크 추적 ·
-우클릭 메뉴 · 차단 경로 방어까지 함께 겁니다.
+```python
+paths, _ = exec_file_dialog(self, "open_file")    # 파일 1개  -> ["/a/b.csv"] 또는 []
+paths, _ = exec_file_dialog(self, "open_files")   # 여러 개    -> ["/a/1.csv", ...]
+paths, _ = exec_file_dialog(self, "save_file")    # 저장 이름  -> ["/a/새파일.csv"]
+paths, _ = exec_file_dialog(self, "directory")    # 폴더 1개   -> ["/a"]
+```
+
+### 주요 인자
+
+| 인자 | 설명 |
+| --- | --- |
+| `parent` | 부모 위젯 (모달 기준). 보통 `self` |
+| `mode` | `"open_file"` · `"open_files"` · `"save_file"` · `"directory"` |
+| `caption` / `directory` | 제목 / 처음 열릴 폴더 |
+| `filters` | 파이썬 리스트·dict·Qt 문자열 다 됩니다 ("필터 지정" 참고) |
+| `add_all_files_filter` | 필터 끝에 "모든 파일 (*)" 추가 (기본 `False`) |
+| `default_suffix` | 저장 모드에서 확장자 자동 부착 (없으면 필터에서 유추) |
+| `remember` | 용도별 시작 위치 기억 ("용도마다 다른 시작 위치" 참고) |
+| `native` | `False` 면 Qt 자체 다이얼로그 강제 |
+| `places` | 사이드바 커스터마이즈 (아래) |
+
+### 사이드바까지 손보기
+
+`places=` 에 `Places` 를 넘기면 즐겨찾기·최근 파일·사이드바가 붙습니다. 이때만
+정적 메서드 대신 인스턴스 다이얼로그를 띄우고(네이티브 창으로는 사이드바를 못
+바꾸므로), 링크 추적 · 우클릭 메뉴 · 차단 경로 방어까지 함께 겁니다.
 
 ```python
 from custom_file_dialog import Places, exec_file_dialog
@@ -1049,12 +1142,25 @@ paths, chosen = exec_file_dialog(
     places=Places(favorites=store, recent=recent, sidebar_urls=["~", "/mnt/data"]),
     remember="입력csv",     # 이 용도의 마지막 폴더에서 열고, 고른 뒤 다시 기억
 )
+paths = Places(favorites=store).resolve_all(paths)   # 링크 -> 원본 경로
 ```
 
-`remember` 는 "용도마다 다른 시작 위치" 를 참고하세요. `FilePathEdit` 의
-`settings_key` 와 같은 저장소를 씁니다.
+즐겨찾기에서 고르면 **링크 경로**가 돌아오므로 `resolve_all()` 을 한 번
+통과시키세요 (`FilePathEdit` 은 자동으로 합니다).
 
-테스트에서는 이 함수만 monkeypatch 하면 실제 다이얼로그 없이 위젯을 검증할 수 있습니다.
+### 그 밖의 헬퍼
+
+내부 헬퍼도 위젯과 독립적이라 그대로 가져다 쓸 수 있습니다.
+
+```python
+from custom_file_dialog import build_filter, validate_paths
+
+build_filter([("이미지", ["png", "jpg"])])   # "이미지 (*.png *.jpg)"
+ok, reason = validate_paths(paths, mode="open_files")
+```
+
+테스트에서는 `exec_file_dialog` 만 monkeypatch 하면 실제 다이얼로그 없이 위젯을
+검증할 수 있습니다.
 
 ## 코드 구조
 

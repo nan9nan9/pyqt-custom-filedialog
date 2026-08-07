@@ -1147,6 +1147,55 @@ def test_sidebar_dialog_returns_selection(qapp, monkeypatch, tmp_path):
     assert chosen == "CSV (*.csv)"
 
 
+def test_exec_file_dialog_accepts_pythonic_filters(qapp, monkeypatch):
+    """다이얼로그도 위젯과 같은 형태의 filters 를 받는다."""
+    seen = []
+
+    def fake_run(parent, mode, caption, directory, name_filter, *args):
+        seen.append(name_filter)
+        return [], ""
+
+    monkeypatch.setattr(dialog_module, "_run_dialog", fake_run)
+
+    def run(**kwargs):
+        dialog_module.exec_file_dialog(mode=SelectMode.OPEN_FILE, **kwargs)
+        return seen[-1]
+
+    assert run(filters=[("이미지", ["png", "jpg"])]) == "이미지 (*.png *.jpg)"
+    assert run(filters={"이미지": ["png"], "문서": ["txt"]}) == (
+        "이미지 (*.png);;문서 (*.txt)"
+    )
+    assert run(filters=["*.png"]) == "PNG 파일 (*.png)"     # 설명은 자동으로 붙는다
+    # 이미 Qt 문자열이면 그대로 (예전 코드가 그대로 돈다)
+    assert run(filters="CSV (*.csv);;모든 파일 (*)") == "CSV (*.csv);;모든 파일 (*)"
+    assert run() == ""                                   # 필터 없음
+
+    # "모든 파일" 은 기본으로 붙이지 않는다(위젯과 반대)
+    assert run(filters=[("CSV", ["csv"])]) == "CSV (*.csv)"
+    assert run(filters=[("CSV", ["csv"])], add_all_files_filter=True) == (
+        "CSV (*.csv);;모든 파일 (*)"
+    )
+
+    # 예전 이름 name_filter 도 그대로 받는다 (둘 다 주면 filters 가 이긴다)
+    assert run(name_filter=[("CSV", ["csv"])]) == "CSV (*.csv)"
+    assert run(filters=[("A", ["a"])], name_filter=[("B", ["b"])]) == "A (*.a)"
+
+
+def test_widget_filter_not_double_appended(qapp, monkeypatch):
+    """위젯이 만든 필터가 다이얼로그를 거치며 "모든 파일" 이 두 번 붙지 않는다."""
+    seen = {}
+    monkeypatch.setattr(
+        dialog_module,
+        "_run_dialog",
+        lambda parent, mode, caption, directory, nf, *a: (seen.update(nf=nf), ([], ""))[1],
+    )
+
+    edit = FilePathEdit(mode="open_file", filters=[("CSV", ["csv"])])
+    assert edit.name_filter() == "CSV (*.csv);;모든 파일 (*)"
+    edit.browse()
+    assert seen["nf"] == "CSV (*.csv);;모든 파일 (*)"     # 그대로 한 번만
+
+
 # --------------------------------------------------------------- 즐겨찾기
 @pytest.fixture
 def store(tmp_path):
