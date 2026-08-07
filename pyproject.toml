@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filedialog-widget"
+version = "0.1.0"
+description = "QFileDialog 기반 경로 선택 위젯 (PyQt5/PyQt6/PySide2/PySide6 호환)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "jekai", email = "jekai.jeong@gmail.com" }]
+keywords = ["qt", "pyqt", "pyside", "qfiledialog", "filedialog", "widget", "qtpy"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Environment :: X11 Applications :: Qt",
+]
+
+# qtpy 만 필수 의존성. 실제 Qt 바인딩(PyQt5/6, PySide2/6)은
+# 사용자가 원하는 것을 선택 설치한다.
+dependencies = ["qtpy>=2.0"]
+
+[project.optional-dependencies]
+pyqt5 = ["PyQt5"]
+pyqt6 = ["PyQt6"]
+pyside2 = ["PySide2"]
+pyside6 = ["PySide6"]
+
+[project.urls]
+Homepage = "https://github.com/jekai/filedialog-widget"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+file_dialog_widget = ["py.typed"]
