@@ -7,6 +7,11 @@
 그 아래에는 Qt 기본 메뉴 항목(이름 변경 · 삭제 · 숨김 파일 · 새 폴더)이 그대로
 따라붙는다.
 
+**분류 폴더 안**(즐겨찾기 분류 · 최근 파일)에서는 Qt 기본 "삭제" 대신
+``'설계'에서 제거`` · ``'최근 파일'에서 제거`` 가 나온다. 거기 보이는 것은
+심볼릭 링크라 Qt 의 "삭제"도 원본을 건드리지는 않지만, 이름만 보고 원본이
+지워진다고 읽히기 쉽다. **무엇에서 빠지는지**를 메뉴 이름에 적어 둔다.
+
 **사이드바**(왼쪽)에서 분류를 우클릭하면 정리 메뉴가 나온다.
 
 - 즐겨찾기 분류 → "'설계' 즐겨찾기에서 삭제" (분류 폴더째 제거)
@@ -57,19 +62,21 @@ class FavoritesMenus(QObject):
 
     Args:
         dialog: 대상 :class:`QFileDialog` (``DontUseNativeDialog`` 여야 한다).
-        places: :class:`~file_dialog_widget.places.Places` — 즐겨찾기·최근 파일과
+        places: :class:`~custom_file_dialog.places.Places` — 즐겨찾기·최근 파일과
             보호 위치를 담은 묶음.
         confirm: 삭제/비우기 전에 확인 대화상자를 띄울지.
         add_menu: 파일 목록에 "즐겨찾기에 추가" 메뉴를 붙일지.
 
     시그널:
         favoriteAdded(str, str): (분류, 등록한 경로)
+        entryRemoved(str, str): (분류, 뺀 항목의 **원본** 경로)
         categoryRemoved(str): 메뉴로 분류를 삭제했을 때 분류 이름.
         recentCleared(str): 메뉴로 최근 목록을 비웠을 때 항목 이름.
         sidebarEntryRemoved(str): 사이드바에서 일반 항목을 뺐을 때 그 경로.
     """
 
     favoriteAdded = Signal(str, str)
+    entryRemoved = Signal(str, str)
     categoryRemoved = Signal(str)
     recentCleared = Signal(str)
     sidebarEntryRemoved = Signal(str)
@@ -104,7 +111,8 @@ class FavoritesMenus(QObject):
 
         if self._sidebar is not None:
             self._take_over(self._sidebar, self._show_sidebar_menu)
-        if self._add_menu and self._places.favorites_store() is not None:
+        if self._add_menu:
+            # 즐겨찾기가 없어도(최근 파일만 써도) "…에서 제거"는 필요하다
             for view in self._views:
                 self._take_over(view, self._make_view_handler(view))
         return True
@@ -148,22 +156,58 @@ class FavoritesMenus(QObject):
             return None
         return os.path.join(self._dialog.directory().absolutePath(), str(name))
 
-    def _show_view_menu(self, view, pos):
-        index = view.indexAt(pos)
+    def entry_at(self, view, index):
+        """파일 목록 인덱스가 가리키는 **분류 안의 항목**.
+
+        Returns:
+            ``(저장소, 분류이름, 링크경로)``. 분류 폴더 바로 아래의 항목이
+            아니면 ``(None, None, None)``.
+        """
         path = self.path_at(view, index)
+        if not path:
+            return None, None, None
+        store = self._places.store_holding(path)
+        if store is None:
+            return None, None, None
+        directory = os.path.dirname(os.path.normpath(path))
+        if not store.is_category_dir(directory):
+            return None, None, None     # 분류 폴더 **바로 아래**만 (더 깊은 곳은 원본 쪽)
+        return store, os.path.basename(directory), path
+
+    def _show_view_menu(self, view, pos):
+        menu = self.build_view_menu(view, view.indexAt(pos))
+        if menu is None:
+            return
+        exec_menu(menu, view.viewport().mapToGlobal(pos))
+
+    def build_view_menu(self, view, index):
+        """파일 목록 우클릭 메뉴를 만든다(띄우지는 않는다).
+
+        Returns:
+            :class:`QMenu`. 붙일 항목이 하나도 없으면 None.
+        """
+        path = self.path_at(view, index)
+        store, category, link = self.entry_at(view, index)
         menu = QMenu(view)
 
-        # 1) 즐겨찾기에 추가 (분류 폴더 안의 링크는 대상에서 뺀다)
-        if path and not self._places.is_inside(path):
+        if store is not None:
+            # 1a) 분류 안의 항목 -> "무엇에서" 빠지는지 이름에 적어 준다.
+            #     Qt 기본 "삭제"는 같은 일을 하지만 원본을 지우는 것처럼 읽힌다.
+            action = menu.addAction("'%s'에서 제거" % category)
+            action.triggered.connect(
+                lambda _checked=False, s=store, c=category, p=link: self.remove_entry(
+                    s, c, p
+                )
+            )
+            menu.addSeparator()
+        elif path and self._places.favorites_store() is not None:
+            # 1b) 그 밖의 파일·폴더 -> 즐겨찾기에 추가
             self._add_favorite_submenu(menu, path)
             menu.addSeparator()
 
         # 2) Qt 기본 항목 (이름 변경 · 삭제 · 숨김 파일 · 새 폴더)
-        self._add_default_actions(menu, path)
-
-        if menu.isEmpty():
-            return
-        exec_menu(menu, view.viewport().mapToGlobal(pos))
+        self._add_default_actions(menu, path, allow_delete=store is None)
+        return None if menu.isEmpty() else menu
 
     def _add_favorite_submenu(self, menu, path):
         store = self._places.favorites_store()
@@ -183,14 +227,20 @@ class FavoritesMenus(QObject):
             "새 분류...", lambda: self.add_to_favorites(path, None)
         )
 
-    def _add_default_actions(self, menu, path):
-        """Qt 가 원래 띄우던 항목들을 그대로 붙인다(활성 상태도 같은 규칙)."""
+    def _add_default_actions(self, menu, path, allow_delete=True):
+        """Qt 가 원래 띄우던 항목들을 그대로 붙인다(활성 상태도 같은 규칙).
+
+        ``allow_delete`` 가 False 면 "삭제"만 뺀다 — 우리가 "…에서 제거"로
+        갈아 끼운 자리라 둘을 함께 두면 어느 쪽이 원본을 지우는지 헷갈린다.
+        """
         dialog = self._dialog
         read_only = bool(dialog.options() & QFileDialog.Option.ReadOnly)
 
         if path:
             writable = QFileInfo(path).isWritable()
             for name in QT_ITEM_ACTIONS:
+                if name == "qt_delete_action" and not allow_delete:
+                    continue
                 action = dialog.findChild(QAction, name)
                 if action is not None:
                     action.setEnabled(not read_only and writable)
@@ -308,6 +358,25 @@ class FavoritesMenus(QObject):
             return False
         self._dialog.setSidebarUrls(remaining)
         self.sidebarEntryRemoved.emit(path)
+        return True
+
+    def remove_entry(self, store, category, link):
+        """분류에서 항목 **하나**를 뺀다. 원본 파일은 건드리지 않는다.
+
+        분류 폴더에 있는 것은 원본을 가리키는 심볼릭 링크라, 그 링크만 지운다.
+        목록에 보이는 **이름**으로 지우므로 같은 파일을 다른 이름으로 두 번
+        등록해 두었어도 우클릭한 그 항목만 빠진다.
+
+        되돌리기 쉬운(다시 등록하면 그만인) 동작이라 확인 대화상자를 띄우지
+        않는다. 분류를 통째로 지우는 :meth:`remove_category` 는 확인한다.
+        """
+        if store is None or not link:
+            return False
+        name = os.path.basename(os.path.normpath(link))
+        target = store.resolve(link) or link      # 지우기 전에 원본을 알아 둔다
+        if not store.remove(category, name):
+            return False
+        self.entryRemoved.emit(category, target)
         return True
 
     def remove_category(self, category):

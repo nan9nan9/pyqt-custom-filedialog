@@ -15,8 +15,9 @@
     오른쪽 사이드바  : 다이얼로그 왼쪽 즐겨찾기 목록 교체
           즐겨찾기·최근 : 파일/폴더를 분류별로 모으고, 최근에 고른 파일도 함께
                           사이드바에 띄워 한 위젯에서 같이 쓰기
-          안전       : 나열하면 안 되는 경로 차단(guarded_roots)과
-                       응답 없는 네트워크 경로 방어(path_timeout)
+          안전       : 나열하면 안 되는 경로 차단(guarded_roots) · 자동완성
+                       최소 깊이(min_depth) · 응답 없는 네트워크 경로
+                       방어(path_timeout)
 
 맨 위 공통 옵션(네이티브 다이얼로그 / 드래그&드롭)은 모든 위젯에 한꺼번에
 적용되고, 맨 아래 로그는 경계를 끌어 높이를 조절할 수 있다.
@@ -82,7 +83,7 @@ from qtpy.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from file_dialog_widget import (  # noqa: E402
+from custom_file_dialog import (  # noqa: E402
     safety,
     GuardedFileSystemModel,
     FavoritesError,
@@ -94,6 +95,7 @@ from file_dialog_widget import (  # noqa: E402
     RecentStore,
     clock_icon,
     exec_file_dialog,
+    last_dir,
     star_icon,
 )
 
@@ -409,10 +411,15 @@ def build_places_section(track, append):
         _hint(
             "사이드바는 디렉터리만 받기 때문에(파일 URL 은 Qt 가 버립니다), "
             "분류마다 폴더를 만들고 그 안에 심볼릭 링크를 모읍니다. "
-            "즐겨찾기는 ★ 별표, 최근 파일은 🕘 시계 아이콘이 붙습니다.\n"
+            "즐겨찾기는 ★ 별표, 최근 파일은 🕘 시계, 홈은 🏠 집 아이콘이 붙고, "
+            "다이얼로그가 열리는 자리는 \"현재 위치\"라는 이름으로 나옵니다.\n"
             "고른 경로는 링크가 아니라 항상 원본으로 되돌아옵니다. "
+            "항목을 고르면 Look in 에 원본 경로가 뜨고, 상위 폴더(↑)도 그 원본 "
+            "기준으로 올라갑니다. "
             "사이드바에서 분류를 우클릭하면 분류 삭제(즐겨찾기) / 목록 비우기"
-            "(최근 파일) 메뉴가 나옵니다."
+            "(최근 파일) 메뉴가 나옵니다. 분류 안에서 항목을 우클릭하면 "
+            "\"삭제\" 대신 \"'설계'에서 제거\" 처럼 무엇에서 빠지는지가 이름에 "
+            "적혀 나옵니다 — 원본 파일은 그대로입니다."
         )
     )
 
@@ -517,17 +524,26 @@ def build_places_section(track, append):
     layout.addLayout(boxes)
 
     # ------------------------------------------------------------- 동작
-    def as_text(url):
-        """QUrl 을 사람이 읽을 이름으로 (경로가 비면 Computer)."""
+    def as_text(url, marks):
+        """QUrl 을 다이얼로그가 실제로 보여 줄 이름으로 (경로가 비면 Computer).
+
+        홈은 집 아이콘이 붙고 현재 위치는 이름이 바뀌므로, 미리보기도 같은
+        이름으로 맞춘다.
+        """
         path = url.toLocalFile() if hasattr(url, "toLocalFile") else str(url)
-        return os.path.basename(path.rstrip(os.sep)) or "Computer"
+        name = os.path.basename(path.rstrip(os.sep)) or "Computer"
+        label, icon = marks.get(os.path.normpath(path), (None, None))
+        return ("🏠 " if icon is not None else "") + (label or name)
 
     def refresh_order():
         urls = edit.effective_sidebar_urls()
         if urls is None:
             order_label.setText("사이드바: 손대지 않음 (즐겨찾기·최근 파일 모두 꺼짐)")
         else:
-            order_label.setText("사이드바 순서: " + "  ›  ".join(as_text(u) for u in urls))
+            marks = edit.effective_sidebar_marks()
+            order_label.setText(
+                "사이드바 순서: " + "  ›  ".join(as_text(u, marks) for u in urls)
+            )
 
     def refresh_categories():
         """분류 콤보를 실제 목록으로 맞춘다(입력 중인 텍스트는 지키면서)."""
@@ -687,7 +703,9 @@ def build_safety_section(track, append):
             "마운트되면서 시스템이 주저앉습니다. 입력창에 경로를 치는 순간 자동완성이 "
             "바로 그 일을 합니다.\n"
             "guarded_roots 에 등록하면 그 자리 자체는 열지 않고, 한 단계라도 아래인 "
-            "경로만 쓰게 됩니다. 아래에서 켜고 끄며 차이를 확인해 보세요."
+            "경로만 쓰게 됩니다. 위험한 경로를 미리 다 알기 어렵다면 min_depth 로 "
+            "얕은 자리를 아예 나열하지 않게 할 수 있습니다. "
+            "아래에서 켜고 끄며 차이를 확인해 보세요."
         )
     )
 
@@ -709,6 +727,27 @@ def build_safety_section(track, append):
 
     guard_check = QCheckBox("이 경로를 차단 경로로 등록")
     guard_layout.addWidget(guard_check)
+
+    # 이름을 지목하는 대신 "얕으면 나열하지 않는다"로 거는 그물.
+    # 흉내낸 경로가 임시 폴더라 깊이가 그때그때 다르므로, 그 경로가 딱 한 단계
+    # 모자라도록 깊이를 잡아 /user (1단계) 상황을 그대로 재현한다.
+    shallow_limit = safety.path_depth(fake_root) + 1
+    depth_check = QCheckBox(
+        "자동완성 최소 깊이 제한 (min_depth=%d — 이 경로는 %d단계라 나열 금지)"
+        % (shallow_limit, safety.path_depth(fake_root))
+    )
+    depth_check.setToolTip(
+        "실제로는 min_depth=2 로 두면 /user (1단계)가 막힙니다.\n"
+        "여기서는 임시 폴더의 깊이에 맞춰 같은 상황을 만듭니다."
+    )
+    guard_layout.addWidget(depth_check)
+
+    listing_check = QCheckBox("자동완성 나열 아예 끄기 (allow_listing=False)")
+    listing_check.setToolTip(
+        "깊이와 무관하게 어떤 폴더도 읽지 않습니다.\n"
+        "파일이 수만 개인 폴더처럼 깊이로 가릴 수 없는 자리까지 막을 때 씁니다."
+    )
+    guard_layout.addWidget(listing_check)
 
     registered = QLabel()
     registered.setWordWrap(True)
@@ -794,8 +833,15 @@ def build_safety_section(track, append):
 
     def refresh_registered():
         roots = safety.guarded_roots()
-        registered.setText("현재 등록: %s" % (roots or "(없음)"))
-        registered.setStyleSheet("color: %s;" % ("#e53935" if roots else "gray"))
+        limit = safety.min_depth()
+        listing = safety.listing_allowed()
+        registered.setText(
+            "현재 등록: %s · 최소 깊이: %s · 나열: %s"
+            % (roots or "(없음)", limit or "(제한 없음)", "켬" if listing else "끔")
+        )
+        registered.setStyleSheet(
+            "color: %s;" % ("#e53935" if (roots or limit or not listing) else "gray")
+        )
 
     def refresh_net():
         current = safety.settings()
@@ -810,26 +856,40 @@ def build_safety_section(track, append):
         refresh_registered()
         show(fake_root, "차단 경로")
 
+    def on_depth(checked):
+        safety.configure(min_depth=shallow_limit if checked else 0)
+        append("[안전] 자동완성 최소 깊이: %s" % (safety.min_depth() or "제한 없음"))
+        refresh_registered()
+        show(fake_root, "최소 깊이")
+
+    def on_listing(checked):
+        safety.configure(allow_listing=not checked)
+        append("[안전] 자동완성 나열: %s" % ("끔" if checked else "켬"))
+        refresh_registered()
+        # 깊이가 충분한 하위 경로도 함께 막히는 것이 이 스위치의 요점이다
+        show(os.path.join(fake_root, "jekai"), "나열 끄기 (하위 경로)")
+
     def show(path, title):
         read, rows = listed_children(path)
         actual = len(os.listdir(path))
+        blocked = safety.is_guarded(path) or safety.is_too_shallow(path)
         result.setText(
             "%s  %s\n"
-            "   is_guarded=%s · is_reachable=%s\n"
+            "   is_guarded=%s · is_too_shallow=%s (깊이 %d) · is_reachable=%s\n"
             "   폴더를 실제로 읽었나: %s (읽은 하위 %d개 / 실제 %d개)"
             % (
                 title,
                 path,
                 safety.is_guarded(path),
+                safety.is_too_shallow(path),
+                safety.path_depth(path),
                 safety.is_reachable(path),
                 "예" if read else "아니오 — 건드리지 않음",
                 rows,
                 actual,
             )
         )
-        result.setStyleSheet(
-            "color: %s;" % ("#e53935" if safety.is_guarded(path) else "#2e7d32")
-        )
+        result.setStyleSheet("color: %s;" % ("#e53935" if blocked else "#2e7d32"))
         append(
             "[안전] %s -> 읽음=%s (하위 %d/%d)" % (title, read, rows, actual)
         )
@@ -848,6 +908,8 @@ def build_safety_section(track, append):
         refresh_net()
 
     guard_check.toggled.connect(on_guard)
+    depth_check.toggled.connect(on_depth)
+    listing_check.toggled.connect(on_listing)
     check_root_btn.clicked.connect(lambda: show(fake_root, "차단 경로"))
     check_child_btn.clicked.connect(
         lambda: show(os.path.join(fake_root, "jekai"), "하위 경로")
@@ -903,9 +965,65 @@ def build_history_section(track, append):
             % (saved_items or "(없음)", memory_items or "(없음)")
         )
 
+    # ------------------------------------------------ 용도별 시작 위치
+    purpose_box = QGroupBox("용도마다 다른 시작 위치")
+    purpose_layout = QVBoxLayout(purpose_box)
+    purpose_layout.addWidget(
+        _hint(
+            "키 하나가 용도 하나입니다. 서로 다른 settings_key 를 주면 각자 "
+            "마지막에 쓰던 폴더에서 열립니다. 아래 셋을 각각 다른 폴더에서 "
+            "고른 다음 다시 열어 보세요 — 서로 섞이지 않습니다.\n"
+            "위젯 없이 exec_file_dialog(remember=\"입력csv\") 로 띄우는 "
+            "일회성 다이얼로그도 같은 저장소를 씁니다."
+        )
+    )
+
+    purposes = [
+        ("입력csv", "입력 CSV:", "open_file", [("CSV", ["csv"])]),
+        ("결과저장", "결과 저장:", "save_file", [("JSON", ["json"])]),
+        ("이미지", "이미지:", "open_file", [("이미지", ["png", "jpg"])]),
+    ]
+    purpose_edits = {}
+    for key, label, mode, filters in purposes:
+        edit = track(
+            FilePathEdit(
+                mode=mode,
+                label=label,
+                filters=filters,
+                settings_key="demo_%s" % key,
+            )
+        )
+        purpose_edits[key] = edit
+        purpose_layout.addWidget(edit)
+
+    starts = QLabel()
+    starts.setWordWrap(True)
+    starts.setObjectName("demo_purpose_starts")
+    starts.setStyleSheet("color: #1565c0;")
+    purpose_layout.addWidget(starts)
+    layout.addWidget(purpose_box)
+
+    def refresh_starts():
+        starts.setText(
+            "지금 열면 시작할 폴더 —\n"
+            + "\n".join(
+                "   %-8s %s" % (key, last_dir("demo_%s" % key) or "(기억 없음)")
+                for key in purpose_edits
+            )
+        )
+
+    for key, edit in purpose_edits.items():
+        edit.browsed.connect(
+            lambda _paths, k=key: (
+                append("[용도별] %s <- %s" % (k, last_dir("demo_%s" % k))),
+                refresh_starts(),
+            )
+        )
+
     saved.browsed.connect(lambda paths: (append("[히스토리] 저장됨 <- %s" % paths[0]), refresh_items()))
     memory.browsed.connect(lambda paths: (append("[히스토리] 메모리 <- %s" % paths[0]), refresh_items()))
     refresh_items()
+    refresh_starts()
 
     return section
 
@@ -989,11 +1107,11 @@ def build_form_section(append):
 def main():
     app = QApplication(sys.argv)
     app.setOrganizationName("jekai")
-    app.setApplicationName("filedialog-widget-demo")
+    app.setApplicationName("custom-file-dialog-demo")
 
     # 최근 경로/마지막 폴더를 QSettings 에 저장할 때 쓸 기본 정보.
     # (settings_key 를 준 위젯들이 이 정보를 공유한다)
-    configure_settings("jekai", "filedialog-widget-demo")
+    configure_settings("jekai", "custom-file-dialog-demo")
 
     window = QMainWindow()
     window.setWindowTitle("FilePathEdit 데모")

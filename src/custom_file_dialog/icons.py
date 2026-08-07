@@ -1,7 +1,8 @@
 """사이드바 항목에 씌울 아이콘을 그린다 (외부 이미지 파일 없이).
 
-즐겨찾기 분류는 **별표**, 최근 파일은 **시계**. 둘 다 같은 방식으로 여러 크기를
-한 :class:`QIcon` 에 담아 두어 사이드바(16px)든 목록(24px)이든 또렷하게 보인다.
+즐겨찾기 분류는 **별표**, 최근 파일은 **시계**, 홈은 **집**. 모두 같은 방식으로
+여러 크기를 한 :class:`QIcon` 에 담아 두어 사이드바(16px)든 목록(24px)이든
+또렷하게 보인다.
 ``QPixmap`` 을 쓰므로 ``QApplication`` 이 만들어진 뒤에 호출해야 한다.
 """
 
@@ -20,6 +21,15 @@ INSET = 1.0
 
 STAR_COLOR = "#f9a825"      # 즐겨찾기 (골드)
 CLOCK_COLOR = "#1e88e5"     # 최근 파일 (파랑)
+HOME_COLOR = "#43a047"      # 홈 (초록)
+
+# 집 모양의 꼭짓점 — 한 변이 1 인 정사각형 기준(왼쪽 위가 0, 0).
+# 지붕 꼭대기에서 시계 방향으로 돌고, 아래쪽 가운데는 문으로 파여 있다.
+_HOUSE = (
+    (0.50, 0.02), (1.00, 0.46), (0.86, 0.46), (0.86, 0.98),
+    (0.61, 0.98), (0.61, 0.60), (0.39, 0.60), (0.39, 0.98),
+    (0.14, 0.98), (0.14, 0.46), (0.00, 0.46),
+)
 
 
 def _draw(sizes, paint):
@@ -82,6 +92,24 @@ def clock_icon(color=CLOCK_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.drawEllipse(QPointF(center, center), inner, inner)
         painter.drawLine(QPointF(center, center), _point(center, inner * 0.50, 330))
         painter.drawLine(QPointF(center, center), _point(center, inner * 0.72, 120))
+
+    return _draw(sizes, paint)
+
+
+def home_icon(color=HOME_COLOR, sizes=ICON_SIZES, inset=INSET):
+    """홈 위치에 쓸 집 아이콘."""
+    brush = QColor(color)
+
+    def paint(painter, size):
+        # 별표·시계의 지름과 같은 폭에 맞춰 나란히 놓아도 크기가 고르게 보인다
+        span = max(1.0, _radius(size, inset) * 2.0)
+        origin = (size - span) / 2.0
+        polygon = QPolygonF()
+        for x, y in _HOUSE:
+            polygon.append(QPointF(origin + x * span, origin + y * span))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(brush)
+        painter.drawPolygon(polygon)
 
     return _draw(sizes, paint)
 

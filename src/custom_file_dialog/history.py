@@ -2,7 +2,18 @@
 
 ``settings_key`` 를 주면 :class:`~qtpy.QtCore.QSettings` 에 저장되어 프로그램을
 다시 켜도 유지되고, 주지 않으면 위젯이 살아 있는 동안만 메모리에 남는다.
+
+**키 하나가 용도 하나**다. 입력 CSV 를 고르는 자리와 결과를 저장하는 자리에 서로
+다른 키를 주면 각자 마지막에 쓰던 폴더에서 열린다::
+
+    FilePathEdit(mode="open_file", settings_key="입력csv")
+    exec_file_dialog(mode="save_file", remember="결과저장")
+
+위젯이든 다이얼로그든 **같은 키면 같은 기억을 공유**한다. 화면에 남아 있지 않는
+일회성 다이얼로그도 :func:`last_dir` · :func:`remember_dir` 로 같은 저장소를 쓴다.
 """
+
+import os
 
 from qtpy.QtCore import QSettings
 
@@ -63,20 +74,20 @@ class PathHistory:
         store = self._store()
         if store is None:
             return
-        items = store.value("file_dialog_widget/%s/recent" % self.key, [])
+        items = store.value("custom_file_dialog/%s/recent" % self.key, [])
         # QSettings 는 항목이 1개면 문자열로 돌려주는 바인딩이 있어 보정한다.
         if isinstance(items, str):
             items = [items]
         self._items = [str(i) for i in (items or []) if i][: self.max_items]
-        last = store.value("file_dialog_widget/%s/last_dir" % self.key, None)
+        last = store.value("custom_file_dialog/%s/last_dir" % self.key, None)
         self._last_dir = str(last) if last else None
 
     def _save(self):
         store = self._store()
         if store is None:
             return
-        store.setValue("file_dialog_widget/%s/recent" % self.key, list(self._items))
-        store.setValue("file_dialog_widget/%s/last_dir" % self.key, self._last_dir or "")
+        store.setValue("custom_file_dialog/%s/recent" % self.key, list(self._items))
+        store.setValue("custom_file_dialog/%s/last_dir" % self.key, self._last_dir or "")
 
     # --------------------------------------------------------------- API
     def items(self):
@@ -106,3 +117,38 @@ class PathHistory:
         if directory:
             self._last_dir = str(directory)
             self._save()
+
+
+# ------------------------------------------------- 용도별 시작 위치 (키 하나 = 용도 하나)
+def last_dir(key, settings=None):
+    """그 용도로 **마지막에 쓰던 폴더** (기억이 없으면 None).
+
+    ``FilePathEdit(settings_key=key)`` 가 쓰는 저장소와 같은 곳을 본다. 그래서
+    위젯에서 고른 결과를 일회성 다이얼로그가 이어받고, 그 반대도 된다.
+
+    Args:
+        key: 용도 이름. ``"입력csv"``, ``"결과저장"`` 처럼 자리마다 다르게 준다.
+        settings: 직접 만든 QSettings (테스트/커스텀 저장 위치용).
+    """
+    if not key:
+        return None
+    return PathHistory(key=key, settings=settings).last_dir()
+
+
+def remember_dir(key, path, settings=None):
+    """그 용도의 마지막 폴더를 기록한다.
+
+    ``path`` 가 파일이면 **그 파일이 있는 폴더**를 기억한다. 최근 경로 목록은
+    건드리지 않는다(다이얼로그는 목록을 쓰지 않으므로).
+
+    Returns:
+        실제로 기억한 폴더 (기억할 것이 없으면 None).
+    """
+    if not key or not path:
+        return None
+    path = str(path)
+    directory = path if os.path.isdir(path) else os.path.dirname(path)
+    if not directory:
+        return None
+    PathHistory(key=key, settings=settings).set_last_dir(directory)
+    return directory

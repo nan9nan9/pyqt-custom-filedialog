@@ -1,4 +1,4 @@
-# filedialog-widget
+# custom-file-dialog
 
 `QFileDialog` 를 감싼 **경로 선택 위젯**입니다. 입력창 + 찾아보기 버튼 한 줄로
 파일/폴더를 고르게 해 주며, `qtpy` 를 사용하여 **PyQt5 / PyQt6 / PySide2 / PySide6**
@@ -27,21 +27,31 @@
 - **최근 경로 히스토리** — `history=10` 을 주면 `▾` 드롭다운이 생기고,
   `settings_key` 까지 주면 `QSettings` 에 저장되어 프로그램을 다시 켜도 유지됩니다.
 - **똑똑한 시작 위치** — 다이얼로그는 *현재 값 → `start_dir` → 직전에 쓴 폴더 →
-  현재 작업 디렉터리* 순으로 위치를 정합니다.
+  현재 작업 디렉터리* 순으로 위치를 정합니다. **용도마다 따로 기억**할 수 있어
+  (`settings_key` / `remember`), 입력 CSV 자리와 결과 저장 자리가 각자 마지막에
+  쓰던 폴더에서 열립니다.
 - **저장 확장자 자동 부착** — 저장 모드에서 확장자를 빼고 입력하면
   `default_suffix` 또는 선택된 필터의 확장자를 붙여 줍니다.
 - **사이드바 커스터마이즈** — 다이얼로그 왼쪽 목록을 **홈 · 현재 위치 · 최근 파일 ·
   북마크**로 구성하거나, 원하는 폴더 목록으로 통째로 교체할 수 있습니다.
+  홈은 **집 아이콘(🏠)** 으로, 다이얼로그가 열리는 자리는 폴더 이름 대신
+  **"현재 위치"** 로 표시되어 한눈에 구분됩니다.
 - **우클릭 메뉴** — 파일 목록에서 우클릭해 **즐겨찾기에 추가**,
   사이드바에서 우클릭해 분류 삭제 / 최근 목록 비우기 / 항목 제거.
+  분류 안에서는 "삭제" 대신 **`'설계'에서 제거`** 처럼 무엇에서 빠지는지가
+  이름에 적혀 나옵니다(원본 파일은 그대로).
 - **최근 파일** — 최근에 고른 파일을 사이드바 항목 하나로 자동으로 모읍니다 (옵션).
 - **즐겨찾기** — 흩어져 있는 **파일·폴더**를 분류별로 모아 사이드바에 **별표(★)** 로
   띄우고, 클릭 한 번으로 그 목록에서 바로 고릅니다 (`FavoritesStore`).
+  고른 항목의 **원본 경로**가 "Look in" 에 뜨고, **상위 폴더(↑)** 도 그 원본
+  기준으로 올라가 링크 창고에 갇히지 않습니다.
 - **죽은 네트워크 경로 방어** — NFS 서버가 응답하지 않아도 GUI 가 멈추지 않도록
   마운트 판별 + 소켓 프로브 + 타임아웃을 조합합니다. **기본으로 켜져 있고**,
   로컬 경로에는 부담이 없습니다 (`path_timeout`).
 - **나열하면 안 되는 자리 차단** — `/user` 처럼 아래에 마운트가 잔뜩 달린 경로를
   등록해 두면 그 자리는 열지 않고 하위 경로만 쓰게 합니다 (`guarded_roots`).
+  경로를 미리 다 알기 어렵다면 `min_depth=2` 로 **얕은 자리는 자동완성이 아예
+  나열하지 않게** 할 수 있습니다.
 - **폼 헬퍼** — `FilePathForm` 으로 여러 줄을 라벨 정렬해 묶고 `values()` 로 한 번에 꺼냅니다.
 - **패키지 / 소스 모두 사용 가능** — `pip install` 하거나 `src/` 를 그대로 import
 
@@ -62,7 +72,7 @@ pip install ".[pyqt5]"     # 또는 pyqt6 / pyside2 / pyside6
 
 ```python
 from qtpy.QtWidgets import QApplication, QVBoxLayout, QWidget
-from file_dialog_widget import FilePathEdit
+from custom_file_dialog import FilePathEdit
 
 app = QApplication([])
 window = QWidget()
@@ -113,7 +123,7 @@ python examples/demo.py
 | `"directory"` | `getExistingDirectory` | 폴더 1개 | O |
 
 ```python
-from file_dialog_widget import SelectMode
+from custom_file_dialog import SelectMode
 
 FilePathEdit(mode=SelectMode.DIRECTORY)   # 문자열 "directory" 와 동일
 ```
@@ -160,9 +170,11 @@ filters="이미지 (*.png);;모든 파일 (*)"      # 이미 Qt 필터 문자열
 | `.set_sidebar_urls([...])` / `.sidebar_urls()` | 다이얼로그 왼쪽 사이드바 항목 |
 | `.set_fixed_sidebar_urls([...])` / `.fixed_sidebar_urls()` | 사이드바에서 제거 못 하게 할 위치 |
 | `.effective_sidebar_urls()` | 즐겨찾기·최근 파일까지 합친 최종 사이드바 목록 |
+| `.effective_sidebar_marks()` | 그중 표시가 바뀌는 항목 (홈=집 아이콘, 현재 위치=이름) |
 | `.set_favorites(store)` / `.favorites()` | 즐겨찾기 저장소 지정 |
 | `.set_recent_files(s)` / `.recent_files()` / `.recent_items()` | 최근 파일 저장소 / 목록 |
 | `.set_favorites_icon(icon)` | 즐겨찾기 분류 아이콘 (`True`=별표 / `QIcon` / `False`) |
+| `.set_completer(bool)` / `.completer_enabled()` | 경로 자동완성 켜고 끄기 (큰 폴더에서 유용) |
 | `.set_read_only(b)` · `.set_drag_drop_enabled(b)` | 직접 편집 / 드롭 허용 |
 | `.set_label(t)` · `.set_tooltip(t)` | 라벨 텍스트 / 입력창 기본 툴팁 |
 | `.line_edit` · `.browse_button` · `.label_widget` | 내부 위젯 (스타일 커스터마이즈용) |
@@ -209,7 +221,7 @@ filters="이미지 (*.png);;모든 파일 (*)"      # 이미 Qt 필터 문자열
 ## 여러 줄을 폼으로 묶기 — `FilePathForm`
 
 ```python
-from file_dialog_widget import FilePathForm
+from custom_file_dialog import FilePathForm
 
 form = FilePathForm()
 form.add_path("input",  "입력 파일:", mode="open_file",
@@ -251,7 +263,7 @@ if not form.is_valid():
 - **Computer 는 넣지 않습니다.** 경로가 없어 실제로 열어 볼 일이 거의 없는
   Qt 기본 항목입니다.
 - **현재 위치**는 다이얼로그가 열리는 폴더입니다. 홈에서 열면 홈과 겹치므로
-  하나만 남습니다.
+  하나만 남습니다(이때는 홈으로 표시됩니다).
 - `sidebar_urls` 로 기준 목록을 직접 주면 **그 목록을 그대로 존중**합니다
   (홈·현재 위치를 끼워 넣지 않습니다). 최근 파일·북마크는 그 뒤에 붙습니다.
 
@@ -262,6 +274,29 @@ edit = FilePathEdit(mode="open_file", favorites=store, recent_files=True)
 edit.effective_sidebar_urls()
 # [홈, 현재 위치, 최근 파일, 북마크/분류A, 북마크/분류B]
 ```
+
+### 홈과 현재 위치 표시
+
+두 자리는 폴더 이름만으로는 알아보기 어려워서 표시를 손봅니다.
+
+```
+🏠 jekai        ← 홈: 폴더 아이콘 대신 집 아이콘 (이름은 그대로)
+📁 현재 위치     ← 다이얼로그가 열린 폴더: 폴더 이름("workspace") 대신 이 이름
+🕘 최근 파일
+★ 설계
+```
+
+**표시만** 바꾸는 것이라 클릭했을 때 열리는 경로는 그대로입니다. 마우스를 올리면
+나오는 툴팁에는 늘 전체 경로가 나옵니다. 두 가지 예외가 있습니다.
+
+- 홈에서 다이얼로그를 열면 두 항목이 하나로 합쳐지므로 **홈 쪽만** 남습니다
+  ("현재 위치"라고 부르지 않습니다).
+- `sidebar_urls` 로 기준 목록을 직접 주면 "현재 위치" 항목을 붙이지 않으므로
+  이름도 바꾸지 않습니다. 홈 아이콘은 그대로 씌웁니다.
+
+`icon=False`(위젯에서는 `favorites_icon=False`)를 주면 집 아이콘도 끄고 Qt 기본
+폴더 아이콘을 씁니다. 이름 바꾸기는 아이콘 설정과 무관하게 동작합니다.
+이름 문자열은 `CURRENT_LABEL` 로 노출되어 있습니다.
 
 ### 기준 목록 직접 지정
 
@@ -282,7 +317,7 @@ edit.set_sidebar_urls(None)      # 커스터마이즈 끄기
 기존 항목을 남기고 뒤에 덧붙이려면:
 
 ```python
-from file_dialog_widget import current_sidebar_urls
+from custom_file_dialog import current_sidebar_urls
 
 edit.set_sidebar_urls(current_sidebar_urls() + ["/mnt/data"])
 ```
@@ -313,9 +348,19 @@ edit.set_sidebar_urls(current_sidebar_urls() + ["/mnt/data"])
 > `QSettings.setPath()` 로 저장 위치를 임시 폴더로 돌리세요
 > (`tests/test_basic.py` 상단 참고).
 
-사이드바 항목의 **표시 이름은 폴더 이름 그대로**입니다 (`/mnt/data` → `data`).
-Qt가 임의 라벨 지정을 지원하지 않으므로, 이름을 바꾸려면 그 이름의 심볼릭 링크를
-만들어 그 경로를 넣는 방법을 씁니다.
+직접 준 항목의 **표시 이름은 폴더 이름 그대로**입니다 (`/mnt/data` → `data`).
+Qt 모델에는 이름을 넣어 둘 자리가 없어서 — `QUrlModel` 이 파일시스템 변화를
+통지받을 때마다 이름과 아이콘을 경로에서 다시 읽어 덮어씁니다 — "현재 위치"처럼
+이름을 바꾸려면 **그리는 단계**에서 갈아 끼워야 합니다. `mark_sidebar()` 가
+`{경로: (이름, 아이콘)}` 표를 받아 그 일을 하는 델리게이트를 걸어 줍니다.
+
+```python
+from custom_file_dialog import mark_sidebar
+```
+
+기본으로는 홈과 현재 위치에만 씌웁니다(`Places.sidebar_marks()` 참고).
+델리게이트를 쓰고 싶지 않다면 원하는 이름의 심볼릭 링크를 만들어 그 경로를
+넣는 방법도 그대로 쓸 수 있습니다.
 
 ## 즐겨찾기 — 파일·폴더를 분류별로 모아 두기
 
@@ -325,7 +370,7 @@ Qt가 임의 라벨 지정을 지원하지 않으므로, 이름을 바꾸려면 
 등록해 둔 파일·폴더가 함께 나옵니다.
 
 ```python
-from file_dialog_widget import FavoritesStore, FilePathEdit
+from custom_file_dialog import FavoritesStore, FilePathEdit
 
 store = FavoritesStore()                        # 앱 데이터 폴더 아래에 생성
 store.add("설계", "/proj/a/설계도.csv")           # 파일
@@ -387,7 +432,7 @@ edit.path()            # -> /proj/a/설계도.csv  (링크가 아니라 원본 �
 분류 폴더가 만들어질 위치는 세 단계로 정해집니다.
 
 ```python
-from file_dialog_widget import FavoritesStore, configure_favorites, default_base_dir
+from custom_file_dialog import FavoritesStore, configure_favorites, default_base_dir
 
 # 1) 저장소 하나만 다른 곳에 두기 — 생성자 인자가 가장 우선
 store = FavoritesStore(base_dir="/srv/공용/즐겨찾기")
@@ -437,7 +482,7 @@ edit.set_favorites_icon(True)
 색이나 크기를 바꾸려면 `star_icon()` 을 직접 부르면 됩니다:
 
 ```python
-from file_dialog_widget import star_icon
+from custom_file_dialog import star_icon
 edit.set_favorites_icon(star_icon(color="#1565c0", sizes=(16, 24, 32)))
 
 # 별 크기 조절: inset 은 반지름에서 빼는 픽셀 수라 지름은 그 두 배만큼 작아진다
@@ -448,6 +493,19 @@ edit.set_favorites_icon(star_icon(inset=2))    # 기본보다 2px 더 작게
 내부적으로는 `CategoryIconProvider` 가 `QFileDialog.setIconProvider()` 로 걸려,
 **분류 폴더에만** 별표를 씌우고 나머지 경로는 Qt 기본 아이콘을 그대로 씁니다.
 이 역시 네이티브 다이얼로그에서는 불가능하므로 Qt 자체 다이얼로그로 열립니다.
+
+같은 방식으로 그린 아이콘이 두 개 더 있습니다 — 최근 파일의 `clock_icon()` 과
+홈의 `home_icon()`. 셋 다 `color` · `sizes` · `inset` 을 같은 뜻으로 받습니다.
+
+```python
+from custom_file_dialog import clock_icon, home_icon, star_icon
+
+home_icon(color="#1565c0")          # 홈 아이콘 색만 바꾸기
+```
+
+홈 아이콘은 분류 아이콘과 달리 아이콘 제공자가 아니라 사이드바 델리게이트
+(`mark_sidebar()`)로 씌웁니다. 사이드바에서만 집 모양이 되고, 오른쪽 파일 목록에
+나오는 홈 폴더는 Qt 기본 폴더 아이콘 그대로입니다.
 
 ### 고른 항목의 실제 위치 보여 주기
 
@@ -467,13 +525,36 @@ edit.set_favorites_icon(star_icon(inset=2))    # 기본보다 2px 더 작게
 링크로 등록한 **폴더에 실제로 들어가면**(더블클릭) 원본 폴더로 옮겨 가므로,
 그 뒤로는 평범한 실제 경로로 탐색이 이어집니다.
 
+### "상위 폴더"는 원본 기준으로 올라갑니다
+
+항목을 고른 다음 툴바의 **상위 폴더(↑, `Alt+Up`)** 를 누르면, "Look in" 이 가리키던
+**원본 경로 기준**으로 올라갑니다.
+
+```
+<favorites>/설계/설계도.csv        (원본 /proj/a/설계도.csv)
+  ↑ 누르면  →  /proj/a             ← 원본이 있는 폴더
+  (기본 Qt 동작이었다면  <favorites> — 분류 폴더만 늘어선 링크 창고)
+```
+
+Qt 는 "지금 보고 있는 폴더의 부모"로 올라가므로, 그대로 두면 링크를 모아 둔 저장소
+안쪽으로 들어가 버립니다. 거기는 열어 봐야 쓸 것이 없어 사실상 막다른 길입니다.
+폴더 링크도 같은 규칙으로 **원본이 있는 폴더**로 갑니다.
+
+- 아무것도 고르지 않았거나 링크가 아닌 항목을 골랐다면 Qt 기본 동작 그대로입니다.
+- 분류 폴더 **밖**에서는 손대지 않습니다.
+- 원본이 죽은 마운트에 있으면 옮기지 않고 제자리에 둡니다(GUI 를 멈추지 않으려고).
+
+Qt 가 C++ 에서 연결해 둔 `_q_navigateToParent` 는 파이썬에서 끊을 수 없어, 버튼이
+눌린 순간 목적지를 정해 두었다가 **Qt 가 옮긴 직후에 바로잡는** 방식입니다.
+잘못 들르는 저장소는 늘 로컬이라 오가는 비용이 없습니다.
+
 직접 걸려면:
 
 ```python
-from file_dialog_widget import Places, install_hooks
+from custom_file_dialog import Places, install_hooks
 
 places = Places(favorites=favorites, recent=recent)
-install_hooks(dialog, places)   # 링크 추적 + 우클릭 메뉴 + 차단 경로 방어
+install_hooks(dialog, places)   # 사이드바 표시 + 링크 추적 + 우클릭 메뉴 + 차단 경로 방어
 ```
 
 `FilePathEdit` 은 이것을 자동으로 겁니다.
@@ -497,6 +578,36 @@ install_hooks(dialog, places)   # 링크 추적 + 우클릭 메뉴 + 차단 경�
 
 새 분류를 만들면 사이드바에도 바로 나타납니다. 분류 폴더 **안의 링크**에는 이
 메뉴가 뜨지 않습니다(이미 등록된 것이므로).
+
+**분류 폴더 안에서는 "삭제" 대신 "…에서 제거"** 가 나옵니다.
+
+```
+<즐겨찾기>/설계 폴더에서 설계도.csv 우클릭
+ ├─ '설계'에서 제거          ← Qt 기본 "Delete" 를 대신합니다
+ ├─ ─────
+ ├─ Rename                  ← 목록에 보일 이름만 바꿉니다
+ └─ Show hidden files / New Folder
+
+<최근 파일> 폴더에서 우클릭
+ └─ '최근 파일'에서 제거
+```
+
+거기 보이는 것은 원본을 가리키는 심볼릭 링크라, Qt 의 "Delete" 도 실제로는 링크만
+지웁니다. 하지만 이름만 보면 **원본 파일이 지워진다고 읽히기 쉬워서**, 무엇에서
+빠지는지를 메뉴 이름에 적고 "Delete" 는 뺐습니다(둘을 함께 두면 어느 쪽이 원본을
+지우는지 더 헷갈립니다).
+
+- **원본 파일은 건드리지 않습니다.** 목록에서만 빠집니다.
+- 다시 등록하면 그만이라 **확인 대화상자를 띄우지 않습니다.** 분류를 통째로
+  지우는 사이드바 메뉴는 예전처럼 확인합니다.
+- 같은 파일을 다른 이름으로 두 번 등록해 두었어도 **우클릭한 그 항목만** 빠집니다.
+- 분류 폴더 **바로 아래** 항목에만 붙습니다. 폴더 링크를 따라 들어간 안쪽은 이미
+  원본이라 Qt 기본 메뉴 그대로입니다(거기서의 "Delete" 는 진짜 삭제입니다).
+- 즐겨찾기 없이 **최근 파일만** 써도 이 메뉴는 나옵니다.
+
+```python
+menus.entryRemoved.connect(on_entry_removed)   # (분류, 뺀 항목의 원본 경로)
+```
 
 **사이드바**에서 우클릭하면 항목 종류에 맞는 메뉴가 나옵니다. Qt 기본 메뉴("Remove")를
 대신하되, 일반 항목에는 같은 제거 기능을 그대로 제공합니다.
@@ -527,16 +638,18 @@ edit.set_fixed_sidebar_urls(["~"])                                   # 실행 �
 어느 쪽이든 **원본 파일·폴더는 건드리지 않습니다**. 직접 제어하려면:
 
 ```python
-from file_dialog_widget import FavoritesMenus, Places
+from custom_file_dialog import FavoritesMenus, Places
 
 places = Places(favorites=favorites, recent=recent, fixed_urls=None)  # None = 홈만 보호
 menus = FavoritesMenus(dialog, places, confirm=True, add_menu=True)
 menus.install()                       # 네이티브 다이얼로그면 False 를 반환
 menus.favoriteAdded.connect(on_added)         # (분류, 경로)
+menus.entryRemoved.connect(on_entry_removed)  # (분류, 뺀 항목의 원본 경로)
 menus.categoryRemoved.connect(on_removed)
 menus.recentCleared.connect(on_cleared)
 menus.sidebarEntryRemoved.connect(on_unpinned)   # 일반 항목을 사이드바에서 뺐을 때
 menus.add_to_favorites("/proj/a/x.csv", "설계")   # 코드에서 직접 등록
+menus.remove_entry(store, "설계", link_path)      # 코드에서 직접 제거
 ```
 
 `add_menu=False` 를 주면 파일 목록 메뉴는 건드리지 않고 사이드바 메뉴만 겁니다.
@@ -562,7 +675,7 @@ menus.add_to_favorites("/proj/a/x.csv", "설계")   # 코드에서 직접 등록
 `최근 파일` 항목을 사이드바에 하나 더 띄웁니다. 기본은 **꺼져 있고** 옵션으로 켭니다.
 
 ```python
-from file_dialog_widget import FilePathEdit, RecentStore
+from custom_file_dialog import FilePathEdit, RecentStore
 
 # 1) 가장 간단하게 — 기본 위치에 저장소를 자동으로 만든다
 edit = FilePathEdit(mode="open_file", recent_files=True, recent_max=20)
@@ -618,7 +731,7 @@ edit.set_recent_files(False) # 실행 중 끄기
 ## 최근 경로 기억하기
 
 ```python
-from file_dialog_widget import FilePathEdit, configure_settings
+from custom_file_dialog import FilePathEdit, configure_settings
 
 # 앱 시작 시 한 번 — settings_key 를 쓰는 위젯들이 공유할 저장 위치
 configure_settings("회사이름", "앱이름")
@@ -635,6 +748,54 @@ edit = FilePathEdit(
   다음에 다이얼로그를 열 때 그 폴더에서 시작합니다.
 - `QApplication` 에 `setOrganizationName()` / `setApplicationName()` 을 설정했다면
   `configure_settings()` 없이도 그 값이 쓰입니다.
+
+### 용도마다 다른 시작 위치
+
+**키 하나가 용도 하나**입니다. 입력 CSV 를 고르는 자리와 결과를 저장하는 자리에
+서로 다른 키를 주면, 각자 마지막에 쓰던 폴더에서 열립니다.
+
+```python
+FilePathEdit(mode="open_file", settings_key="입력csv",  filters=[("CSV", ["csv"])])
+FilePathEdit(mode="save_file", settings_key="결과저장", filters=[("JSON", ["json"])])
+FilePathEdit(mode="open_file", settings_key="이미지",   filters=[("이미지", ["png"])])
+```
+
+```
+입력csv  →  마지막에 CSV 를 꺼낸 폴더에서 열림
+결과저장 →  마지막에 결과를 저장한 폴더에서 열림
+이미지   →  마지막에 이미지를 고른 폴더에서 열림
+```
+
+화면에 위젯을 두지 않고 **`exec_file_dialog()` 를 직접 부르는 경우**(메뉴 항목처럼
+그때그때 띄우는 일회성 다이얼로그)에는 `remember` 에 같은 이름을 줍니다.
+
+```python
+from custom_file_dialog import exec_file_dialog
+
+paths, _ = exec_file_dialog(mode="open_file", remember="입력csv")
+# 열 때: "입력csv" 로 마지막에 쓰던 폴더에서 시작
+# 닫을 때: 고른 파일이 있는 폴더를 그 이름으로 다시 기억
+```
+
+`settings_key` 와 `remember` 는 **같은 저장소**를 씁니다. 이름이 같으면 위젯과
+일회성 다이얼로그가 기억을 주고받습니다.
+
+직접 읽고 쓰려면:
+
+```python
+from custom_file_dialog import last_dir, remember_dir
+
+last_dir("입력csv")                      # -> "/data/csv" (기억이 없으면 None)
+remember_dir("입력csv", "/data/csv/a.csv")   # 파일을 주면 그 파일이 있는 폴더를 기억
+```
+
+| | 동작 |
+| --- | --- |
+| 기억이 없을 때 | *현재 값 → `start_dir` → 현재 작업 디렉터리* 순으로 평소대로 결정 |
+| 기억해 둔 폴더가 사라졌을 때 | 안전한 곳으로 대체 (그 폴더에서 열지 않음) |
+| 기억해 둔 폴더가 죽은 마운트일 때 | `path_timeout` 으로 걸러 내고 대체 |
+| `directory` 를 함께 줬을 때 | `directory` 가 우선. 기억은 그래도 갱신됨 |
+| `remember` 를 안 줬을 때 | 아무것도 기억하지 않음 (기존 동작 그대로) |
 
 ## 죽은 네트워크 경로에서 멈추지 않기 (NFS 등)
 
@@ -692,16 +853,94 @@ safety.configure(guarded_roots=["/user", "/mnt/nfs", "/net"])
 자동으로 호출합니다. 직접 만든 `QFileDialog` 에도 걸 수 있습니다:
 
 ```python
-from file_dialog_widget import guard_dialog
+from custom_file_dialog import guard_dialog
 guard_dialog(dialog)          # 차단 경로가 없으면 아무 일도 하지 않음
 ```
 
 실측: 하위 3개가 있는 차단 경로의 자동완성 목록 개수 0, 하위 경로는 정상 개수.
 
+### 자동완성 최소 깊이 — `min_depth`
+
+`guarded_roots` 는 위험한 자리를 **이름으로 지목**합니다. 그런데 `/user` 아래에
+무엇이 달려 있는지 미리 다 알기 어렵거나, 지목을 빠뜨리면 그대로 멈춥니다.
+`min_depth` 는 그 그물입니다 — **얕은 자리는 아예 나열하지 않습니다.**
+
+```python
+safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
+```
+
+깊이는 루트에서부터 셉니다 (`/` = 0, `/user` = 1, `/user/jekai` = 2).
+
+```
+/ho          →  완성 안 됨   (/ 를 나열해야 하므로. 0단계)
+/user/j      →  완성 안 됨   (/user 를 나열해야 하므로. 1단계)  ← 멈추던 지점
+/user/jekai/ →  평소대로 완성 (/user/jekai 는 2단계)
+```
+
+**나열만 막습니다.** 경로를 끝까지 직접 치거나 붙여 넣어 쓰는 것은 그대로 되고,
+유효성 검사·다이얼로그 동작도 달라지지 않습니다. 대신 `/ho` → `/home` 처럼
+**얕은 자리의 완성도 함께 없어지는 것**이 대가입니다.
+
+### 자동완성 아예 끄기 — `allow_listing` / `completer=False`
+
+깊이로는 가릴 수 없는 자리도 있습니다. **파일이 수만 개인 폴더**는 깊이가 깊어도
+완성 후보를 만들려고 그 폴더를 통째로 읽습니다. 그럴 땐 나열 자체를 끕니다.
+
+```python
+safety.configure(allow_listing=False)      # 앱 전체 — 어떤 폴더도 읽지 않음
+```
+
+```python
+edit = FilePathEdit(mode="open_file", completer=False)   # 이 위젯만
+edit.set_completer(False)                                # 실행 중에도 전환
+```
+
+| | `safety.configure(allow_listing=False)` | `FilePathEdit(completer=False)` |
+| --- | --- | --- |
+| 범위 | 앱 전체 | 그 위젯 하나 |
+| 다이얼로그 파일 이름 칸 | **함께 막힘** | 영향 없음 |
+| 실행 중 전환 | `configure()` 다시 호출 | `set_completer(bool)` |
+| 모델·감시 스레드 | 남아 있음 (읽지만 않음) | 버림 |
+
+둘 다 **나열만** 막습니다. 경로를 직접 치거나 붙여 넣는 것, 유효성 표시,
+다이얼로그 동작은 그대로입니다.
+
+> `canFetchMore()` 자체는 값싼 호출입니다(측정값 0.1ms). `fetchMore()` 도 워커
+> 스레드에 넘기기만 합니다(2.4ms). 실제로 멈추는 곳은 **그 워커 스레드가 항목마다
+> `stat()` 을 하는 지점**입니다 — automount 가 달려 있으면 항목 수만큼 마운트가
+> 붙고, 죽은 NFS 위라면 D 상태로 들어가 돌아오지 않습니다. 그래서 "읽기 시작조차
+> 하지 않게" 막는 것이 유일하게 확실한 방법입니다.
+>
+> 참고로 **로컬 디스크**라면 파일 개수 자체는 생각보다 견딥니다. 40,000개짜리
+> 폴더를 측정했을 때 전부 읽는 데 0.4초, GUI 가 한 번에 멈춘 최대 시간 96ms,
+> 완성 후보 계산 13ms 였습니다. 멈춤이 심하다면 개수보다 **마운트 쪽**을 먼저
+> 의심해 보세요.
+
+### 세 가지 중 무엇을 쓸까
+
+성격이 다르니 함께 쓰는 편이 좋습니다.
+
+| | `guarded_roots` | `min_depth` | `allow_listing=False` |
+| --- | --- | --- | --- |
+| 지정 방식 | 위험한 경로를 이름으로 나열 | 깊이 하나로 일괄 | 스위치 하나 |
+| 막는 것 | 나열 + **그 자리로 이동** | 자동완성 나열만 | 자동완성 나열만 |
+| 모르는 위험 경로 | 못 막음 | 얕으면 막힘 | **전부 막힘** |
+| 부작용 | 없음 (그 자리만) | 얕은 자리의 완성이 사라짐 | 자동완성이 통째로 사라짐 |
+
+```python
+safety.configure(
+    guarded_roots=["/user"],   # 아는 자리는 이동까지 확실히 막고
+    min_depth=2,               # 모르는 얕은 자리는 나열부터 안 하게
+)
+```
+
+자동완성이 있어야 쓸 만한 앱이라면 위 조합으로 시작하고, 그래도 멈춘다면
+`allow_listing=False` 로 내립니다.
+
 ### 쓰는 법
 
 ```python
-from file_dialog_widget import FilePathEdit, safety
+from custom_file_dialog import FilePathEdit, safety
 
 # uid/gid 조회가 막혀 멈추게 만드는 LDAP 처럼, 경로만 봐서는 모르는 의존 서비스를 등록
 safety.configure(
@@ -730,8 +969,12 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 
 | 함수 | 설명 |
 | --- | --- |
-| `safety.configure(timeout, ttl, probes, guarded_roots)` | 제한 시간 · 캐시 · 프로브 대상 · 차단 경로 |
+| `safety.configure(timeout, ttl, probes, guarded_roots, min_depth, allow_listing)` | 제한 시간 · 캐시 · 프로브 대상 · 차단 경로 · 자동완성 최소 깊이 · 나열 허용 |
 | `safety.is_guarded(path)` / `guarded_roots()` | 그 자리 자체를 막았는지 / 막은 목록 |
+| `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
+| `safety.may_list(path)` / `listing_allowed()` | 위 셋을 한 번에 판정 / 나열 스위치 상태 |
+| `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
+| `safety.reset()` | 모든 설정을 기본값으로 |
 | `safety.is_reachable(path, timeout)` | 만져도 멈추지 않을지 판정 |
 | `safety.safe_isdir/safe_isfile/safe_exists(path)` | 멈추지 않는 `os.path` 대체 |
 | `safety.is_remote(path)` / `mount_for(path)` | 원격 여부 / 마운트 정보 |
@@ -754,6 +997,12 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 안전합니다. 또 `/proc/self/mountinfo` 를 쓰므로 마운트 판별은 **리눅스 전용**입니다
 (다른 OS 에서는 원격 판별이 안 되어 3단계 타임아웃만 동작합니다).
 
+**자동완성 최소 깊이**(`min_depth`) 와 **나열 끄기**(`allow_listing`) 는 이름 그대로
+**자동완성만** 막습니다. 그 자리를 다이얼로그에서 눌러 들어가는 것은 그대로 되므로,
+그쪽까지 막으려면 `guarded_roots` 를 함께 써야 합니다. 깊이는 문자열만 보고 세므로
+심볼릭 링크가 가리키는 실제 위치가 아니라 **입력한 경로 기준**입니다
+(`/link/a` 는 2단계).
+
 ## 유효성 판정 규칙
 
 | 상황 | `open_file` / `open_files` | `save_file` | `directory` |
@@ -774,7 +1023,7 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 내부 헬퍼는 위젯과 독립적이라 그대로 가져다 쓸 수 있습니다.
 
 ```python
-from file_dialog_widget import build_filter, exec_file_dialog, validate_paths
+from custom_file_dialog import build_filter, exec_file_dialog, validate_paths
 
 name_filter = build_filter([("이미지", ["png", "jpg"])])   # "이미지 (*.png *.jpg);;모든 파일 (*)"
 
@@ -793,13 +1042,17 @@ ok, reason = validate_paths(paths, mode="open_files")
 우클릭 메뉴 · 차단 경로 방어까지 함께 겁니다.
 
 ```python
-from file_dialog_widget import Places, exec_file_dialog
+from custom_file_dialog import Places, exec_file_dialog
 
 paths, chosen = exec_file_dialog(
     mode="open_file",
     places=Places(favorites=store, recent=recent, sidebar_urls=["~", "/mnt/data"]),
+    remember="입력csv",     # 이 용도의 마지막 폴더에서 열고, 고른 뒤 다시 기억
 )
 ```
+
+`remember` 는 "용도마다 다른 시작 위치" 를 참고하세요. `FilePathEdit` 의
+`settings_key` 와 같은 저장소를 씁니다.
 
 테스트에서는 이 함수만 monkeypatch 하면 실제 다이얼로그 없이 위젯을 검증할 수 있습니다.
 
@@ -813,13 +1066,13 @@ constants   선택 모드, 기본 캡션, 항목 경로 역할
 safety      경로 안전 판정 (Qt 없이 도는 순수 로직)
 filters     Qt 필터 문자열 조립
 validators  경로 유효성 판정
-history     최근 경로 (QSettings)
-icons       별표 · 시계 아이콘, 분류 아이콘 제공자
+history     최근 경로 · 용도별 마지막 폴더 (QSettings)
+icons       별표 · 시계 · 집 아이콘, 분류 아이콘 제공자
 favorites   즐겨찾기 저장소 (심볼릭 링크 폴더)
 recent      최근 파일 저장소 (favorites 를 물려받음)
 places      사이드바에 얹는 것들의 묶음 (즐겨찾기 · 최근 · 직접 지정)
 menus       우클릭 메뉴 (즐겨찾기 추가 · 분류 삭제 · 사이드바 정리)
-hooks       다이얼로그에 거는 것들 (링크 추적 · 차단 경로 방어)
+hooks       다이얼로그에 거는 것들 (사이드바 표시 · 링크 추적 · 차단 경로 방어)
 dialog      QFileDialog 얇은 래퍼 (모드별 호출 · 옵션 · 시작 폴더)
 path_edit   FilePathEdit
 form        FilePathForm

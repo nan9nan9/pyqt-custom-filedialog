@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "filedialog-widget"
+name = "custom-file-dialog"
 version = "0.1.0"
 description = "QFileDialog 기반 경로 선택 위젯 (PyQt5/PyQt6/PySide2/PySide6 호환)"
 readme = "README.md"
@@ -30,10 +30,10 @@ pyside2 = ["PySide2"]
 pyside6 = ["PySide6"]
 
 [project.urls]
-Homepage = "https://github.com/jekai/filedialog-widget"
+Homepage = "https://github.com/jekai/custom-file-dialog"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-file_dialog_widget = ["py.typed"]
+custom_file_dialog = ["py.typed"]

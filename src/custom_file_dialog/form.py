@@ -1,7 +1,7 @@
 """FilePathForm: 여러 개의 경로 선택 줄을 라벨 정렬해서 담는 폼 위젯.
 
 입력 파일 · 출력 폴더 · 설정 파일처럼 경로를 여러 개 받아야 하는 화면에서,
-:class:`~file_dialog_widget.path_edit.FilePathEdit` 를 하나씩 배치하는 대신
+:class:`~custom_file_dialog.path_edit.FilePathEdit` 를 하나씩 배치하는 대신
 키(key)로 값을 꺼내 쓸 수 있게 묶어 준다.
 """
 

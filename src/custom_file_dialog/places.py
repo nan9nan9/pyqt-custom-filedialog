@@ -15,7 +15,7 @@ import os
 
 from qtpy.QtCore import QDir, QSettings, QUrl
 
-from .icons import CategoryIconProvider, clock_icon
+from .icons import CategoryIconProvider, clock_icon, home_icon
 from .util import abspath, to_urls, url_path
 
 # 기본으로 "사이드바에서 제거"를 막을 위치 — 사용자 홈.
@@ -24,6 +24,10 @@ DEFAULT_FIXED = ("~",)
 # 기본 사이드바의 고정 자리. "현재 위치"는 다이얼로그를 열 때 뒤에 붙고,
 # 최근 파일 · 북마크는 그 아래에 쌓인다.
 DEFAULT_SIDEBAR = ("~",)
+
+# 다이얼로그가 열리는 자리로 붙는 항목에 붙일 이름. 폴더 이름("workspace")보다
+# 그 자리가 무엇인지 알려 주는 편이 사이드바에서 알아보기 쉽다.
+CURRENT_LABEL = "현재 위치"
 
 
 # Qt 가 사이드바 항목을 저장하는 위치 (QFileDialogPrivate::saveSettings 와 동일)
@@ -70,14 +74,15 @@ class Places:
     """사이드바에 얹을 것들의 묶음.
 
     Args:
-        favorites: :class:`~file_dialog_widget.favorites.FavoritesStore` (없으면 None).
-        recent: :class:`~file_dialog_widget.recent.RecentStore` (없으면 None).
+        favorites: :class:`~custom_file_dialog.favorites.FavoritesStore` (없으면 None).
+        recent: :class:`~custom_file_dialog.recent.RecentStore` (없으면 None).
         sidebar_urls: 기준이 될 사이드바 목록. None 이면 기본 구성(홈 +
             다이얼로그가 열리는 현재 위치)을 쓴다.
         fixed_urls: 우클릭 "제거"를 막을 위치. None 이면 사용자 홈만 보호,
             ``[]`` 면 아무것도 보호하지 않는다.
-        icon: 분류에 씌울 아이콘. ``True`` 면 즐겨찾기=별표·최근=시계,
-            ``QIcon`` 이면 즐겨찾기에 그 아이콘, ``False`` 면 Qt 기본 폴더 아이콘.
+        icon: 분류에 씌울 아이콘. ``True`` 면 즐겨찾기=별표·최근=시계·홈=집,
+            ``QIcon`` 이면 즐겨찾기에 그 아이콘, ``False`` 면 홈까지 모두 Qt 기본
+            폴더 아이콘.
     """
 
     def __init__(
@@ -93,6 +98,7 @@ class Places:
             if u
         }
         self._provider = None
+        self._home_icon = None
 
     def __bool__(self):
         """사이드바에 얹을 게 하나라도 있는지."""
@@ -198,7 +204,40 @@ class Places:
         """제거가 막힌 위치 목록(정렬된 경로)."""
         return sorted(self._fixed)
 
+    def sidebar_marks(self, current=None):
+        """사이드바에서 **표시만** 갈아 끼울 항목 — ``{경로: (이름, 아이콘)}``.
+
+        홈은 이름을 그대로 두고 폴더 아이콘만 **집 모양**으로 바꾸고, 다이얼로그가
+        열리는 자리로 붙는 항목은 아이콘을 그대로 두고 폴더 이름 대신
+        **"현재 위치"** 로 부른다. 둘 중 안 바꾸는 쪽은 ``None`` 으로 둔다.
+        가리키는 경로는 그대로이므로 클릭했을 때 열리는 곳은 달라지지 않는다.
+
+        Args:
+            current: :meth:`sidebar_urls` 에 넘긴 것과 같은 "현재 위치". 홈과
+                같으면 사이드바에서 한 항목으로 합쳐지므로 홈 쪽만 남긴다.
+                ``sidebar_urls`` 로 기준 목록을 직접 준 경우에는 "현재 위치"
+                항목을 붙이지 않았으므로 무시한다.
+        """
+        marks = {}
+        if self.sidebar_urls(current) is None:
+            return marks        # 사이드바를 우리가 채우지 않았으면 표시도 그대로
+
+        home = abspath("~")
+        if home and self.icon:
+            marks[home] = (None, self.home_icon())
+        if self.sidebar_base is None:
+            path = abspath(current)
+            if path and path != home:
+                marks[path] = (CURRENT_LABEL, None)
+        return marks
+
     # -------------------------------------------------------------- 아이콘
+    def home_icon(self):
+        """홈 항목에 씌울 집 아이콘 (처음 쓸 때 그린다)."""
+        if self._home_icon is None:
+            self._home_icon = home_icon()
+        return self._home_icon
+
     def icon_provider(self):
         """분류에 아이콘을 씌우는 제공자(쓰지 않으면 None).
 

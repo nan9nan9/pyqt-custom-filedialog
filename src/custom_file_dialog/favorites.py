@@ -14,7 +14,7 @@ QFileDialog 사이드바는 **디렉터리만** 받는다(파일 URL 을 넣으�
 
 디렉터리 구조 자체가 저장소라 별도 영속화가 필요 없다. 다만 사용자가 링크를
 고르면 링크 경로가 반환되므로, :meth:`FavoritesStore.resolve` 로 원래 경로를
-복원해야 한다(:class:`~file_dialog_widget.path_edit.FilePathEdit` 는 자동으로 한다).
+복원해야 한다(:class:`~custom_file_dialog.path_edit.FilePathEdit` 는 자동으로 한다).
 """
 
 import json
@@ -81,7 +81,7 @@ def default_base_dir():
 
     1. :func:`configure_favorites` 로 지정한 위치
     2. ``QStandardPaths.AppDataLocation`` 아래의 ``favorites``
-    3. 앱 이름이 없어 2번을 못 얻으면 ``~/.file_dialog_widget/favorites``
+    3. 앱 이름이 없어 2번을 못 얻으면 ``~/.custom_file_dialog/favorites``
 
     개별 저장소만 다른 곳에 두려면 ``FavoritesStore(base_dir=...)`` 를 쓴다.
     """
@@ -89,7 +89,7 @@ def default_base_dir():
         return _CONFIGURED_BASE_DIR
     root = QStandardPaths.writableLocation(_standard_location("AppDataLocation"))
     if not root:
-        root = os.path.join(os.path.expanduser("~"), ".file_dialog_widget")
+        root = os.path.join(os.path.expanduser("~"), ".custom_file_dialog")
     return os.path.join(root, DEFAULT_DIRNAME)
 
 

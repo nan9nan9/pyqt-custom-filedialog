@@ -18,13 +18,21 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
    SIGKILL 조차 밀리므로 쓰지 않는다.)
 
 그리고 ``/user`` 처럼 **아래에 마운트가 잔뜩 달린 자리**는 나열하는 것만으로 전부
-마운트되면서 시스템이 주저앉는다. 그런 경로는 :func:`configure` 의
-``guarded_roots`` 에 넣어 두면 **그 자리 자체는 열지 않고**, ``/user/jekai`` 처럼
-한 단계라도 아래인 경로만 쓰게 한다.
+마운트되면서 시스템이 주저앉는다. 막는 방법이 두 가지다.
+
+- :func:`configure` 의 ``guarded_roots`` — 위험한 자리를 **이름으로 지목**한다.
+  ``/user`` 는 열지 않고 ``/user/jekai`` 처럼 한 단계라도 아래면 평소대로 쓴다.
+- :func:`configure` 의 ``min_depth`` — 자동완성이 **얕은 자리는 아예 나열하지
+  않게** 한다. ``2`` 를 주면 ``/user`` (1단계)를 나열하지 않으므로 ``/user/j`` 까지
+  쳐도 조용하고, ``/user/jekai`` (2단계)부터 완성이 살아난다. 위험한 자리를 미리
+  다 적어 두기 어려울 때 쓰는 그물이다.
+- :func:`configure` 의 ``allow_listing`` — ``False`` 면 **깊이와 무관하게 어떤
+  폴더도 읽지 않는다.** 파일이 수만 개인 폴더처럼 깊이로는 가릴 수 없는 자리까지
+  막아야 할 때 쓰는 마지막 스위치다.
 
 판정 결과는 **마운트 단위로 캐시**해서, 죽은 서버를 매번 다시 두드리지 않는다.
 
-    from file_dialog_widget import safety
+    from custom_file_dialog import safety
 
     safety.configure(timeout=1.0, probes=[("ldap.corp", 389)])
     if safety.is_reachable("/nfs/proj/a.csv"):
@@ -60,6 +68,12 @@ NFS_PORT = 2049
 DEFAULT_TIMEOUT = 1.0       # 한 번의 확인에 기다릴 최대 시간(초)
 DEFAULT_TTL = 30.0          # 판정 결과를 재사용할 시간(초)
 
+# 자동완성이 폴더를 나열할 최소 깊이. 0 이면 제한 없음(어디서든 완성한다).
+DEFAULT_MIN_DEPTH = 0
+
+# 자동완성이 폴더 목록을 읽어도 되는지. False 면 깊이와 무관하게 하나도 안 읽는다.
+DEFAULT_ALLOW_LISTING = True
+
 MOUNTINFO = "/proc/self/mountinfo"
 
 # 마운트 표를 다시 읽는 주기(초). 경로 확인이 잦아도 부담이 없게 짧게 캐시한다.
@@ -71,6 +85,8 @@ _settings = {
     "ttl": DEFAULT_TTL,
     "probes": [],
     "guarded_roots": [],
+    "min_depth": DEFAULT_MIN_DEPTH,
+    "allow_listing": DEFAULT_ALLOW_LISTING,
 }
 _cache = {}                 # key -> (판정, 시각)
 _mounts = {"list": None, "stamp": 0.0}
@@ -82,7 +98,14 @@ def _abspath(path):
     return os.path.normpath(os.path.abspath(os.path.expanduser(str(path))))
 
 
-def configure(timeout=None, ttl=None, probes=None, guarded_roots=None):
+def configure(
+    timeout=None,
+    ttl=None,
+    probes=None,
+    guarded_roots=None,
+    min_depth=None,
+    allow_listing=None,
+):
     """확인 방식을 설정한다.
 
     Args:
@@ -97,6 +120,25 @@ def configure(timeout=None, ttl=None, probes=None, guarded_roots=None):
             전부 마운트되면서 시스템이 주저앉는다. 여기에 ``["/user"]`` 를 넣으면
             ``/user`` 는 "접근 불가"로 보고, ``/user/jekai`` 처럼 **한 단계라도 아래**
             경로는 평소대로 쓴다.
+        min_depth: **자동완성이 폴더를 나열할 최소 깊이.** 이보다 얕은 자리는
+            나열하지 않아 완성 후보가 뜨지 않는다. 0(기본)이면 제한 없음.
+
+            ``/user`` 처럼 아래에 마운트가 잔뜩 달린 자리는 이름을 미리 다 알기
+            어렵다. ``min_depth=2`` 로 두면 ``/user/j`` 까지 쳐도 ``/user`` 를
+            나열하지 않으므로 멈추지 않고, ``/user/jekai/`` 부터 완성이 살아난다.
+            그 대신 ``/ho`` → ``/home`` 처럼 **얕은 자리의 완성도 함께 없어진다**.
+
+            나열만 막는 것이라 경로를 끝까지 직접 쳐서 쓰는 것은 그대로 된다.
+            자동완성에만 걸리므로 다이얼로그에서 폴더를 눌러 들어가는 것은
+            막지 않는다. 그쪽까지 막으려면 ``guarded_roots`` 를 함께 쓴다.
+        allow_listing: **자동완성이 폴더 목록을 읽어도 되는지.** ``False`` 면
+            깊이와 무관하게 어떤 폴더도 읽지 않아 완성 후보가 아예 뜨지 않는다.
+            자동완성을 통째로 끄는 스위치다.
+
+            파일이 수만 개인 폴더나 automount 가 잔뜩 달린 자리는 완성 후보를
+            만들려고 목록을 읽는 것만으로 오래 걸린다. 깊이로 가릴 수 없는
+            자리까지 확실히 막아야 할 때 쓴다. 위젯 하나만 끄려면
+            ``FilePathEdit(completer=False)`` 쪽이 낫다.
     """
     with _lock:
         if timeout is not None:
@@ -109,6 +151,10 @@ def configure(timeout=None, ttl=None, probes=None, guarded_roots=None):
             _settings["guarded_roots"] = [
                 _abspath(p) for p in guarded_roots if str(p).strip()
             ]
+        if min_depth is not None:
+            _settings["min_depth"] = max(0, int(min_depth))
+        if allow_listing is not None:
+            _settings["allow_listing"] = bool(allow_listing)
         _cache.clear()
 
 
@@ -120,6 +166,20 @@ def settings():
             probes=list(_settings["probes"]),
             guarded_roots=list(_settings["guarded_roots"]),
         )
+
+
+def reset():
+    """모든 설정을 기본값으로 되돌린다(주로 테스트에서)."""
+    with _lock:
+        _settings.update(
+            timeout=DEFAULT_TIMEOUT,
+            ttl=DEFAULT_TTL,
+            probes=[],
+            guarded_roots=[],
+            min_depth=DEFAULT_MIN_DEPTH,
+            allow_listing=DEFAULT_ALLOW_LISTING,
+        )
+        _cache.clear()
 
 
 def guarded_roots():
@@ -140,6 +200,52 @@ def is_guarded(path):
     with _lock:
         roots = _settings["guarded_roots"]
     return absolute in roots
+
+
+def min_depth():
+    """:func:`configure` 로 지정한 자동완성 최소 깊이 (0 이면 제한 없음)."""
+    with _lock:
+        return _settings["min_depth"]
+
+
+def path_depth(path):
+    """루트에서부터 센 경로 단계 수.
+
+    ``/`` 는 0, ``/user`` 는 1, ``/user/jekai`` 는 2. 상대 경로와 ``~`` 는 먼저
+    절대 경로로 편 뒤에 센다. 문자열만 보므로 파일시스템을 건드리지 않는다.
+    """
+    if not path:
+        return 0
+    absolute = _abspath(path)
+    return len([part for part in absolute.split(os.sep) if part])
+
+
+def is_too_shallow(path):
+    """자동완성이 **나열하지 않을** 만큼 얕은 자리인지.
+
+    ``min_depth`` 를 지정하지 않았으면 언제나 False 다.
+    """
+    limit = min_depth()
+    return limit > 0 and path_depth(path) < limit
+
+
+def listing_allowed():
+    """자동완성이 폴더 목록을 읽어도 되는지 (``allow_listing`` 설정)."""
+    with _lock:
+        return _settings["allow_listing"]
+
+
+def may_list(path):
+    """그 폴더를 자동완성이 읽어도 되는지 — 세 설정을 한 번에 본다.
+
+    ``allow_listing`` 이 꺼져 있거나, ``guarded_roots`` 에 지목됐거나,
+    ``min_depth`` 보다 얕으면 False.
+    """
+    return (
+        listing_allowed()
+        and not is_guarded(path)
+        and not is_too_shallow(path)
+    )
 
 
 def clear_cache():

@@ -14,7 +14,7 @@ def _checks(timeout):
     """``(isdir, isfile, exists)`` 를 돌려준다.
 
     ``timeout`` 이 None 이면 평범한 ``os.path`` 함수, 값이 있으면 죽은 네트워크
-    경로에서 멈추지 않는 :mod:`~file_dialog_widget.safety` 판 함수를 쓴다.
+    경로에서 멈추지 않는 :mod:`~custom_file_dialog.safety` 판 함수를 쓴다.
     """
     if timeout is None:
         return os.path.isdir, os.path.isfile, os.path.exists
@@ -50,7 +50,7 @@ def validate_paths(
 
     Args:
         paths: 검사할 경로 리스트.
-        mode: :class:`~file_dialog_widget.constants.SelectMode` 값.
+        mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
         must_exist: True 면 실제로 존재해야 유효하다고 본다.
             None 이면 모드별 기본값(save_file 만 False)을 쓴다.
         required: True 면 비어 있는 것도 오류로 본다.

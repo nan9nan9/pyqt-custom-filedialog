@@ -125,24 +125,27 @@ class FilePathEdit(QWidget):
             required: 비어 있는 것도 오류로 볼지 여부.
             validate: 유효성 표시(테두리/툴팁) 사용 여부.
             drag_drop: 파일을 끌어다 놓아 채우는 기능.
-            completer: 경로 입력 시 파일시스템 자동완성.
+            completer: 경로 입력 시 파일시스템 자동완성. 완성 후보를 만들려면
+                그 폴더를 통째로 읽어야 하므로, 파일이 수만 개이거나 automount 가
+                잔뜩 달린 자리를 다루는 앱이라면 ``False`` 로 꺼 두는 편이 낫다
+                (:meth:`set_completer` 로 실행 중에도 바꿀 수 있다).
             history: 0 보다 크면 최근 경로 드롭다운(▾)을 만든다.
             settings_key: QSettings 에 최근 경로/마지막 폴더를 저장할 키.
             settings: 직접 만든 QSettings 인스턴스(없으면 기본값 사용).
             native: OS 네이티브 다이얼로그 사용 여부.
             path_timeout: 죽은 네트워크 경로(NFS 등)에서 멈추지 않도록 하는 안전
                 확인의 제한 시간(초). 기본값은 켜져 있다
-                (:data:`~file_dialog_widget.safety.DEFAULT_TIMEOUT`).
+                (:data:`~custom_file_dialog.safety.DEFAULT_TIMEOUT`).
                 유효성 검사와 다이얼로그 시작 폴더 결정에 적용되며, **로컬 경로는
                 평소와 똑같이** 처리하므로 부담이 없다. ``None`` 을 주면 끈다.
-                :mod:`~file_dialog_widget.safety` 참고.
+                :mod:`~custom_file_dialog.safety` 참고.
             sidebar_urls: 다이얼로그 왼쪽 사이드바에 표시할 위치 목록
                 (경로 문자열 또는 QUrl). 지정하면 네이티브 다이얼로그를 쓸 수
                 없어 Qt 자체 다이얼로그로 자동 전환된다.
             fixed_sidebar_urls: 사이드바 우클릭 "사이드바에서 제거"를 막을 위치
                 목록. None 이면 **사용자 홈만** 보호한다. ``[]`` 를 주면 아무것도
                 보호하지 않고, 경로를 나열하면 그 위치들도 함께 보호한다.
-            favorites: :class:`~file_dialog_widget.favorites.FavoritesStore`.
+            favorites: :class:`~custom_file_dialog.favorites.FavoritesStore`.
                 분류들이 사이드바에 덧붙고, 고른 경로는 자동으로 원본 경로로
                 복원된다. ``sidebar_urls`` 를 따로 주지 않았으면 기존 사이드바
                 항목 뒤에 분류가 붙는다.
@@ -151,7 +154,7 @@ class FilePathEdit(QWidget):
                 폴더 아이콘을 그대로 둔다.
             recent_files: 최근에 고른 파일을 모아 두는 "최근 파일" 항목을
                 사이드바에 추가한다 (기본 False = 안 씀). ``True`` 면 기본 위치에
-                :class:`~file_dialog_widget.recent.RecentStore` 를 하나 만들어 쓰고,
+                :class:`~custom_file_dialog.recent.RecentStore` 를 하나 만들어 쓰고,
                 직접 만든 저장소를 넘겨 여러 위젯이 공유하게 할 수도 있다.
             recent_max: ``recent_files=True`` 로 저장소를 자동 생성할 때 기억할
                 개수(기본 20). 저장소를 직접 넘겼다면 무시된다.
@@ -244,6 +247,7 @@ class FilePathEdit(QWidget):
 
         # 자동완성: 실제 파일시스템을 대상으로 경로를 완성해 준다.
         self._completer = None
+        self._completer_model = None
         if completer:
             self._install_completer()
 
@@ -264,9 +268,39 @@ class FilePathEdit(QWidget):
         model.setRootPath("")
         if self._mode == SelectMode.DIRECTORY:
             model.setFilter(QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot | QDir.Filter.Drives)
+        self._completer_model = model
         self._completer = QCompleter(model, self)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._edit.setCompleter(self._completer)
+
+    def set_completer(self, enabled):
+        """경로 자동완성을 켜고 끈다.
+
+        완성 후보를 만들려면 Qt 가 그 폴더를 **통째로 읽어야** 한다. 파일이 수만
+        개이거나 automount 가 잔뜩 달린 자리에서는 그것만으로 오래 걸리므로,
+        그런 곳을 다루는 화면에서는 꺼 두는 편이 낫다. 끄면 모델까지 버려서
+        파일시스템 감시도 함께 멈춘다.
+
+        경로를 직접 치거나 붙여 넣는 것, 유효성 표시, 다이얼로그는 그대로다.
+        앱 전체에서 한꺼번에 끄려면
+        :func:`safety.configure(allow_listing=False)
+        <custom_file_dialog.safety.configure>` 쪽을 쓴다(다이얼로그의 파일 이름
+        칸 자동완성까지 함께 막힌다).
+        """
+        if enabled == self.completer_enabled():
+            return
+        if enabled:
+            self._install_completer()
+            return
+
+        self._edit.setCompleter(None)
+        self._completer.deleteLater()
+        self._completer_model.deleteLater()
+        self._completer = self._completer_model = None
+
+    def completer_enabled(self):
+        """자동완성이 켜져 있는지."""
+        return self._completer is not None
 
     def _rebuild_history_menu(self):
         self._history_menu.clear()
@@ -499,7 +533,7 @@ class FilePathEdit(QWidget):
 
         기존 항목(Computer, 홈 등)을 남기고 뒤에 덧붙이려면::
 
-            from file_dialog_widget import current_sidebar_urls, to_urls
+            from custom_file_dialog import current_sidebar_urls, to_urls
             edit.set_sidebar_urls(current_sidebar_urls() + to_urls(["/mnt/data"]))
 
         ``[]`` 를 주면 사이드바가 비고, ``None`` 이면 커스터마이즈를 끈다
@@ -530,6 +564,16 @@ class FilePathEdit(QWidget):
         """
         urls = self._places().sidebar_urls(self._start_dir_now())
         return list(urls) if urls is not None else None
+
+    def effective_sidebar_marks(self):
+        """지금 열면 사이드바에서 표시가 바뀔 항목 — ``{경로: (이름, 아이콘)}``.
+
+        홈은 집 아이콘, 다이얼로그가 열리는 자리는 "현재 위치"라는 이름으로
+        나온다. :meth:`effective_sidebar_urls` 와 같은 시작 폴더를 기준으로
+        계산하므로 두 결과는 늘 짝이 맞는다
+        (:meth:`~custom_file_dialog.places.Places.sidebar_marks` 참고).
+        """
+        return self._places().sidebar_marks(self._start_dir_now())
 
     def _start_dir_now(self):
         """지금 browse() 하면 다이얼로그가 열릴 폴더."""
@@ -582,7 +626,7 @@ class FilePathEdit(QWidget):
         """"최근 파일" 사이드바 항목을 켜거나 끈다.
 
         ``True`` 면 기본 위치에 저장소를 만들어 쓰고, ``False``/``None`` 이면
-        쓰지 않는다. :class:`~file_dialog_widget.recent.RecentStore` 를 직접
+        쓰지 않는다. :class:`~custom_file_dialog.recent.RecentStore` 를 직접
         넘기면 여러 위젯이 같은 목록을 공유할 수 있다.
         """
         self._recent = _make_recent_store(recent_files, recent_max)

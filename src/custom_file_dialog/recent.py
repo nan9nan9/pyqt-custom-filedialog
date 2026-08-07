@@ -2,7 +2,7 @@
 
 즐겨찾기와 완전히 같은 방식(분류 폴더 + 심볼릭 링크)을 쓰되, 분류가
 ``최근 파일`` 하나뿐이고 **개수 제한과 최신순 정렬을 스스로 관리**한다는 점만
-다르다. 그래서 :class:`~file_dialog_widget.favorites.FavoritesStore` 를 그대로
+다르다. 그래서 :class:`~custom_file_dialog.favorites.FavoritesStore` 를 그대로
 물려받아 사이드바 등록·경로 복원·정리 메뉴를 모두 재사용한다.
 
 순서는 **심볼릭 링크 자신의 수정 시각**으로 판단한다(링크를 만든 시점).

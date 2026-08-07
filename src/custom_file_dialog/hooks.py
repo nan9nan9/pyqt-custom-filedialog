@@ -1,12 +1,15 @@
-"""QFileDialog 에 거는 것들 — 링크 추적과 차단 경로 방어.
+"""QFileDialog 에 거는 것들 — 사이드바 표시, 링크 추적, 차단 경로 방어.
 
 즐겨찾기·최근 파일은 심볼릭 링크를 모아 둔 폴더라 두 가지 손질이 필요하다.
 
+- **사이드바 표시** — 홈은 집 아이콘으로, 다이얼로그가 열리는 자리는
+  "현재 위치"라는 이름으로 보여 준다.
 - **링크 추적** — 목록에서 항목을 고르면 "Look in" 에 원본 경로를 보여 주고,
-  링크 폴더로 들어가면 원본 폴더로 옮긴다.
+  링크 폴더로 들어가면 원본 폴더로 옮기고, "상위 폴더"로 올라가면 링크 창고가
+  아니라 원본이 있는 폴더로 간다.
 - **차단 경로 방어** — ``/user`` 처럼 나열하는 것만으로 시스템이 주저앉는 자리는
   자동완성·목록·드롭다운·파일 이름 칸 어디서도 열 수 없게 막는다
-  (:func:`~file_dialog_widget.safety.is_guarded`).
+  (:func:`~custom_file_dialog.safety.is_guarded`).
 
 Qt 가 C++ 에서 연결해 둔 ``activated`` · ``accept()`` 는 파이썬에서 끊을 수 없다.
 그래서 **그 신호가 나기 전 단계인 입력 이벤트를 삼키는** 방식으로 막는다.
@@ -23,6 +26,9 @@ from qtpy.QtWidgets import (
     QFileSystemModel,
     QLineEdit,
     QListView,
+    QStyle,
+    QStyledItemDelegate,
+    QToolButton,
     QTreeView,
 )
 
@@ -32,6 +38,74 @@ from .menus import FavoritesMenus
 from .util import abspath, url_path
 
 _OPEN_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+
+# 사이드바 항목(QUrlModel)이 "이 위치를 열 수 있는가"를 담는 역할. Qt5/Qt6 동일.
+ENABLED_ROLE = Qt.ItemDataRole.UserRole + 2
+
+# 바인딩마다 enum 스코프가 달라 icons.standard_icon 과 같은 방식으로 집는다.
+_STATE_ENABLED = getattr(QStyle, "StateFlag", QStyle).State_Enabled
+
+
+# --------------------------------------------------------- 사이드바 표시
+class _SidebarMarks(QStyledItemDelegate):
+    """사이드바 항목의 이름과 아이콘만 갈아 끼우는 델리게이트.
+
+    모델을 직접 고치면 안 된다. ``QUrlModel`` 은 파일시스템이 바뀌었다는 통지를
+    받을 때마다 항목의 이름과 아이콘을 **경로에서 다시 읽어** 덮어쓰므로, 넣어 둔
+    값이 몇 초 만에 사라진다. 그래서 모델은 그대로 두고 **그리기 직전**에
+    바꿔치기한다.
+
+    Qt 기본 델리게이트가 하던 "열 수 없는 위치는 흐리게" 처리도 이어서 한다.
+    """
+
+    def __init__(self, marks, parent=None):
+        super().__init__(parent)
+        self.marks = marks
+
+    def initStyleOption(self, option, index):    # noqa: N802 (Qt 시그니처)
+        super().initStyleOption(option, index)
+
+        enabled = index.data(ENABLED_ROLE)
+        if enabled is not None and not enabled:
+            option.state &= ~_STATE_ENABLED
+
+        label, icon = self.marks.get(
+            abspath(url_path(index.data(PATH_ROLE))), (None, None)
+        )
+        if label:
+            option.text = label
+        if icon is not None:
+            option.icon = icon
+
+
+def mark_sidebar(dialog, places, current=None):
+    """사이드바의 홈에 집 아이콘을, 현재 위치 항목에 "현재 위치" 이름을 씌운다.
+
+    Args:
+        dialog: 대상 ``QFileDialog`` (Qt 자체 다이얼로그여야 한다).
+        places: :class:`~custom_file_dialog.places.Places`.
+        current: 다이얼로그가 열리는 폴더. None 이면 다이얼로그에서 읽는다.
+
+    Returns:
+        걸어 둔 델리게이트. 씌울 것이 없거나 사이드바를 못 찾으면 None.
+    """
+    if current is None:
+        current = dialog.directory().absolutePath()
+    marks = places.sidebar_marks(current)
+    if not marks:
+        return None
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    if sidebar is None:
+        return None
+
+    # 부모는 사이드바가 아니라 **다이얼로그**여야 한다. 사이드바는 findChild 로
+    # 그때그때 만들어지는 임시 래퍼라, 거기에 매달아 두면 래퍼가 사라질 때
+    # 파이썬 쪽 객체도 같이 수거되어 재정의한 initStyleOption 이 불리지 않는다
+    # (C++ 객체만 남아 Qt 기본 델리게이트처럼 동작한다).
+    delegate = _SidebarMarks(marks, dialog)
+    sidebar.setItemDelegate(delegate)
+    return delegate
 
 
 # ----------------------------------------------------- 즐겨찾기 링크 추적
@@ -57,6 +131,55 @@ def show_link_target_in_combo(dialog, places):
     return True
 
 
+def follow_link_on_parent(dialog, places):
+    """분류 폴더에서 링크를 고르고 **"상위 폴더"** 를 누르면 원본 위치로 올라간다.
+
+    Qt 는 지금 보고 있는 폴더(=분류 폴더)의 부모로 올라간다. 그래서 링크를 모아 둔
+    저장소 안쪽으로 들어가 버리는데, 거기는 분류 폴더만 늘어선 창고라 열어 봐야
+    쓸 것이 없다. "Look in" 이 이미 가리키고 있는 **원본 경로**를 기준으로 올라가,
+    고른 것이 실제로 있는 폴더로 가게 바로잡는다::
+
+        <favorites>/설계/data.csv   (원본 /mnt/proj/설계문서/data.csv)
+        "상위 폴더" ->  /mnt/proj/설계문서      (전에는 <favorites>)
+
+    폴더 링크도 같은 규칙이다 — 원본이 **있는** 폴더로 간다.
+
+    Qt 가 C++ 에서 연결해 둔 ``_q_navigateToParent`` 는 파이썬에서 끊을 수 없다.
+    그래서 버튼이 눌린 순간에 목적지를 미리 정해 두었다가, Qt 가 옮긴 **직후에
+    바로잡는다**. 잘못 들르는 저장소는 늘 로컬이라 오가는 비용이 없다.
+    (Alt+Up 단축키도 이 버튼에 걸려 있어 함께 처리된다.)
+    """
+    button = dialog.findChild(QToolButton, "toParentButton")
+    if button is None:
+        return False
+
+    state = {"target": None, "goto": None}
+
+    def on_current_changed(path):
+        state["target"] = places.link_target(path)
+
+    def on_pressed():
+        # 누른 그 순간의 상황으로 목적지를 정한다(누른 뒤에는 이미 옮겨진 뒤다)
+        state["goto"] = None
+        target = state["target"]
+        if not target:
+            return
+        if not places.is_inside(dialog.directory().absolutePath()):
+            return                       # 분류 폴더 안에서 고른 링크일 때만
+        state["goto"] = os.path.dirname(abspath(target) or "")
+
+    def on_entered(_path):
+        destination, state["goto"], state["target"] = state["goto"], None, None
+        # 원본이 죽은 마운트에 있으면 그냥 둔다(GUI 를 멈추느니 제자리가 낫다)
+        if destination and safety.safe_isdir(destination):
+            dialog.setDirectory(destination)
+
+    dialog.currentChanged.connect(on_current_changed)
+    button.pressed.connect(on_pressed)
+    dialog.directoryEntered.connect(on_entered)
+    return True
+
+
 def follow_link_directories(dialog, places):
     """링크 폴더로 들어가면 원본 위치로 옮긴다.
 
@@ -77,14 +200,27 @@ def follow_link_directories(dialog, places):
 
 # --------------------------------------------------------- 차단 경로 방어
 class GuardedFileSystemModel(QFileSystemModel):
-    """차단 경로의 목록을 **아예 요청하지 않는** 파일시스템 모델.
+    """위험한 자리의 목록을 **아예 요청하지 않는** 파일시스템 모델.
 
-    자식이 없다고 답해서 Qt 가 그 폴더를 읽지 않게 한다. 하위 경로
-    (``/user/jekai``)는 평소대로 동작한다.
+    자식이 없다고 답해서 Qt 가 그 폴더를 읽지 않게 한다. 세 가지를 막는다
+    (:func:`~custom_file_dialog.safety.may_list` 가 셋을 한 번에 판정한다).
+
+    - ``guarded_roots`` 로 지목한 자리 (``/user``). 하위 경로(``/user/jekai``)는
+      평소대로 동작한다.
+    - ``min_depth`` 보다 얕은 자리. 위험한 자리를 미리 다 적어 두기 어려울 때,
+      ``/user`` 같은 얕은 곳을 통째로 나열하지 않게 하는 그물이다.
+    - ``allow_listing=False`` 면 깊이와 무관하게 **전부**.
+
+    자동완성 모델로 쓰인다. 목록을 읽는 것만 막으므로 경로를 끝까지 직접 쳐서
+    쓰는 것은 그대로 된다.
     """
 
     def _blocked(self, index):
-        return index.isValid() and safety.is_guarded(self.filePath(index))
+        if not safety.listing_allowed():
+            return True                      # 통째로 꺼 두었다
+        if not index.isValid():
+            return False                     # 모델 뿌리는 건드리지 않는다
+        return not safety.may_list(self.filePath(index))
 
     def hasChildren(self, index):        # noqa: N802 (Qt 시그니처)
         return False if self._blocked(index) else super().hasChildren(index)
@@ -189,18 +325,21 @@ def guard_dialog(dialog, bounce=True):
     - ``bounce`` 가 True 면 그래도 들어가진 경우 직전 폴더로 되돌린다
       (이미 읽은 뒤라 늦지만, 그 자리에 머무르지는 않게 하는 마지막 방어)
 
-    차단 경로가 하나도 없으면 아무 일도 하지 않는다.
+    ``min_depth`` / ``allow_listing`` 만 켜 두었다면 **자동완성 모델만** 바꾼다.
+    목록을 읽지 않게 하는 설정이지, 그 자리에 못 들어가게 하는 설정은 아니기
+    때문이다. 셋 다 없으면 아무 일도 하지 않는다.
 
     Returns:
         건 장치들의 목록(진단용). 걸 게 없으면 빈 리스트.
     """
-    if not safety.guarded_roots():
+    guarded = safety.guarded_roots()
+    if not guarded and not safety.min_depth() and safety.listing_allowed():
         return []
 
     installed = []
     name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
 
-    # 1) 파일 이름 칸 자동완성
+    # 1) 파일 이름 칸 자동완성 (min_depth 만 켜도 여기까지는 해 준다)
     completer = name_edit.completer() if name_edit is not None else None
     if completer is not None and not isinstance(
         completer.model(), GuardedFileSystemModel
@@ -209,6 +348,9 @@ def guard_dialog(dialog, bounce=True):
         model.setRootPath("")
         completer.setModel(model)
         installed.append("completer")
+
+    if not guarded:
+        return installed        # 아래는 "그 자리에 못 들어가게" 하는 장치들이다
 
     # 2) 파일 목록에서 열기 차단 (더블클릭)
     for view in (
@@ -261,9 +403,14 @@ def guard_dialog(dialog, bounce=True):
 
 
 # --------------------------------------------------------------- 한 번에
-def install_hooks(dialog, places):
-    """다이얼로그에 링크 추적 · 메뉴 · 차단 경로 방어를 모두 건다."""
+def install_hooks(dialog, places, current=None):
+    """다이얼로그에 사이드바 표시 · 링크 추적 · 메뉴 · 차단 경로 방어를 모두 건다.
+
+    ``current`` 는 :func:`mark_sidebar` 로 넘어가는 "현재 위치"다. 주지 않으면
+    다이얼로그가 지금 열려 있는 폴더를 쓴다.
+    """
     guard_dialog(dialog)
+    mark_sidebar(dialog, places, current)
 
     if not places.stores():
         return
@@ -271,3 +418,4 @@ def install_hooks(dialog, places):
     FavoritesMenus(dialog, places).install()
     follow_link_directories(dialog, places)      # 링크 폴더로 진입할 때
     show_link_target_in_combo(dialog, places)    # 목록에서 항목을 고를 때
+    follow_link_on_parent(dialog, places)        # "상위 폴더" 로 올라갈 때

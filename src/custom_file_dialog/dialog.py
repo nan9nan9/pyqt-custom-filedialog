@@ -10,7 +10,7 @@ import os
 
 from qtpy.QtWidgets import QFileDialog
 
-from . import safety
+from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode
 from .util import to_urls
 from .filters import ensure_suffix, suffix_of
@@ -70,12 +70,14 @@ def exec_file_dialog(
     show_dirs_only=True,
     extra_options=None,
     places=None,
+    remember=None,
+    path_timeout=safety.DEFAULT_TIMEOUT,
 ):
     """모드에 맞는 QFileDialog 를 띄우고 결과를 반환한다.
 
     Args:
         parent: 부모 위젯(모달 기준). 보통 ``self.window()``.
-        mode: :class:`~file_dialog_widget.constants.SelectMode` 값.
+        mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
         caption: 다이얼로그 제목. None 이면 모드별 기본 제목.
         directory: 처음 열릴 디렉터리(또는 파일 경로).
         name_filter: Qt 필터 문자열 (``"이미지 (*.png);;모든 파일 (*)"``).
@@ -85,21 +87,47 @@ def exec_file_dialog(
             None 이면 선택된 필터에서 유추한다.
         show_dirs_only: 디렉터리 모드에서 파일을 숨길지 여부.
         extra_options: 추가 QFileDialog.Option.
-        places: :class:`~file_dialog_widget.places.Places` — 사이드바에 얹을
+        places: :class:`~custom_file_dialog.places.Places` — 사이드바에 얹을
             것들(즐겨찾기 · 최근 파일 · 직접 지정 위치 · 아이콘 · 보호 위치).
             주면 **네이티브 다이얼로그를 쓸 수 없어** 자동으로 Qt 자체
             다이얼로그로 전환된다(네이티브 창은 OS 가 그리므로 Qt 가 사이드바를
             바꿀 수 없다).
+        remember: **용도 이름.** 주면 그 용도로 마지막에 쓰던 폴더에서 열고,
+            고르고 나면 그 폴더를 다시 기억한다. 자리마다 다른 이름을 주면
+            (``"입력csv"`` · ``"결과저장"``) 각자 따로 기억한다.
+
+            ``directory`` 를 함께 주면 그쪽이 우선이다(기억은 그래도 갱신된다).
+            ``FilePathEdit(settings_key=...)`` 와 **같은 저장소**를 쓰므로 같은
+            이름을 주면 위젯과 다이얼로그가 기억을 주고받는다.
+        path_timeout: 기억해 둔 폴더가 죽은 마운트를 가리킬 때 멈추지 않도록
+            하는 제한 시간(초). ``None`` 이면 확인하지 않는다. ``remember`` 를
+            쓸 때만 의미가 있다.
 
     Returns:
         ``(paths, selected_filter)`` 튜플. 취소하면 ``([], selected_filter)``.
     """
     if caption is None:
         caption = DEFAULT_CAPTIONS.get(mode, "선택")
-    directory = directory or ""
-    name_filter = name_filter or ""
-    selected_filter = selected_filter or ""
+    if remember and not directory:
+        # 기억해 둔 폴더가 사라졌거나 죽은 마운트면 안전한 곳으로 대체된다
+        directory = resolve_start_dir(
+            [], last_dir=history.last_dir(remember), mode=mode, timeout=path_timeout
+        )
+    paths, chosen = _run_dialog(
+        parent, mode, caption, directory or "", name_filter or "",
+        selected_filter or "", native, default_suffix, show_dirs_only,
+        extra_options, places,
+    )
+    if remember and paths:
+        history.remember_dir(remember, paths[0])
+    return paths, chosen
 
+
+def _run_dialog(
+    parent, mode, caption, directory, name_filter, selected_filter,
+    native, default_suffix, show_dirs_only, extra_options, places,
+):
+    """모드별로 알맞은 QFileDialog 호출을 골라 실행한다."""
     if places:
         # 사이드바/아이콘을 건드리려면 인스턴스를 직접 만들어야 한다
         # (정적 메서드로는 불가).
@@ -194,14 +222,17 @@ def _exec_instance_dialog(
         dialog.setIconProvider(provider)
 
     # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
-    urls = places.sidebar_urls(dialog.directory().absolutePath())
+    current = dialog.directory().absolutePath()
+    urls = places.sidebar_urls(current)
     if urls is not None:
         dialog.setSidebarUrls(to_urls(urls))
 
-    # 다이얼로그에 거는 것들(링크 추적 · 메뉴 · 차단)은 hooks 가 한 번에 처리한다
+    # 다이얼로그에 거는 것들(사이드바 표시 · 링크 추적 · 메뉴 · 차단)은
+    # hooks 가 한 번에 처리한다. 사이드바를 채울 때 쓴 "현재 위치"를 그대로
+    # 넘겨 이름을 갈아 끼울 항목이 어긋나지 않게 한다.
     from .hooks import install_hooks
 
-    install_hooks(dialog, places)
+    install_hooks(dialog, places, current)
 
     accepted = dialog.exec_() if hasattr(dialog, "exec_") else dialog.exec()
     if not accepted:
@@ -234,7 +265,7 @@ def resolve_start_dir(
 
     ``timeout`` 을 주면 죽은 네트워크 경로를 건너뛴다. 다이얼로그가 응답 없는
     마운트에서 열려 통째로 멈추는 것을 막는다
-    (:mod:`~file_dialog_widget.safety` 참고).
+    (:mod:`~custom_file_dialog.safety` 참고).
     """
     isdir = (
         os.path.isdir

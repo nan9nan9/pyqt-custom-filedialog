@@ -23,7 +23,7 @@ from qtpy.QtCore import QDir, QMimeData, QPoint, QSettings, QUrl  # noqa: E402
 # 않도록 QSettings 저장 위치를 임시 폴더로 돌린다.
 # (QApplication 생성 전에 해야 하고, QFileDialog 내부는 NativeFormat 으로
 #  QSettings 를 만들기 때문에 두 포맷 모두 경로를 바꿔 줘야 한다)
-_SETTINGS_DIR = tempfile.mkdtemp(prefix="filedialog-widget-test-")
+_SETTINGS_DIR = tempfile.mkdtemp(prefix="custom-file-dialog-test-")
 for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
     QSettings.setPath(_fmt, QSettings.Scope.UserScope, _SETTINGS_DIR)
     QSettings.setPath(_fmt, QSettings.Scope.SystemScope, _SETTINGS_DIR)
@@ -31,7 +31,7 @@ atexit.register(shutil.rmtree, _SETTINGS_DIR, True)
 from qtpy.QtGui import QDropEvent  # noqa: E402
 from qtpy.QtWidgets import QApplication  # noqa: E402
 
-from file_dialog_widget import (  # noqa: E402
+from custom_file_dialog import (  # noqa: E402
     FavoritesError,
     FavoritesStore,
     FilePathEdit,
@@ -41,14 +41,16 @@ from file_dialog_widget import (  # noqa: E402
     SelectMode,
     build_filter,
     ensure_suffix,
+    home_icon,
     suffix_of,
     to_urls,
     validate_paths,
 )
-from file_dialog_widget.history import PathHistory  # noqa: E402
-from file_dialog_widget import dialog as dialog_module  # noqa: E402
-from file_dialog_widget import hooks as hooks_module  # noqa: E402
-from file_dialog_widget import places as places_module  # noqa: E402
+from custom_file_dialog.history import PathHistory  # noqa: E402
+from custom_file_dialog import dialog as dialog_module  # noqa: E402
+from custom_file_dialog import history as history_module  # noqa: E402
+from custom_file_dialog import hooks as hooks_module  # noqa: E402
+from custom_file_dialog import places as places_module  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -133,7 +135,7 @@ def dead_nfs(monkeypatch, tmp_path):
     실제로 멈추는 마운트를 만들 수 없으므로, 마운트 표와 소켓 프로브,
     그리고 os.stat 을 갈아 끼워 "영원히 안 돌아오는 경로"를 만든다.
     """
-    from file_dialog_widget import safety
+    from custom_file_dialog import safety
 
     mountpoint = str(tmp_path / "nfs")
     os.mkdir(mountpoint)
@@ -251,7 +253,7 @@ def test_safety_extra_probes(dead_nfs, monkeypatch):
 @pytest.fixture
 def guarded_root(tmp_path):
     """마운트가 잔뜩 달린 ``/user`` 같은 자리를 흉내 낸다."""
-    from file_dialog_widget import safety
+    from custom_file_dialog import safety
 
     root = tmp_path / "user"
     root.mkdir()
@@ -267,7 +269,7 @@ def guarded_root(tmp_path):
 
 def test_guarded_root_blocks_itself_only(guarded_root):
     """그 자리 자체만 막고, 하위 경로는 평소대로 쓴다."""
-    from file_dialog_widget import safety
+    from custom_file_dialog import safety
 
     assert safety.guarded_roots() == [os.path.normpath(guarded_root)]
 
@@ -328,7 +330,7 @@ def test_guarded_root_not_listed_by_completer(qapp, guarded_root):
 
 def test_guarded_model_blocks_listing(qapp, guarded_root):
     """차단 경로의 목록을 아예 요청하지 않는다(하위는 정상)."""
-    from file_dialog_widget import GuardedFileSystemModel
+    from custom_file_dialog import GuardedFileSystemModel
 
     model = GuardedFileSystemModel()
     model.setRootPath("")
@@ -353,11 +355,271 @@ def test_guarded_model_blocks_listing(qapp, guarded_root):
     assert not model.canFetchMore(index)
 
 
+# ------------------------------------------ 자동완성 최소 깊이 (min_depth)
+@pytest.fixture
+def shallow_tree(tmp_path):
+    """얕은 자리를 흉내 낸다 — 그 폴더의 깊이를 함께 돌려준다.
+
+    실제 ``/user`` (깊이 1)는 테스트에서 만들 수 없으므로, tmp 폴더의 깊이를
+    재서 "이 폴더가 딱 한 단계 모자라는" min_depth 를 걸어 같은 상황을 만든다.
+    """
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    root.mkdir()
+    for name in ("jekai", "jane", "joe"):
+        (root / name).mkdir()
+    (root / "jekai" / "proj").mkdir()
+
+    yield str(root), safety.path_depth(str(root))
+    safety.reset()
+
+
+def test_path_depth(qapp):
+    """깊이는 루트에서부터 센다."""
+    from custom_file_dialog import safety
+
+    assert safety.path_depth("/") == 0
+    assert safety.path_depth("/user") == 1
+    assert safety.path_depth("/user/") == 1                  # 끝의 / 는 무시
+    assert safety.path_depth("/user/jekai") == 2
+    assert safety.path_depth("/user/jekai/proj") == 3
+    assert safety.path_depth("") == 0
+    # 상대 경로는 절대 경로로 편 뒤에 센다
+    assert safety.path_depth("jekai") == safety.path_depth(os.getcwd()) + 1
+
+
+def test_min_depth_default_off(qapp):
+    """지정하지 않으면 아무 자리도 얕다고 보지 않는다."""
+    from custom_file_dialog import safety
+
+    safety.reset()
+    assert safety.min_depth() == 0
+    assert not safety.is_too_shallow("/")
+    assert not safety.is_too_shallow("/user")
+
+
+def test_min_depth_marks_shallow_paths(shallow_tree):
+    """min_depth 보다 얕은 자리만 "나열 금지"로 본다."""
+    from custom_file_dialog import safety
+
+    root, depth = shallow_tree
+    safety.configure(min_depth=depth + 1)
+
+    assert safety.min_depth() == depth + 1
+    assert safety.is_too_shallow(root)                       # 딱 한 단계 모자란다
+    assert safety.is_too_shallow(os.path.dirname(root))      # 그 위는 더 얕다
+    assert not safety.is_too_shallow(os.path.join(root, "jekai"))
+
+    # 나열만 막는 설정이라 경로 자체의 접근 판정은 건드리지 않는다
+    assert safety.is_reachable(root)
+    assert safety.safe_isdir(root) is True
+
+
+def test_min_depth_blocks_completer_listing(qapp, shallow_tree):
+    """`/user/j` 처럼 쳐도 그 폴더를 읽지 않는다(한 단계 아래는 정상)."""
+    from custom_file_dialog import safety
+
+    root, depth = shallow_tree
+    edit = FilePathEdit(mode="open_file")
+    model = edit.line_edit.completer().model()
+    model.setRootPath("")
+
+    def rows(path):
+        index = model.index(path)
+        model.hasChildren(index)
+        model.canFetchMore(index)
+        model.fetchMore(index)
+        _spin(qapp, 900)
+        return model.rowCount(model.index(path))
+
+    safety.configure(min_depth=depth + 1)
+    assert len(os.listdir(root)) == 3
+    assert rows(root) == 0                                   # 3개가 있어도 읽지 않는다
+
+    inner = os.path.join(root, "jekai")
+    assert rows(inner) == len(os.listdir(inner))             # 한 단계 아래는 정상
+
+
+def test_min_depth_completion_candidates(qapp, shallow_tree):
+    """자동완성 후보 자체가 뜨지 않는다 — 껐을 때와 비교한다."""
+    from custom_file_dialog import safety
+
+    root, depth = shallow_tree
+
+    def candidates(prefix):
+        edit = FilePathEdit(mode="open_file")
+        completer = edit.line_edit.completer()
+        # 부모 폴더를 모델에 알린 뒤 완성을 물어본다(실제 입력과 같은 순서)
+        completer.model().setRootPath(os.path.dirname(prefix))
+        _spin(qapp, 900)
+        completer.setCompletionPrefix(prefix)
+        return sorted(
+            completer.completionModel().index(row, 0).data()
+            for row in range(completer.completionCount())
+        )
+
+    safety.reset()
+    assert candidates(os.path.join(root, "j")) == ["jane", "jekai", "joe"]
+
+    safety.configure(min_depth=depth + 1)
+    assert candidates(os.path.join(root, "j")) == []
+    # 한 단계 아래에서는 그대로 완성된다
+    assert candidates(os.path.join(root, "jekai", "p")) == ["proj"]
+
+
+def test_allow_listing_off_blocks_every_depth(qapp, tmp_path):
+    """allow_listing=False 면 깊이와 무관하게 어떤 폴더도 읽지 않는다."""
+    from custom_file_dialog import safety
+
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    for name in ("x", "y", "z"):
+        (deep / name).mkdir()
+
+    edit = FilePathEdit(mode="open_file")
+    model = edit.line_edit.completer().model()
+    model.setRootPath("")
+
+    def rows(path):
+        index = model.index(path)
+        model.hasChildren(index)
+        model.canFetchMore(index)
+        model.fetchMore(index)
+        _spin(qapp, 900)
+        return model.rowCount(model.index(path))
+
+    try:
+        safety.configure(allow_listing=False)
+        assert not safety.listing_allowed()
+        assert not safety.may_list(str(deep))
+        # 깊이가 충분해도(min_depth 는 꺼져 있다) 읽지 않는다
+        assert not safety.is_too_shallow(str(deep))
+        assert rows(str(deep)) == 0
+
+        safety.configure(allow_listing=True)
+        assert rows(str(deep)) == 3
+    finally:
+        safety.reset()
+
+
+def test_allow_listing_leaves_paths_usable(qapp, tmp_path):
+    """나열만 막는다 — 경로를 직접 넣어 쓰는 것은 그대로다."""
+    from custom_file_dialog import safety
+
+    target = tmp_path / "data.csv"
+    target.write_text("x", encoding="utf-8")
+
+    try:
+        safety.configure(allow_listing=False)
+        edit = FilePathEdit(mode="open_file")
+        edit.set_path(str(target))
+        assert edit.is_valid()                       # 유효성 판정은 그대로
+        assert edit.path() == str(target)
+        assert safety.is_reachable(str(tmp_path))    # 접근 판정도 그대로
+        assert safety.safe_isdir(str(tmp_path)) is True
+    finally:
+        safety.reset()
+
+
+def test_set_completer_toggles_at_runtime(qapp, tmp_path):
+    """위젯 하나만 자동완성을 껐다 켤 수 있다."""
+    for name in ("alpha", "beta"):
+        (tmp_path / name).mkdir()
+
+    edit = FilePathEdit(mode="open_file")
+    assert edit.completer_enabled()
+    assert edit.line_edit.completer() is not None
+
+    edit.set_completer(False)
+    assert not edit.completer_enabled()
+    assert edit.line_edit.completer() is None
+    edit.set_completer(False)                        # 중복 호출도 안전
+    assert not edit.completer_enabled()
+
+    # 껐어도 경로 입력과 유효성은 그대로
+    edit.set_path(str(tmp_path))
+    assert edit.path() == str(tmp_path)
+
+    edit.set_completer(True)
+    assert edit.completer_enabled()
+    model = edit.line_edit.completer().model()
+    model.setRootPath("")
+    index = model.index(str(tmp_path))
+    model.fetchMore(index)
+    _spin(qapp, 900)
+    assert model.rowCount(model.index(str(tmp_path))) == 2
+
+
+def test_completer_off_from_constructor(qapp):
+    """completer=False 면 처음부터 만들지 않는다."""
+    edit = FilePathEdit(mode="open_file", completer=False)
+    assert not edit.completer_enabled()
+    assert edit.line_edit.completer() is None
+
+
+def test_allow_listing_alone_installs_completer_guard(qapp):
+    """차단 경로도 min_depth 도 없이 allow_listing 만으로 다이얼로그를 지킨다."""
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import GuardedFileSystemModel, safety
+
+    try:
+        safety.configure(allow_listing=False)
+        dialog = QFileDialog()
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        assert hooks_module.guard_dialog(dialog) == ["completer"]
+
+        name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
+        model = name_edit.completer().model()
+        assert isinstance(model, GuardedFileSystemModel)
+        assert not model.canFetchMore(model.index(str(QDir.homePath())))
+        dialog.deleteLater()
+    finally:
+        safety.reset()
+
+
+def test_min_depth_alone_installs_completer_guard(qapp, shallow_tree):
+    """차단 경로가 없어도 min_depth 만으로 다이얼로그 자동완성을 갈아 끼운다."""
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import GuardedFileSystemModel, safety
+
+    _root, depth = shallow_tree
+    safety.configure(guarded_roots=[], min_depth=depth + 1)
+    assert safety.guarded_roots() == []
+
+    dialog = QFileDialog()
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    installed = hooks_module.guard_dialog(dialog)
+
+    # 자동완성 모델만 바꾼다. 얕은 자리를 "못 들어가게" 하는 설정은 아니므로
+    # 이벤트 필터(더블클릭 · 확정 차단)까지 걸지는 않는다.
+    assert installed == ["completer"]
+    name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    assert isinstance(name_edit.completer().model(), GuardedFileSystemModel)
+
+    dialog.deleteLater()
+
+
+def test_min_depth_off_installs_nothing(qapp):
+    """둘 다 꺼져 있으면 다이얼로그에 아무것도 걸지 않는다."""
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import safety
+
+    safety.reset()
+    dialog = QFileDialog()
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    assert hooks_module.guard_dialog(dialog) == []
+    dialog.deleteLater()
+
+
 def test_guard_dialog_installs_hooks(qapp, guarded_root):
     """다이얼로그의 자동완성 모델을 갈아 끼우고 이벤트 필터를 건다."""
     from qtpy.QtWidgets import QFileDialog, QLineEdit
 
-    from file_dialog_widget import GuardedFileSystemModel, guard_dialog
+    from custom_file_dialog import GuardedFileSystemModel, guard_dialog
 
     dialog = QFileDialog()
     dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
@@ -377,7 +639,7 @@ def test_guard_dialog_noop_without_guarded_roots(qapp, tmp_path):
     """차단 경로가 없으면 아무것도 걸지 않는다."""
     from qtpy.QtWidgets import QFileDialog
 
-    from file_dialog_widget import guard_dialog, safety
+    from custom_file_dialog import guard_dialog, safety
 
     safety.configure(guarded_roots=[])
     dialog = QFileDialog()
@@ -393,8 +655,8 @@ def test_enter_blocker_swallows_open_events(qapp, guarded_root):
     from qtpy.QtGui import QKeyEvent, QMouseEvent
     from qtpy.QtWidgets import QFileDialog, QTreeView
 
-    from file_dialog_widget import guard_dialog
-    from file_dialog_widget.hooks import _ItemBlocker
+    from custom_file_dialog import guard_dialog
+    from custom_file_dialog.hooks import _ItemBlocker
 
     dialog = QFileDialog()
     dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
@@ -451,7 +713,7 @@ def _guarded_dialog_in(qapp, directory):
     """차단 경로 안(``/user/jekai``)에서 연 다이얼로그와 설치된 장치들."""
     from qtpy.QtWidgets import QFileDialog
 
-    from file_dialog_widget import guard_dialog
+    from custom_file_dialog import guard_dialog
 
     dialog = QFileDialog()
     dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
@@ -467,7 +729,7 @@ def test_combo_blocker_swallows_guarded_entry(qapp, guarded_root):
     from qtpy.QtGui import QKeyEvent, QMouseEvent
     from qtpy.QtWidgets import QComboBox
 
-    from file_dialog_widget.hooks import _ItemBlocker
+    from custom_file_dialog.hooks import _ItemBlocker
 
     inner = os.path.join(guarded_root, "jekai")
     dialog, installed = _guarded_dialog_in(qapp, inner)
@@ -520,7 +782,7 @@ def test_accept_blocker_swallows_guarded_path(qapp, guarded_root):
     from qtpy.QtGui import QKeyEvent, QMouseEvent
     from qtpy.QtWidgets import QDialogButtonBox, QLineEdit
 
-    from file_dialog_widget.hooks import _AcceptBlocker
+    from custom_file_dialog.hooks import _AcceptBlocker
 
     inner = os.path.join(guarded_root, "jekai")
     dialog, installed = _guarded_dialog_in(qapp, inner)
@@ -570,7 +832,7 @@ def test_blockers_survive_deleted_widgets(qapp, guarded_root):
     from qtpy.QtCore import QEvent, QPointF, Qt
     from qtpy.QtGui import QMouseEvent
 
-    from file_dialog_widget.hooks import _AcceptBlocker, _ItemBlocker
+    from custom_file_dialog.hooks import _AcceptBlocker, _ItemBlocker
 
     inner = os.path.join(guarded_root, "jekai")
     dialog, installed = _guarded_dialog_in(qapp, inner)
@@ -619,7 +881,7 @@ def test_resolve_start_dir_skips_dead_mount(dead_nfs, tmp_path):
 
 def test_widget_path_timeout_is_on_by_default(qapp, monkeypatch):
     """안전 확인은 기본으로 켜져 있고, 로컬 경로에는 부담을 주지 않는다."""
-    from file_dialog_widget import safety
+    from custom_file_dialog import safety
 
     edit = FilePathEdit(mode="open_file")
     assert edit.path_timeout() == safety.DEFAULT_TIMEOUT
@@ -915,12 +1177,12 @@ def _make_tree(tmp_path):
 
 def test_favorites_base_dir_configuration(qapp, tmp_path, monkeypatch):
     """즐겨찾기 저장 위치를 앱 전체 기본값 / 인스턴스별로 정할 수 있다."""
-    from file_dialog_widget import (
+    from custom_file_dialog import (
         configure_favorites,
         configured_base_dir,
         default_base_dir,
     )
-    from file_dialog_widget import favorites as favorites_module
+    from custom_file_dialog import favorites as favorites_module
 
     # 테스트가 전역 상태를 남기지 않도록 원래 값으로 되돌린다
     monkeypatch.setattr(favorites_module, "_CONFIGURED_BASE_DIR", None)
@@ -1279,7 +1541,7 @@ def test_widget_records_on_browse(qapp, tmp_path, monkeypatch):
 def test_widget_recent_sidebar_and_icon(qapp, tmp_path, monkeypatch):
     """사이드바에 최근 파일이 덧붙고, 시계 아이콘이 붙는다."""
     from qtpy.QtCore import QFileInfo
-    from file_dialog_widget import FavoritesStore, RecentStore, clock_icon
+    from custom_file_dialog import FavoritesStore, RecentStore, clock_icon
 
     store = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
     favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
@@ -1381,9 +1643,144 @@ def test_sidebar_current_dir_deduped(qapp, tmp_path):
     ]
 
 
+def test_sidebar_marks_home_and_current(qapp, tmp_path):
+    """홈은 집 아이콘으로, 현재 위치는 "현재 위치"라는 이름으로 표시한다."""
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+
+    here = str(tmp_path)
+    marks = places.sidebar_marks(here)
+    assert set(marks) == {QDir.homePath(), here}
+
+    home_label, home_mark = marks[QDir.homePath()]
+    assert home_label is None                    # 이름은 Qt 가 붙인 그대로 둔다
+    assert not home_mark.isNull()
+    assert home_mark.pixmap(16, 16).toImage() == home_icon().pixmap(16, 16).toImage()
+
+    assert marks[here] == (places_module.CURRENT_LABEL, None)  # 아이콘은 폴더 그대로
+    assert places_module.CURRENT_LABEL == "현재 위치"
+
+
+def test_sidebar_marks_skip_home_when_current(qapp, tmp_path):
+    """홈에서 열면 두 항목이 하나로 합쳐지므로 홈 표시만 남는다."""
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+
+    marks = Places(favorites=favorites).sidebar_marks(QDir.homePath())
+    assert set(marks) == {QDir.homePath()}
+    assert marks[QDir.homePath()][0] is None     # "현재 위치"로 부르지 않는다
+
+
+def test_sidebar_marks_respect_options(qapp, tmp_path):
+    """사이드바를 직접 주거나 아이콘을 끄면 그만큼만 손댄다."""
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    here = str(tmp_path)
+
+    # 기준 목록을 직접 준 경우엔 "현재 위치" 항목을 붙이지 않았으므로 이름도 없다
+    given = Places(favorites=favorites, sidebar_urls=["~", here])
+    assert set(given.sidebar_marks(here)) == {QDir.homePath()}
+
+    # icon=False 면 홈도 Qt 기본 폴더 아이콘 그대로
+    plain = Places(favorites=favorites, icon=False)
+    assert set(plain.sidebar_marks(here)) == {here}
+
+    # 사이드바에 얹을 게 없어 손대지 않는 경우엔 표시도 바꾸지 않는다
+    assert Places().sidebar_marks(here) == {}
+
+
+def test_sidebar_marks_applied_to_dialog(qapp, tmp_path):
+    """다이얼로그 사이드바가 실제로 바뀐 이름·아이콘으로 그려진다."""
+    from qtpy.QtWidgets import QFileDialog, QListView, QStyleOptionViewItem
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+    here = str(tmp_path)
+
+    dialog = QFileDialog()
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    dialog.setDirectory(here)
+    dialog.setSidebarUrls(to_urls(places.sidebar_urls(here)))
+    delegate = hooks_module.mark_sidebar(dialog, places, here)
+    assert delegate is not None
+
+    # 델리게이트는 다이얼로그에 매달려 있어야 산다. 사이드바는 findChild 로 그때
+    # 그때 만들어지는 임시 래퍼라 거기 매달면 파이썬 객체가 수거된다.
+    assert delegate.parent() is dialog
+    sidebar = dialog.findChild(QListView, "sidebar")
+    assert sidebar.itemDelegate() is delegate
+
+    def drawn(row):
+        option = QStyleOptionViewItem()
+        delegate.initStyleOption(option, sidebar.model().index(row, 0))
+        return option
+
+    home, current = drawn(0), drawn(1)
+    assert home.text == os.path.basename(QDir.homePath())   # 이름은 그대로
+    assert home.icon.pixmap(16, 16).toImage() == home_icon().pixmap(16, 16).toImage()
+    assert current.text == "현재 위치"
+    assert current.icon.pixmap(16, 16).toImage() != home.icon.pixmap(16, 16).toImage()
+
+    dialog.deleteLater()
+
+
+def test_sidebar_marks_keep_disabled_look(qapp, tmp_path):
+    """열 수 없는 위치를 흐리게 하던 Qt 기본 델리게이트의 처리를 이어받는다."""
+    from qtpy.QtWidgets import QFileDialog, QListView, QStyle, QStyleOptionViewItem
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+    here = str(tmp_path)
+
+    dialog = QFileDialog()
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    dialog.setDirectory(here)
+    # 없는 경로를 하나 섞으면 Qt 가 그 항목의 EnabledRole 을 False 로 둔다
+    missing = str(tmp_path / "없어진폴더")
+    dialog.setSidebarUrls(to_urls(places.sidebar_urls(here)) + to_urls([missing]))
+    delegate = hooks_module.mark_sidebar(dialog, places, here)
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    enabled_flag = getattr(QStyle, "StateFlag", QStyle).State_Enabled
+
+    def enabled(row):
+        option = QStyleOptionViewItem()
+        option.state |= enabled_flag         # 뷰가 그릴 때처럼 켜 두고 시작한다
+        delegate.initStyleOption(option, sidebar.model().index(row, 0))
+        return bool(option.state & enabled_flag)
+
+    rows = sidebar.model().rowCount()
+    assert all(enabled(row) for row in range(rows - 1))   # 홈 · 현재 위치 · 분류
+    assert not enabled(rows - 1)                          # 없어진 폴더
+
+    dialog.deleteLater()
+
+
+def test_home_icon(qapp):
+    """집 아이콘이 요청한 크기로 그려진다."""
+    icon = home_icon(sizes=(16, 32))
+    assert not icon.isNull()
+    assert sorted((s.width(), s.height()) for s in icon.availableSizes()) == [
+        (16, 16),
+        (32, 32),
+    ]
+    image = icon.pixmap(32, 32).toImage()
+    assert image.pixelColor(16, 24).alpha() == 0      # 아래 가운데는 문으로 뚫려 있다
+    assert image.pixelColor(16, 8).alpha() > 0        # 지붕은 칠해져 있다
+    assert image.pixelColor(0, 0).alpha() == 0        # 모서리는 비어 있다
+
+
 def test_clock_icon(qapp):
     """시계 아이콘이 요청한 크기로 그려진다."""
-    from file_dialog_widget import clock_icon
+    from custom_file_dialog import clock_icon
 
     icon = clock_icon(sizes=(16, 32))
     assert not icon.isNull()
@@ -1462,6 +1859,89 @@ def test_follow_link_directories(qapp, tmp_path):
 
     # 얹을 게 없는 Places 는 거짓이라 install_hooks 가 링크 추적을 건너뛴다
     assert not Places()
+
+
+def test_follow_link_on_parent(qapp, tmp_path):
+    """분류 폴더에서 링크를 고르고 "상위 폴더"를 누르면 원본 쪽으로 올라간다."""
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    favorites.add("설계", output)
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.follow_link_on_parent(dialog, places)
+    button = dialog.findChild(QToolButton, "toParentButton")
+
+    def press_up(selected=None):
+        """항목을 고른 뒤 "상위 폴더"를 누른 상황을 그대로 재현한다."""
+        dialog.setDirectory(category)
+        if selected is not None:
+            dialog.currentChanged.emit(selected)
+        button.click()                      # Qt 가 분류 폴더의 부모로 옮긴 뒤...
+        return dialog.directory().absolutePath()
+
+    # 파일 링크 -> 원본 파일이 있는 폴더
+    assert press_up(os.path.join(category, "설계도.csv")) == os.path.dirname(design)
+    # 폴더 링크 -> 원본 폴더가 있는 폴더
+    assert press_up(os.path.join(category, "산출물")) == os.path.dirname(output)
+
+    # 아무것도 고르지 않았으면 Qt 기본 동작 그대로(저장소로 올라간다)
+    assert press_up() == os.path.normpath(favorites.base_dir)
+    # 링크가 아닌 것을 골랐을 때도 기본 동작
+    assert press_up(os.path.join(category, "없는것")) == os.path.normpath(
+        favorites.base_dir
+    )
+
+
+def test_follow_link_on_parent_outside_store(qapp, tmp_path):
+    """저장소 밖에서는 손대지 않는다 — 묵은 선택이 새어 나가지 않는다."""
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.follow_link_on_parent(dialog, places)
+    button = dialog.findChild(QToolButton, "toParentButton")
+
+    # 링크를 고른 뒤 저장소 밖으로 옮기고 상위 폴더를 누른다
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    inner = tmp_path / "projA" / "안쪽"
+    inner.mkdir()
+    dialog.setDirectory(str(inner))
+    button.click()
+    assert dialog.directory().absolutePath() == str(tmp_path / "projA")
+
+
+def test_follow_link_on_parent_installed_by_hooks(qapp, tmp_path):
+    """install_hooks 가 함께 걸어 준다."""
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    favorites.add("설계", design)
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    hooks_module.install_hooks(dialog, places, category)
+
+    dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+    dialog.findChild(QToolButton, "toParentButton").click()
+    assert dialog.directory().absolutePath() == os.path.dirname(design)
 
 
 def test_show_link_target_in_combo(qapp, tmp_path):
@@ -1569,7 +2049,7 @@ def _menu_dialog(store, start_dir, extra_sidebar=(), confirm=False):
     from qtpy.QtCore import QUrl
     from qtpy.QtWidgets import QFileDialog
 
-    from file_dialog_widget import FavoritesMenus
+    from custom_file_dialog import FavoritesMenus
 
     places = _places_of(store)
 
@@ -1586,16 +2066,19 @@ def _menu_dialog(store, start_dir, extra_sidebar=(), confirm=False):
 
 
 def _view_menu(menus, view, index):
-    """파일 목록 우클릭 메뉴를 만들어 돌려준다(모달 exec 는 하지 않는다)."""
+    """파일 목록 우클릭 메뉴를 실제 코드로 구성해 돌려준다(모달 exec 는 안 한다)."""
     from qtpy.QtWidgets import QMenu
 
-    path = menus.path_at(view, index)
-    menu = QMenu()
-    if path and not menus._places.is_inside(path):
-        menus._add_favorite_submenu(menu, path)
-        menu.addSeparator()
-    menus._add_default_actions(menu, path)
-    return path, menu
+    return menus.path_at(view, index), (menus.build_view_menu(view, index) or QMenu())
+
+
+def _menu_labels(menu):
+    """구분선과 서브메뉴를 뺀 메뉴 항목 이름들."""
+    return [
+        action.text()
+        for action in menu.actions()
+        if not action.isSeparator() and action.menu() is None
+    ]
 
 
 def _submenu_of(menu):
@@ -1695,11 +2178,126 @@ def test_add_to_favorites_skips_links(qapp, tmp_path):
     dialog.close()
 
 
+def test_remove_entry_menu_replaces_delete(qapp, tmp_path):
+    """분류 안에서는 "삭제" 대신 "'분류'에서 제거" 가 나온다."""
+    from qtpy.QtWidgets import QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+    recent.record(design)
+
+    def labels_in(directory):
+        dialog, menus = _menu_dialog([store, recent], directory)
+        dialog.show()
+        _spin(qapp, 400)
+        tree = dialog.findChild(QTreeView, "treeView")
+        model, root = tree.model(), tree.rootIndex()
+        rows = {model.index(r, 0, root).data(): model.index(r, 0, root)
+                for r in range(model.rowCount(root))}
+        _path, menu = _view_menu(menus, tree, rows["설계도.csv"])
+        texts = _menu_labels(menu)
+        dialog.close()
+        return texts
+
+    # 즐겨찾기 분류 -> 분류 이름이 그대로 메뉴에 들어간다
+    favorite_labels = labels_in(store.category_dir("설계"))
+    assert "'설계'에서 제거" in favorite_labels
+    assert not any("Delete" in t for t in favorite_labels)
+    assert any("Rename" in t for t in favorite_labels)      # 이름 바꾸기는 남는다
+
+    # 최근 파일 -> 항목 이름이 그대로 메뉴에 들어간다
+    recent_labels = labels_in(recent.category_dir(recent.name))
+    assert "'최근 파일'에서 제거" in recent_labels
+    assert not any("Delete" in t for t in recent_labels)
+
+    # 보통 폴더는 예전 그대로 (Qt 기본 "삭제" 가 있고 "제거" 는 없다)
+    plain_labels = labels_in(os.path.dirname(design))
+    assert any("Delete" in t for t in plain_labels)
+    assert not any("에서 제거" in t for t in plain_labels)
+
+
+def test_remove_entry_keeps_original_file(qapp, tmp_path):
+    """제거는 링크만 지운다 — 원본 파일과 다른 항목은 그대로."""
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+    store.add("설계", report)
+
+    _dialog, menus = _menu_dialog(store, store.category_dir("설계"))
+    removed = []
+    menus.entryRemoved.connect(lambda c, p: removed.append((c, p)))
+
+    link = os.path.join(store.category_dir("설계"), "설계도.csv")
+    assert menus.remove_entry(store, "설계", link)
+
+    assert store.items("설계") == [report]          # 그 항목만 빠졌다
+    assert os.path.exists(design)                   # 원본은 그대로
+    assert removed == [("설계", design)]            # 시그널은 원본 경로로
+    assert not os.path.lexists(link)
+
+    # 없는 항목을 다시 빼려 하면 조용히 False
+    assert not menus.remove_entry(store, "설계", link)
+    assert not menus.remove_entry(None, "설계", link)
+    assert not menus.remove_entry(store, "설계", "")
+
+
+def test_remove_entry_only_direct_children(qapp, tmp_path):
+    """분류 폴더 **바로 아래** 항목에만 붙는다(링크 안쪽은 원본 쪽 규칙)."""
+    from qtpy.QtWidgets import QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    _design, _report, output = _make_tree(tmp_path)
+    (tmp_path / "projB" / "산출물" / "안쪽").mkdir()
+    store.add("설계", output)
+
+    dialog, menus = _menu_dialog(store, store.category_dir("설계"))
+    dialog.show()
+    _spin(qapp, 400)
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+
+    # 분류 바로 아래의 폴더 링크 -> 제거 메뉴
+    index = model.index(0, 0, root)
+    store_at, category, _link = menus.entry_at(tree, index)
+    assert store_at is store and category == "설계"
+
+    # 링크를 따라 들어간 안쪽은 원본이므로 손대지 않는다
+    dialog.setDirectory(output)
+    _spin(qapp, 400)
+    inner_root = tree.rootIndex()
+    inner = model.index(0, 0, inner_root)
+    assert menus.entry_at(tree, inner) == (None, None, None)
+    dialog.close()
+
+
+def test_remove_entry_menu_without_favorites(qapp, tmp_path):
+    """최근 파일만 써도 파일 목록에 "제거" 메뉴가 걸린다."""
+    from qtpy.QtWidgets import QTreeView
+
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, _output = _make_tree(tmp_path)
+    recent.record(design)
+
+    dialog, menus = _menu_dialog(recent, recent.category_dir(recent.name))
+    assert menus._places.favorites_store() is None
+    dialog.show()
+    _spin(qapp, 400)
+
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+    _path, menu = _view_menu(menus, tree, model.index(0, 0, root))
+    assert "'최근 파일'에서 제거" in _menu_labels(menu)
+    assert _submenu_of(menu) is None            # 즐겨찾기가 없으니 추가 메뉴도 없다
+    dialog.close()
+
+
 def test_add_menu_can_be_disabled(qapp, tmp_path, monkeypatch):
     """add_menu=False 면 파일 목록 메뉴는 건드리지 않고 사이드바만 건다."""
     from qtpy.QtWidgets import QFileDialog, QListView, QTreeView
 
-    from file_dialog_widget import FavoritesMenus
+    from custom_file_dialog import FavoritesMenus
 
     store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
     design, _report, _output = _make_tree(tmp_path)
@@ -1777,7 +2375,7 @@ def test_sidebar_menu_fixed_urls(qapp, tmp_path):
     from qtpy.QtCore import QUrl
     from qtpy.QtWidgets import QFileDialog
 
-    from file_dialog_widget import FavoritesMenus
+    from custom_file_dialog import FavoritesMenus
 
     assert Places().fixed_urls() == [QDir.homePath()]
 
@@ -1862,8 +2460,8 @@ def test_sidebar_menu_keeps_computer_entry(qapp, tmp_path):
     from qtpy.QtCore import QUrl
     from qtpy.QtWidgets import QFileDialog, QListView
 
-    from file_dialog_widget import FavoritesMenus
-    from file_dialog_widget.menus import URL_ROLE
+    from custom_file_dialog import FavoritesMenus
+    from custom_file_dialog.menus import URL_ROLE
 
     store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
     design, _report, _output = _make_tree(tmp_path)
@@ -2292,6 +2890,166 @@ def test_path_history_persists(tmp_path):
 
     history.clear()
     assert history.items() == []
+
+
+# ------------------------------------------- 용도별 시작 위치 (remember / settings_key)
+def _dialog_start_dirs(monkeypatch):
+    """exec_file_dialog 이 실제로 어느 폴더에서 열었는지 기록하는 스파이."""
+    seen = []
+    result = {"paths": []}
+
+    def fake_run(parent, mode, caption, directory, *args, **kwargs):
+        seen.append(directory)
+        return list(result["paths"]), ""
+
+    monkeypatch.setattr(dialog_module, "_run_dialog", fake_run)
+    return seen, result
+
+
+def test_remember_keeps_start_dir_per_purpose(qapp, tmp_path, monkeypatch):
+    """용도(remember)마다 마지막에 쓰던 폴더를 따로 기억한다."""
+    from custom_file_dialog import exec_file_dialog, last_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+
+    csv_dir = tmp_path / "입력csv"
+    out_dir = tmp_path / "결과"
+    csv_dir.mkdir()
+    out_dir.mkdir()
+    (csv_dir / "a.csv").write_text("x")
+    (out_dir / "r.json").write_text("x")
+
+    seen, result = _dialog_start_dirs(monkeypatch)
+
+    # 기억이 없으면 현재 작업 디렉터리에서 연다
+    result["paths"] = [str(csv_dir / "a.csv")]
+    exec_file_dialog(mode="open_file", remember="입력csv")
+    assert seen[-1] == os.getcwd()
+
+    result["paths"] = [str(out_dir / "r.json")]
+    exec_file_dialog(mode="save_file", remember="결과저장")
+    assert seen[-1] == os.getcwd()
+
+    # 다시 열면 각자 자기가 마지막에 쓰던 폴더에서 연다
+    result["paths"] = []
+    exec_file_dialog(mode="open_file", remember="입력csv")
+    assert seen[-1] == str(csv_dir)
+    exec_file_dialog(mode="save_file", remember="결과저장")
+    assert seen[-1] == str(out_dir)
+
+    # 서로 섞이지 않는다
+    assert last_dir("입력csv") == str(csv_dir)
+    assert last_dir("결과저장") == str(out_dir)
+    assert last_dir("한번도안쓴용도") is None
+
+
+def test_remember_off_by_default(qapp, tmp_path, monkeypatch):
+    """remember 를 주지 않으면 아무것도 기억하지 않는다(기존 동작)."""
+    from custom_file_dialog import exec_file_dialog, last_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+    target = tmp_path / "a.csv"
+    target.write_text("x")
+
+    seen, result = _dialog_start_dirs(monkeypatch)
+    result["paths"] = [str(target)]
+
+    exec_file_dialog(mode="open_file")
+    assert seen[-1] == ""                       # 시작 폴더를 정하지 않는다
+    assert last_dir("") is None
+
+
+def test_remember_respects_explicit_directory(qapp, tmp_path, monkeypatch):
+    """directory 를 직접 주면 그쪽이 우선이고, 기억은 그래도 갱신된다."""
+    from custom_file_dialog import exec_file_dialog, last_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+    first = tmp_path / "처음"
+    forced = tmp_path / "강제"
+    first.mkdir()
+    forced.mkdir()
+    (first / "a.csv").write_text("x")
+    (forced / "b.csv").write_text("x")
+
+    seen, result = _dialog_start_dirs(monkeypatch)
+    result["paths"] = [str(first / "a.csv")]
+    exec_file_dialog(mode="open_file", remember="용도")
+    assert last_dir("용도") == str(first)
+
+    # 기억이 있어도 directory 가 이긴다
+    result["paths"] = [str(forced / "b.csv")]
+    exec_file_dialog(mode="open_file", remember="용도", directory=str(forced))
+    assert seen[-1] == str(forced)
+    assert last_dir("용도") == str(forced)      # 기억은 갱신된다
+
+
+def test_remember_falls_back_when_dir_is_gone(qapp, tmp_path, monkeypatch):
+    """기억해 둔 폴더가 사라졌으면 안전한 곳으로 대체한다."""
+    from custom_file_dialog import exec_file_dialog, remember_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+
+    gone = tmp_path / "사라질폴더"
+    gone.mkdir()
+    remember_dir("용도", str(gone))
+    gone.rmdir()
+
+    seen, _result = _dialog_start_dirs(monkeypatch)
+    exec_file_dialog(mode="open_file", remember="용도")
+    assert seen[-1] == os.getcwd()
+
+
+def test_remember_shares_store_with_widget(qapp, tmp_path, monkeypatch):
+    """같은 이름이면 위젯(settings_key)과 다이얼로그(remember)가 기억을 주고받는다."""
+    from custom_file_dialog import exec_file_dialog, last_dir, remember_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+
+    from_dialog = tmp_path / "다이얼로그"
+    from_widget = tmp_path / "위젯"
+    from_dialog.mkdir()
+    from_widget.mkdir()
+    (from_dialog / "a.csv").write_text("x")
+    (from_widget / "b.csv").write_text("x")
+
+    # 다이얼로그가 고른 것을 위젯이 이어받는다
+    _seen, result = _dialog_start_dirs(monkeypatch)
+    result["paths"] = [str(from_dialog / "a.csv")]
+    exec_file_dialog(mode="open_file", remember="공용")
+
+    edit = FilePathEdit(mode="open_file", settings_key="공용")
+    assert edit._start_dir_now() == str(from_dialog)
+
+    # 반대로 위젯이 고른 것을 다이얼로그가 이어받는다
+    remember_dir("공용", str(from_widget / "b.csv"))
+    assert last_dir("공용") == str(from_widget)
+
+
+def test_remember_dir_helpers(qapp, tmp_path, monkeypatch):
+    """remember_dir 는 파일이면 그 파일이 있는 폴더를 기억한다."""
+    from custom_file_dialog import last_dir, remember_dir
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+
+    target = tmp_path / "a.csv"
+    target.write_text("x")
+
+    assert remember_dir("k", str(target)) == str(tmp_path)      # 파일 -> 그 폴더
+    assert last_dir("k") == str(tmp_path)
+    assert remember_dir("k", str(tmp_path)) == str(tmp_path)    # 폴더 -> 그대로
+
+    # 빈 값은 아무 일도 하지 않는다
+    assert remember_dir("k", "") is None
+    assert remember_dir("", str(target)) is None
+    assert last_dir("") is None
+    assert last_dir(None) is None
+    assert last_dir("k") == str(tmp_path)                       # 그대로 남아 있다
 
 
 def test_memory_history_without_key():
