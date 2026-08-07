@@ -359,13 +359,12 @@ class FilePathEdit(QWidget):
         코드에서 직접 호출해도 되고(버튼 없이 쓰는 경우), 취소하면 빈
         리스트를 반환하며 현재 값은 그대로 둔다.
         """
-        start = self._start_dir_now()
         paths, chosen = dialog_module.exec_file_dialog(
             parent=self.window(),
             mode=self._mode,
             caption=self._caption,
-            directory=start,
-            name_filter=self._name_filter,
+            directory=self._start_dir_now(),
+            filters=self._name_filter,
             selected_filter=self._selected_filter,
             native=self._native,
             default_suffix=self._default_suffix,
@@ -376,9 +375,11 @@ class FilePathEdit(QWidget):
         if not paths:
             return []
 
-        # 즐겨찾기/최근 파일 항목에서 고르면 링크 경로가 오므로 원본으로 되돌린다.
+        # exec_file_dialog 도 같은 손질을 하지만, 그 함수는 **갈아 끼우라고 열어 둔
+        # 자리**다(테스트에서 monkeypatch 한다). 위젯이 내놓는 path() 가 늘 원본
+        # 경로에 확장자까지 붙은 값이도록 여기서 한 번 더 보장한다. 둘 다 여러 번
+        # 적용해도 결과가 같은 연산이라 겹쳐도 안전하다.
         paths = self._places().resolve_all(paths)
-
         if self._mode == SelectMode.SAVE_FILE:
             suffix = self._default_suffix or suffix_of(self._selected_filter)
             paths = [ensure_suffix(paths[0], suffix)]

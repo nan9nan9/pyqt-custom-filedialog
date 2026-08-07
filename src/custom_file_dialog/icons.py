@@ -12,6 +12,8 @@ from qtpy.QtCore import QFileInfo, QPointF, Qt
 from qtpy.QtGui import QColor, QIcon, QPainter, QPixmap, QPolygonF
 from qtpy.QtWidgets import QFileIconProvider, QStyle
 
+from .qt_compat import scoped_attr
+
 # 만들어 둘 크기들
 ICON_SIZES = (16, 20, 24, 32, 48)
 
@@ -116,9 +118,11 @@ def home_icon(color=HOME_COLOR, sizes=ICON_SIZES, inset=INSET):
 
 def standard_icon(widget, name):
     """QStyle 표준 아이콘을 바인딩에 무관하게 얻는다 (없으면 None)."""
-    scope = getattr(QStyle, "StandardPixmap", QStyle)
-    pixmap = getattr(scope, name, None)
-    return None if pixmap is None else widget.style().standardIcon(pixmap)
+    try:
+        pixmap = scoped_attr(QStyle, "StandardPixmap", name)
+    except AttributeError:
+        return None
+    return widget.style().standardIcon(pixmap)
 
 
 class CategoryIconProvider(QFileIconProvider):

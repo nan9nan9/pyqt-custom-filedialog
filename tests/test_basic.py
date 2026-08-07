@@ -51,6 +51,8 @@ from custom_file_dialog import dialog as dialog_module  # noqa: E402
 from custom_file_dialog import history as history_module  # noqa: E402
 from custom_file_dialog import hooks as hooks_module  # noqa: E402
 from custom_file_dialog import places as places_module  # noqa: E402
+from custom_file_dialog import qt_compat  # noqa: E402
+from custom_file_dialog import sidebar as sidebar_module  # noqa: E402
 from custom_file_dialog import recent as recent_module  # noqa: E402
 
 
@@ -657,7 +659,7 @@ def test_enter_blocker_swallows_open_events(qapp, guarded_root):
     from qtpy.QtWidgets import QFileDialog, QTreeView
 
     from custom_file_dialog import guard_dialog
-    from custom_file_dialog.hooks import _ItemBlocker
+    from custom_file_dialog.guard import _ItemBlocker
 
     dialog = QFileDialog()
     dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
@@ -730,7 +732,7 @@ def test_combo_blocker_swallows_guarded_entry(qapp, guarded_root):
     from qtpy.QtGui import QKeyEvent, QMouseEvent
     from qtpy.QtWidgets import QComboBox
 
-    from custom_file_dialog.hooks import _ItemBlocker
+    from custom_file_dialog.guard import _ItemBlocker
 
     inner = os.path.join(guarded_root, "jekai")
     dialog, installed = _guarded_dialog_in(qapp, inner)
@@ -783,7 +785,7 @@ def test_accept_blocker_swallows_guarded_path(qapp, guarded_root):
     from qtpy.QtGui import QKeyEvent, QMouseEvent
     from qtpy.QtWidgets import QDialogButtonBox, QLineEdit
 
-    from custom_file_dialog.hooks import _AcceptBlocker
+    from custom_file_dialog.guard import _AcceptBlocker
 
     inner = os.path.join(guarded_root, "jekai")
     dialog, installed = _guarded_dialog_in(qapp, inner)
@@ -833,7 +835,7 @@ def test_blockers_survive_deleted_widgets(qapp, guarded_root):
     from qtpy.QtCore import QEvent, QPointF, Qt
     from qtpy.QtGui import QMouseEvent
 
-    from custom_file_dialog.hooks import _AcceptBlocker, _ItemBlocker
+    from custom_file_dialog.guard import _AcceptBlocker, _ItemBlocker
 
     inner = os.path.join(guarded_root, "jekai")
     dialog, installed = _guarded_dialog_in(qapp, inner)
@@ -974,10 +976,10 @@ def test_exec_file_dialog_dispatch(qapp, monkeypatch):
     # native=False 면 DontUseNativeDialog 옵션이 켜져서 전달된다
     dialog_module.exec_file_dialog(mode=SelectMode.OPEN_FILE, native=False)
     options = seen["open"][-1]
-    assert options & dialog_module._option("DontUseNativeDialog")
+    assert options & qt_compat.option_value("DontUseNativeDialog")
 
     dialog_module.exec_file_dialog(mode=SelectMode.OPEN_FILE, native=True)
-    assert not (seen["open"][-1] & dialog_module._option("DontUseNativeDialog"))
+    assert not (seen["open"][-1] & qt_compat.option_value("DontUseNativeDialog"))
 
 
 def test_options_are_accepted_by_qt(qapp):
@@ -986,8 +988,8 @@ def test_options_are_accepted_by_qt(qapp):
 
     dlg = QFileDialog()
     dlg.setOptions(dialog_module.make_options(native=False, show_dirs_only=True))
-    assert dlg.options() & dialog_module._option("ShowDirsOnly")
-    assert dlg.options() & dialog_module._option("DontUseNativeDialog")
+    assert dlg.options() & qt_compat.option_value("ShowDirsOnly")
+    assert dlg.options() & qt_compat.option_value("DontUseNativeDialog")
 
 
 def test_cancel_returns_empty(qapp, monkeypatch):
@@ -1092,8 +1094,8 @@ def test_sidebar_urls_applied_to_dialog(qapp, monkeypatch, tmp_path):
     assert paths == []                                  # 취소
     assert [u.toLocalFile() for u in seen["urls"]] == ["/mnt/data", str(tmp_path)]
     # 사이드바를 쓰려면 네이티브 창을 못 쓰므로 자동으로 꺼져 있어야 한다
-    assert seen["options"] & dialog_module._option("DontUseNativeDialog")
-    assert seen["file_mode"] == dialog_module._enum("FileMode", "ExistingFiles")
+    assert seen["options"] & qt_compat.option_value("DontUseNativeDialog")
+    assert seen["file_mode"] == qt_compat.enum_value("FileMode", "ExistingFiles")
 
 
 def test_sidebar_urls_from_widget(qapp, monkeypatch, tmp_path):
@@ -1393,14 +1395,14 @@ def test_sidebar_width_fits_items(qapp, tmp_path):
     # 기본: 내용이 필요한 만큼은 확보된다
     width, _files, needed = widths()
     assert width >= needed
-    assert width >= dialog_module.MIN_SIDEBAR_WIDTH
+    assert width >= sidebar_module.MIN_SIDEBAR_WIDTH
 
     # 직접 지정하면 그대로
     assert widths(sidebar_width=220)[0] == 220
 
     # 0 이면 내용에 맞추지는 않지만, 최소 폭 아래로는 내려가지 않는다
     untouched = widths(sidebar_width=0)[0]
-    assert untouched >= dialog_module.MIN_SIDEBAR_WIDTH
+    assert untouched >= sidebar_module.MIN_SIDEBAR_WIDTH
 
     # 아무리 넓게 줘도 파일 목록 자리는 남긴다
     assert widths(sidebar_width=5000)[1] >= 200
@@ -3097,7 +3099,7 @@ def test_browse_fills_path(qapp, fake_dialog, tmp_path):
 
     # 다이얼로그에는 조립된 Qt 필터 문자열이 그대로 전달된다
     kwargs = fake_dialog["calls"][0]
-    assert kwargs["name_filter"] == "텍스트 (*.txt);;모든 파일 (*)"
+    assert kwargs["filters"] == "텍스트 (*.txt);;모든 파일 (*)"
     assert kwargs["mode"] == SelectMode.OPEN_FILE
 
 

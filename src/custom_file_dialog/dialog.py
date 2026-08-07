@@ -1,64 +1,36 @@
-"""QFileDialog 호출을 모드별로 감싼 얇은 래퍼.
+"""파일 다이얼로그 — 이 패키지의 알맹이.
 
-바인딩(PyQt5/PyQt6/PySide2/PySide6)마다 미묘하게 다른 반환값/enum 접근을
-여기서 흡수해서, 위젯 쪽은 항상 ``(경로 리스트, 선택된 필터)`` 만 받게 한다.
-테스트에서는 이 모듈의 :func:`exec_file_dialog` 만 monkeypatch 하면 실제
-다이얼로그를 띄우지 않고 위젯 동작을 검증할 수 있다.
+:class:`CustomFileDialog` 가 **유일한 구현**이다. ``QFileDialog`` 를 물려받아,
+사이드바 구성 · 즐겨찾기 · 링크 추적 · 차단 경로 방어 · 용도별 시작 위치를
+생성자 인자로 켠다. 실제로 거는 일은 각 모듈이 하고
+(:mod:`~custom_file_dialog.hooks` 가 한 번에 걸어 준다) 여기서는 조립만 한다.
+
+:func:`exec_file_dialog` 은 그 클래스를 한 줄로 쓰는 겉면이다. 꾸밀 것이 없고
+``native`` 가 참일 때만 ``QFileDialog`` 정적 메서드를 써서 OS 네이티브 창으로
+연다. 그 경로의 반환값 정규화는 :func:`_run_dialog` 이 맡는다.
+
+    exec_file_dialog(...)
+        ├─ 꾸밀 것이 있으면  -> CustomFileDialog(...).exec()
+        └─ 없고 native 면    -> _run_dialog(...)  = QFileDialog 정적 메서드
+
+:func:`resolve_start_dir` 은 "어디서 열까"를 정하는 정책 하나만 담는다.
+테스트에서는 :func:`exec_file_dialog` 이나 :func:`_run_dialog` 을 monkeypatch
+하면 실제 창 없이 위쪽 동작을 검증할 수 있다.
 """
 
 import os
 
-from qtpy.QtWidgets import QFileDialog, QListView, QSplitter
+from qtpy.QtWidgets import QFileDialog
 
 from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
 from .favorites import FavoritesStore
-from .places import Places
-from .recent import DEFAULT_RECENT_MAX, RecentStore
-from .util import to_urls
 from .filters import build_filter, ensure_suffix, suffix_of
-
-
-def _enum(enum_name, value_name):
-    """스코프 enum 값을 바인딩에 무관하게 얻는다.
-
-    Qt6 은 ``QFileDialog.FileMode.ExistingFile`` 만 허용하고 Qt5 는 둘 다
-    허용한다. 스코프가 있으면 그쪽을 먼저 본다.
-    """
-    scope = getattr(QFileDialog, enum_name, QFileDialog)
-    return getattr(scope, value_name)
-
-
-def _option(name):
-    """QFileDialog.Option 값을 바인딩에 무관하게 얻는다."""
-    return _enum("Option", name)
-
-
-def _no_options():
-    """아무 옵션도 켜지지 않은 빈 옵션 값."""
-    option_type = getattr(QFileDialog, "Option", None)
-    if option_type is not None:
-        return option_type(0)
-    return QFileDialog.Options()
-
-
-def make_options(native=True, show_dirs_only=False, extra=None):
-    """QFileDialog 에 넘길 options 값을 조립한다.
-
-    Args:
-        native: False 면 Qt 자체 다이얼로그를 강제한다(DontUseNativeDialog).
-            오프스크린/테스트 환경이나 일관된 UI 가 필요할 때 쓴다.
-        show_dirs_only: 디렉터리 선택 시 파일을 숨긴다.
-        extra: 추가로 OR 할 QFileDialog.Option 값.
-    """
-    options = _no_options()
-    if not native:
-        options |= _option("DontUseNativeDialog")
-    if show_dirs_only:
-        options |= _option("ShowDirsOnly")
-    if extra is not None:
-        options |= extra
-    return options
+from .places import Places
+from .qt_compat import enum_value, exec_dialog, make_options
+from .recent import DEFAULT_RECENT_MAX, RecentStore
+from .sidebar import fit_sidebar
+from .util import to_urls
 
 
 def exec_file_dialog(
@@ -70,54 +42,89 @@ def exec_file_dialog(
     selected_filter=None,
     native=True,
     default_suffix=None,
+    add_all_files_filter=False,
     show_dirs_only=True,
-    extra_options=None,
+    options=None,
     places=None,
+    favorites=None,
+    recent=None,
+    recent_max=DEFAULT_RECENT_MAX,
+    sidebar_urls=None,
+    fixed_sidebar_urls=None,
+    favorites_icon=True,
+    sidebar_width=None,
     settings_key=None,
     path_timeout=safety.DEFAULT_TIMEOUT,
-    add_all_files_filter=False,
     name_filter=None,
+    extra_options=None,
 ):
-    """모드에 맞는 QFileDialog 를 띄우고 결과를 반환한다.
+    """다이얼로그를 띄우고 ``(경로 리스트, 선택된 필터)`` 를 돌려준다.
+
+    :class:`CustomFileDialog` 를 한 줄로 쓰는 방법이다. 생성자 인자를 그대로
+    받고, 꾸밀 것이 있으면 그 클래스로 띄운다. 꾸밀 것이 없고 ``native`` 가
+    참이면 ``QFileDialog`` 정적 메서드를 써서 **OS 네이티브 창**으로 연다.
+
+        paths, chosen = exec_file_dialog(self, "open_file", filters=[("CSV", ["csv"])])
+        if paths:
+            ...
+
+    바인딩(PyQt5/6 · PySide2/6)과 모드마다 다른 Qt 의 반환 형태를 여기서
+    흡수하므로, 반환은 **언제나** ``(리스트, 문자열)`` 이고 취소하면
+    ``([], 필터)`` 다.
 
     Args:
-        parent: 부모 위젯(모달 기준). 보통 ``self.window()``.
-        mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
-        caption: 다이얼로그 제목. None 이면 모드별 기본 제목.
-        directory: 처음 열릴 디렉터리(또는 파일 경로).
-        filters: 파일 필터. ``FilePathEdit(filters=...)`` 와 **같은 형태를 모두**
-            받는다 — Qt 필터 문자열은 물론 ``[("이미지", ["png", "jpg"])]``
-            처럼 파이썬스럽게 써도 된다
-            (:func:`~custom_file_dialog.filters.build_filter` 참고).
-        selected_filter: 처음 선택되어 있을 필터 항목.
-        native: OS 네이티브 다이얼로그 사용 여부.
-        default_suffix: 저장 모드에서 확장자가 없을 때 붙일 확장자.
-            None 이면 선택된 필터에서 유추한다.
-        show_dirs_only: 디렉터리 모드에서 파일을 숨길지 여부.
-        extra_options: 추가 QFileDialog.Option.
-        places: :class:`~custom_file_dialog.places.Places` — 사이드바에 얹을
-            것들(즐겨찾기 · 최근 파일 · 직접 지정 위치 · 아이콘 · 보호 위치).
-            주면 **네이티브 다이얼로그를 쓸 수 없어** 자동으로 Qt 자체
-            다이얼로그로 전환된다(네이티브 창은 OS 가 그리므로 Qt 가 사이드바를
-            바꿀 수 없다).
-        settings_key: **이 자리를 구분할 이름.** 주면 그 이름으로 마지막에 쓰던
-            폴더에서 열고, 고르고 나면 그 폴더를 다시 기억한다. 자리마다 다른
-            이름을 주면 (``"입력csv"`` · ``"결과저장"``) 각자 따로 기억한다.
-
-            ``directory`` 를 함께 주면 그쪽이 우선이다(기억은 그래도 갱신된다).
-            ``FilePathEdit(settings_key=...)`` 와 **같은 저장소**를 쓰므로 같은
-            이름을 주면 위젯과 다이얼로그가 기억을 주고받는다.
-        path_timeout: 기억해 둔 폴더가 죽은 마운트를 가리킬 때 멈추지 않도록
-            하는 제한 시간(초). ``None`` 이면 확인하지 않는다. ``settings_key``
-            를 쓸 때만 의미가 있다.
-        add_all_files_filter: 필터 끝에 "모든 파일 (*)" 을 붙일지.
-            (위젯은 기본 True 지만, 여기서는 넘긴 필터를 그대로 쓰는 편이
-            QFileDialog 를 직접 부르던 코드와 덜 어긋난다.)
+        native: OS 네이티브 다이얼로그 사용 여부. ``False`` 면 정적 메서드에
+            ``DontUseNativeDialog`` 를 켜서 Qt 자체 창으로 연다. 꾸밀 것을 하나라도
+            주면 (``places`` · ``favorites`` · ``recent`` · ``sidebar_urls`` …)
+            이 설정과 무관하게 :class:`CustomFileDialog` 로 전환된다.
         name_filter: ``filters`` 의 예전 이름. 둘 다 주면 ``filters`` 가 이긴다.
+        extra_options: ``options`` 의 예전 이름.
+
+        나머지 인자는 :class:`CustomFileDialog` 와 같다.
 
     Returns:
         ``(paths, selected_filter)`` 튜플. 취소하면 ``([], selected_filter)``.
     """
+    filters = filters if filters is not None else name_filter
+    options = options if options is not None else extra_options
+    selected_filter = selected_filter or ""
+
+    # 사이드바·아이콘·링크 추적은 Qt 위젯을 직접 건드려야 해서 네이티브 창으로는
+    # 불가능하다. 하나라도 주면 인스턴스 다이얼로그로 전환한다.
+    decorated = bool(places) or any(
+        value is not None
+        for value in (favorites, recent, sidebar_urls, fixed_sidebar_urls, sidebar_width)
+    )
+
+    if decorated:
+        dialog = CustomFileDialog(
+            parent,
+            mode=mode,
+            caption=caption,
+            directory=directory,
+            filters=filters,
+            selected_filter=selected_filter,
+            default_suffix=default_suffix,
+            add_all_files_filter=add_all_files_filter,
+            show_dirs_only=show_dirs_only,
+            options=options,
+            places=places,
+            favorites=favorites,
+            recent=recent,
+            recent_max=recent_max,
+            sidebar_urls=sidebar_urls,
+            fixed_sidebar_urls=fixed_sidebar_urls,
+            favorites_icon=favorites_icon,
+            sidebar_width=sidebar_width,
+            settings_key=settings_key,
+            path_timeout=path_timeout,
+        )
+        if not exec_dialog(dialog):
+            return [], selected_filter
+        # selectedFiles() 가 링크 복원 · 개수 맞춤 · 확장자 부착까지 끝내 준다
+        return dialog.selectedFiles(), (dialog.selectedNameFilter() or selected_filter)
+
+    # ---- 네이티브(정적 메서드) 경로 — 꾸밀 것이 없을 때만 ----
     if caption is None:
         caption = DEFAULT_CAPTIONS.get(mode, "선택")
     if settings_key and not directory:
@@ -126,15 +133,11 @@ def exec_file_dialog(
             [], last_dir=history.last_dir(settings_key), mode=mode, timeout=path_timeout
         )
     # 위젯과 같은 형태를 받아 준다: 문자열 · [(설명, 확장자들)] · dict …
-    name_filter = build_filter(
-        filters if filters is not None else name_filter,
-        add_all_files=add_all_files_filter,
-    )
+    name_filter = build_filter(filters, add_all_files=add_all_files_filter)
 
     paths, chosen = _run_dialog(
         parent, mode, caption, directory or "", name_filter or "",
-        selected_filter or "", native, default_suffix, show_dirs_only,
-        extra_options, places,
+        selected_filter, native, default_suffix, show_dirs_only, options,
     )
     if settings_key and paths:
         history.remember_dir(settings_key, paths[0])
@@ -143,17 +146,13 @@ def exec_file_dialog(
 
 def _run_dialog(
     parent, mode, caption, directory, name_filter, selected_filter,
-    native, default_suffix, show_dirs_only, extra_options, places,
+    native, default_suffix, show_dirs_only, extra_options,
 ):
-    """모드별로 알맞은 QFileDialog 호출을 골라 실행한다."""
-    if places:
-        # 사이드바/아이콘을 건드리려면 인스턴스를 직접 만들어야 한다
-        # (정적 메서드로는 불가).
-        return _exec_instance_dialog(
-            parent, mode, caption, directory, name_filter, selected_filter,
-            default_suffix, show_dirs_only, extra_options, places,
-        )
+    """모드별로 알맞은 ``QFileDialog`` **정적 메서드**를 골라 실행한다.
 
+    바인딩과 모드마다 다른 반환 형태를 ``(리스트, 필터)`` 로 맞춘다. 테스트에서
+    이 함수만 monkeypatch 하면 실제 창 없이 위쪽 동작을 검증할 수 있다.
+    """
     if mode == SelectMode.DIRECTORY:
         options = make_options(native, show_dirs_only=show_dirs_only, extra=extra_options)
         path = QFileDialog.getExistingDirectory(parent, caption, directory, options)
@@ -193,17 +192,6 @@ def _store_or_none(value, factory, **kwargs):
     if value is True:
         return factory(**kwargs)
     return value or None
-
-
-# 사이드바 폭을 항목에 맞출 때 글자 오른쪽에 남기는 여백(px)
-SIDEBAR_PADDING = 8
-
-# 사이드바 최소 폭(px). 설정이 하나도 없는 새 프로필에서 Qt 는 79px 로 여는데
-# 너무 좁다. 한 번이라도 다이얼로그를 닫으면 Qt 가 저장하는 값(115)에 맞춘다.
-MIN_SIDEBAR_WIDTH = 115
-
-# 사이드바를 넓히더라도 파일 목록에 최소한 남겨 둘 폭(px)
-MIN_FILE_LIST_WIDTH = 260
 
 
 # 모드별 (AcceptMode, FileMode) 설정값
@@ -327,8 +315,8 @@ class CustomFileDialog(QFileDialog):
             )
         )
         accept_mode, file_mode = _INSTANCE_MODES[mode]
-        self.setAcceptMode(_enum("AcceptMode", accept_mode))
-        self.setFileMode(_enum("FileMode", file_mode))
+        self.setAcceptMode(enum_value("AcceptMode", accept_mode))
+        self.setFileMode(enum_value("FileMode", file_mode))
 
         name_filter = build_filter(filters, add_all_files=add_all_files_filter)
         if name_filter and mode != SelectMode.DIRECTORY:
@@ -397,51 +385,14 @@ class CustomFileDialog(QFileDialog):
     def showEvent(self, event):     # noqa: N802 (Qt 시그니처)
         """처음 보일 때 사이드바 폭을 항목에 맞춘다.
 
-        Qt 는 사이드바를 내용과 무관한 고정 폭으로 연다(측정값 79~115px).
-        Qt 기본 항목("Computer", 홈)에는 맞지만, 여기서 얹는 "현재 위치" ·
-        "최근 파일" · 분류 이름은 잘려서 ``현…`` 처럼 보인다.
-
-        스플리터 크기는 **보이기 전에는 정해지지 않으므로**(생성 직후엔 ``[0, 0]``)
-        생성자가 아니라 여기서 맞춘다. 한 번만 하므로, 사용자가 경계를 끌어
-        조절한 뒤 창을 다시 열어도 그 폭이 유지된다.
+        스플리터 크기는 **보이기 전에는 정해지지 않으므로**(생성 직후엔
+        ``[0, 0]``) 생성자가 아니라 여기서 맞춘다. 한 번만 하므로, 사용자가
+        경계를 끌어 조절한 뒤 창을 다시 열어도 그 폭이 유지된다.
         """
         super().showEvent(event)
         if not self._sidebar_fitted:
             self._sidebar_fitted = True
-            self._fit_sidebar(self._sidebar_width)
-
-    def _fit_sidebar(self, width):
-        """사이드바 폭을 정한다.
-
-        ``None`` 이면 항목이 잘리지 않을 만큼 넓히고, ``0`` 이면 내용에는 맞추지
-        않는다. 둘 다 :data:`MIN_SIDEBAR_WIDTH` 아래로는 내려가지 않는다.
-        숫자를 주면 그 값을 그대로 쓴다.
-        """
-        splitter = self.findChild(QSplitter, "splitter")
-        sidebar = self.findChild(QListView, "sidebar")
-        if splitter is None or sidebar is None:
-            return
-        sizes = splitter.sizes()
-        total = sum(sizes)
-        if len(sizes) < 2 or total <= 0:
-            return                          # 아직 자리가 안 잡혔다
-
-        if width is None or width == 0:
-            floor = MIN_SIDEBAR_WIDTH
-            if width is None:               # 항목이 잘리지 않게
-                floor = max(
-                    floor,
-                    sidebar.sizeHintForColumn(0)
-                    + 2 * sidebar.frameWidth()
-                    + SIDEBAR_PADDING,
-                )
-            # 이미 충분히 넓으면 그대로 둔다(좁히지 않는다)
-            width = max(sizes[0], floor)
-
-        # 넓히더라도 파일 목록 자리는 남겨 둔다
-        width = max(0, min(int(width), max(0, total - MIN_FILE_LIST_WIDTH)))
-        if width and width != sizes[0]:
-            splitter.setSizes([width, total - width])
+            fit_sidebar(self, self._sidebar_width)
 
     # ------------------------------------------------------------- 내부
     def _start_at(self, directory):
@@ -464,34 +415,6 @@ class CustomFileDialog(QFileDialog):
             paths = self.selectedFiles()
             if paths:
                 history.remember_dir(self._settings_key, paths[0])
-
-
-def _exec_instance_dialog(
-    parent, mode, caption, directory, name_filter, selected_filter,
-    default_suffix, show_dirs_only, extra_options, places,
-):
-    """사이드바를 손봐야 할 때 :class:`CustomFileDialog` 로 띄운다.
-
-    정적 메서드(getOpenFileName 등)로는 사이드바나 아이콘을 건드릴 수 없어서,
-    이 경로만 인스턴스를 만든다.
-    """
-    dialog = CustomFileDialog(
-        parent,
-        mode=mode,
-        caption=caption,
-        directory=directory,
-        filters=name_filter,
-        selected_filter=selected_filter,
-        default_suffix=default_suffix,
-        show_dirs_only=show_dirs_only,
-        options=extra_options,
-        places=places,
-        # settings_key 는 exec_file_dialog 이 이미 처리했다(두 번 기억하지 않게)
-    )
-    run = getattr(dialog, "exec_", None) or dialog.exec
-    if not run():
-        return [], selected_filter
-    return dialog.selectedFiles(), (dialog.selectedNameFilter() or selected_filter)
 
 
 def resolve_start_dir(

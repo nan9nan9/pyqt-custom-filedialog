@@ -1428,28 +1428,46 @@ ok, reason = validate_paths(paths, mode="open_files")
 
 ## 코드 구조
 
-의존이 위에서 아래로만 흐르도록 층을 나눠 두었습니다(순환 없음).
+의존이 **위에서 아래로만** 흐르도록 6층으로 나눠 두었습니다(순환 없음 — 아래
+표는 실제 import 를 위상 정렬해 뽑은 것입니다).
 
 ```
-util        경로 정규화 · QUrl 변환 · 자잘한 Qt 차이 흡수
-constants   선택 모드, 기본 캡션, 항목 경로 역할
-safety      경로 안전 판정 (Qt 없이 도는 순수 로직)
-filters     Qt 필터 문자열 조립
-validators  경로 유효성 판정
-history     최근 경로 · 용도별 마지막 폴더 (QSettings)
-icons       별표 · 시계 · 집 아이콘, 분류 아이콘 제공자
-favorites   즐겨찾기 저장소 (심볼릭 링크 폴더)
-recent      최근 파일 저장소 (favorites 를 물려받음)
-places      사이드바에 얹는 것들의 묶음 (즐겨찾기 · 최근 · 직접 지정)
-menus       우클릭 메뉴 (즐겨찾기 추가 · 분류 삭제 · 사이드바 정리)
-hooks       다이얼로그에 거는 것들 (사이드바 표시 · 링크 추적 · 차단 경로 방어)
-dialog      QFileDialog 얇은 래퍼 (모드별 호출 · 옵션 · 시작 폴더)
-path_edit   FilePathEdit
-form        FilePathForm
+0  constants   선택 모드 · 기본 캡션 · 항목 경로 역할
+   qt_compat   바인딩(PyQt5/6·PySide2/6)마다 다른 enum·exec 접근 흡수
+   safety      경로 안전 판정 (Qt 를 쓰지 않는 순수 로직)
+   util        경로 정규화 · QUrl 변환
+
+1  favorites   즐겨찾기 저장소 (심볼릭 링크 폴더)
+   filters     Qt 필터 문자열 조립
+   guard       나열하면 안 되는 자리 방어 (모델 교체 · 이벤트 삼키기)
+   history     최근 경로 · 용도별 마지막 폴더 (QSettings)
+   icons       별표 · 시계 · 집 아이콘, 분류 아이콘 제공자
+   links       즐겨찾기 링크를 원본처럼 (Look in · 진입 · 상위 폴더)
+   sidebar     사이드바 표시(홈 아이콘 · "현재 위치")와 폭
+   validators  경로 유효성 판정
+
+2  menus       우클릭 메뉴 (즐겨찾기 추가 · 항목 제거 · 분류 삭제)
+   places      사이드바에 얹는 것들의 묶음
+   recent      최근 파일 저장소 (favorites 를 물려받음)
+
+3  hooks       위 장치들을 한 번에 걸어 주는 설치기
+
+4  dialog      CustomFileDialog · exec_file_dialog · resolve_start_dir
+   path_edit   FilePathEdit
+
+5  form        FilePathForm
 ```
 
-`safety` 는 Qt 를 쓰지 않아 단독으로 테스트할 수 있고, Qt 쪽 연동은 `hooks` 가 맡습니다.
-저장소(`favorites` · `recent`)는 다이얼로그를 몰라도 되도록 `util` 만 봅니다.
+몇 가지 원칙:
+
+- **`CustomFileDialog` 가 유일한 구현입니다.** `exec_file_dialog()` 은 그 클래스를
+  한 줄로 쓰는 겉면이고, 꾸밀 것이 없고 `native` 일 때만 `QFileDialog` 정적
+  메서드로 빠집니다. 위젯도 같은 함수를 씁니다.
+- **`safety` 는 Qt 를 쓰지 않습니다.** 단독으로 테스트할 수 있고, Qt 쪽 연동은
+  `guard` 가 맡습니다.
+- **저장소(`favorites` · `recent`)는 다이얼로그를 모릅니다.** `util` 만 봅니다.
+- **`hooks` 는 설치 순서만 압니다.** 실제 구현은 `sidebar` · `links` · `guard` ·
+  `menus` 가 각각 들고 있어, 하나를 고칠 때 나머지를 안 봐도 됩니다.
 
 ## 테스트
 
