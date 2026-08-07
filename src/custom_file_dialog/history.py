@@ -84,12 +84,17 @@ class PathHistory:
         last = store.value("custom_file_dialog/%s/last_dir" % self.key, None)
         self._last_dir = str(last) if last else None
 
-    def _save(self):
+    def _save_items(self):
         store = self._store()
-        if store is None:
-            return
-        store.setValue("custom_file_dialog/%s/recent" % self.key, list(self._items))
-        store.setValue("custom_file_dialog/%s/last_dir" % self.key, self._last_dir or "")
+        if store is not None:
+            store.setValue("custom_file_dialog/%s/recent" % self.key, list(self._items))
+
+    def _save_last_dir(self):
+        store = self._store()
+        if store is not None:
+            store.setValue(
+                "custom_file_dialog/%s/last_dir" % self.key, self._last_dir or ""
+            )
 
     # --------------------------------------------------------------- API
     def items(self):
@@ -105,20 +110,26 @@ class PathHistory:
             self._items.remove(path)
         self._items.insert(0, path)
         del self._items[self.max_items :]
-        self._save()
+        self._save_items()
 
     def clear(self):
         self._items = []
-        self._save()
+        self._save_items()
 
     def last_dir(self):
         """직전에 다이얼로그를 닫았던 폴더."""
         return self._last_dir
 
     def set_last_dir(self, directory):
+        """마지막 폴더만 기록한다.
+
+        최근 경로 목록은 **건드리지 않는다.** 같은 키를 max_items 가 다른 곳에서
+        함께 쓸 수 있는데(위젯은 history=30, :func:`remember_dir` 헬퍼는 기본값),
+        여기서 목록까지 다시 쓰면 작은 쪽 기준으로 잘려 나간다.
+        """
         if directory:
             self._last_dir = str(directory)
-            self._save()
+            self._save_last_dir()
 
 
 # ------------------------------------------------- 용도별 시작 위치 (키 하나 = 용도 하나)

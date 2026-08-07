@@ -90,9 +90,15 @@ def exec_file_dialog(
 
     # 사이드바·아이콘·링크 추적은 Qt 위젯을 직접 건드려야 해서 네이티브 창으로는
     # 불가능하다. 하나라도 주면 인스턴스 다이얼로그로 전환한다.
-    decorated = bool(places) or any(
-        value is not None
-        for value in (favorites, recent, sidebar_urls, fixed_sidebar_urls, sidebar_width)
+    # (저장소 인자는 False 도 "안 씀"이므로 진리값으로, 사이드바 인자는 [] 가
+    #  "비우기"라는 뜻이 있으므로 None 여부로 가린다.)
+    decorated = (
+        bool(places)
+        or bool(favorites)
+        or bool(recent)
+        or sidebar_urls is not None
+        or fixed_sidebar_urls is not None
+        or sidebar_width is not None
     )
 
     if decorated:
@@ -118,10 +124,18 @@ def exec_file_dialog(
             settings_key=settings_key,
             path_timeout=path_timeout,
         )
-        if not exec_dialog(dialog):
-            return [], selected_filter
-        # selectedFiles() 가 링크 복원 · 개수 맞춤 · 확장자 부착까지 끝내 준다
-        return dialog.selectedFiles(), (dialog.selectedNameFilter() or selected_filter)
+        try:
+            if not exec_dialog(dialog):
+                return [], selected_filter
+            # selectedFiles() 가 링크 복원 · 개수 맞춤 · 확장자 부착까지 끝내 준다
+            return dialog.selectedFiles(), (
+                dialog.selectedNameFilter() or selected_filter
+            )
+        finally:
+            # parent 를 주면 다이얼로그가 그 자식으로 남아, 부를 때마다 창과
+            # 파일시스템 감시 모델이 쌓인다. 결과를 읽은 뒤 정리를 예약한다
+            # (deleteLater 는 이벤트 루프로 돌아간 뒤에 지우므로 반환값은 안전).
+            dialog.deleteLater()
 
     # ---- 네이티브(정적 메서드) 경로 — 꾸밀 것이 없을 때만 ----
     if caption is None:
@@ -379,8 +393,8 @@ class CustomFileDialog(QFileDialog):
         """
         super().showEvent(event)
         if not self._sidebar_fitted:
-            self._sidebar_fitted = True
-            fit_sidebar(self, self._sidebar_width)
+            # 스플리터가 아직 자리 잡기 전(fit 이 None)이면 다음 show 때 다시 시도
+            self._sidebar_fitted = fit_sidebar(self, self._sidebar_width) is not None
 
     # ------------------------------------------------------------- 내부
     def _start_at(self, directory):

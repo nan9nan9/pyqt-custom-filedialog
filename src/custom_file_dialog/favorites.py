@@ -156,13 +156,17 @@ class FavoritesStore:
     def is_category_dir(self, path):
         """주어진 경로가 이 저장소의 분류 폴더인지 여부.
 
-        아이콘을 씌우거나 메뉴를 띄울 대상을 고를 때 쓴다.
+        아이콘을 씌우거나 메뉴를 띄울 대상을 고를 때 쓴다. 아이콘 제공자가
+        **파일 목록의 항목마다** 부르므로, 문자열 비교(부모가 base_dir 인가)로
+        먼저 거른 뒤에만 파일시스템을 만진다. 저장소 밖 경로 — 대부분의 경우 —
+        는 시스템 콜 없이 끝나고, 죽은 마운트의 항목을 그리다 멈추는 일도 없다.
         """
         absolute = abspath(path)
-        if absolute is None or not os.path.isdir(absolute):
+        if absolute is None:
             return False
-        parent = os.path.dirname(absolute)
-        return parent == os.path.normpath(self.base_dir)
+        if os.path.dirname(absolute) != os.path.normpath(self.base_dir):
+            return False
+        return os.path.isdir(absolute)
 
     def add_category(self, category):
         """분류 폴더를 만들고 경로를 반환한다(이미 있으면 그대로)."""

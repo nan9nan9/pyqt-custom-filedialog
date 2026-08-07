@@ -321,3 +321,35 @@ def test_path_history_persists(tmp_path):
     history.clear()
     assert history.items() == []
 
+
+
+def test_read_only_toggle_keeps_clear_button_off(qapp):
+    """clear_button=False 로 만든 위젯은 read_only 를 껐다 켜도 X 버튼이 없다."""
+    edit = FilePathEdit(mode="open_file", clear_button=False)
+    assert not edit.line_edit.isClearButtonEnabled()
+
+    edit.set_read_only(True)
+    edit.set_read_only(False)
+    assert not edit.line_edit.isClearButtonEnabled()
+
+    # 기본(clear_button=True)은 read_only 에서만 꺼졌다가 되살아난다
+    normal = FilePathEdit(mode="open_file")
+    normal.set_read_only(True)
+    assert not normal.line_edit.isClearButtonEnabled()
+    normal.set_read_only(False)
+    assert normal.line_edit.isClearButtonEnabled()
+
+
+def test_set_mode_updates_completer_filter(qapp):
+    """모드를 바꾸면 자동완성 후보 범위(폴더만/전부)도 따라간다."""
+    from qtpy.QtCore import QDir
+
+    edit = FilePathEdit(mode="open_file")
+    assert edit._completer_model.filter() & QDir.Filter.Files
+
+    edit.set_mode("directory")
+    assert not (edit._completer_model.filter() & QDir.Filter.Files)
+    assert edit._completer_model.filter() & QDir.Filter.Dirs
+
+    edit.set_mode("open_file")
+    assert edit._completer_model.filter() & QDir.Filter.Files

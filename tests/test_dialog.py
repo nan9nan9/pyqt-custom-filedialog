@@ -608,3 +608,69 @@ def test_memory_history_without_key():
     history.add("/c")
     assert history.items() == ["/c", "/b"]
 
+
+
+def test_exec_file_dialog_cleans_up_dialog(qapp, tmp_path, monkeypatch):
+    """부를 때마다 다이얼로그 정리가 예약된다(파일시스템 감시 누수 방지).
+
+    실제 삭제(sendPostedEvents 로 지연 삭제 강제 처리)는 다른 테스트가 큐에
+    남긴 삭제까지 한꺼번에 터뜨려 스위트를 오염시키므로, 여기서는 deleteLater
+    가 불렸는지만 본다. 실제 삭제까지 이어지는 것은 Qt 의 계약이다.
+    """
+    from custom_file_dialog import CustomFileDialog
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+
+    released = []
+    original = CustomFileDialog.deleteLater
+    monkeypatch.setattr(
+        CustomFileDialog,
+        "deleteLater",
+        lambda self: (released.append(self), original(self))[1],
+    )
+    monkeypatch.setattr(dialog_module, "exec_dialog", lambda d: 0)   # 바로 취소
+
+    for _ in range(3):
+        dialog_module.exec_file_dialog(mode="open_file", favorites=store)
+    assert len(released) == 3
+
+    # 확인하고 닫아도(결과를 읽은 뒤에) 정리가 예약된다
+    monkeypatch.setattr(dialog_module, "exec_dialog", lambda d: 1)
+    paths, _chosen = dialog_module.exec_file_dialog(mode="open_file", favorites=store)
+    assert len(released) == 4
+
+
+def test_false_stores_do_not_force_instance_dialog(qapp, monkeypatch):
+    """favorites=False / recent=False 는 "안 씀"이므로 정적 경로 그대로."""
+    seen = []
+    monkeypatch.setattr(
+        dialog_module, "_run_dialog", lambda *a: (seen.append(a), ([], ""))[1]
+    )
+    dialog_module.exec_file_dialog(mode="open_file", favorites=False, recent=False)
+    assert seen                              # 정적 메서드 경로를 탔다
+
+
+def test_remember_dir_keeps_widget_history(qapp, tmp_path):
+    """settings_key 로 시작 위치만 기록해도 위젯의 최근 목록이 잘리지 않는다.
+
+    같은 키를 위젯은 history=30 으로, 헬퍼는 기본 크기로 쓴다. 마지막 폴더
+    기록이 최근 목록까지 다시 쓰면 작은 쪽 기준으로 잘려 나갔었다.
+    """
+    from custom_file_dialog import last_dir, remember_dir
+
+    ini = str(tmp_path / "s.ini")
+    make = lambda: QSettings(ini, QSettings.Format.IniFormat)  # noqa: E731
+
+    widget_side = PathHistory(key="공용", max_items=30, settings=make())
+    for i in range(15):
+        widget_side.add("/data/%02d.csv" % i)
+
+    target = tmp_path / "폴더"
+    target.mkdir()
+    remember_dir("공용", str(target), settings=make())
+
+    assert last_dir("공용", settings=make()) == str(target)
+    reloaded = PathHistory(key="공용", max_items=30, settings=make())
+    assert len(reloaded.items()) == 15       # 목록은 그대로

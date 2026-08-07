@@ -430,3 +430,26 @@ def test_widget_recent_sidebar_and_icon(qapp, tmp_path, monkeypatch):
     assert favorite_icon is provider.star()
     assert key(recent_icon) != key(provider.star())
 
+
+
+def test_is_category_dir_skips_fs_for_outside_paths(store, tmp_path, monkeypatch):
+    """저장소 밖 경로는 파일시스템을 만지지 않고 거른다.
+
+    아이콘 제공자가 파일 목록의 항목마다 부르므로, 밖의 경로에 isdir 을 하면
+    항목 수만큼 시스템 콜이 나가고 죽은 마운트에서는 그리다 멈춘다.
+    """
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+
+    calls = []
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(
+        os.path, "isdir", lambda p: (calls.append(p), real_isdir(p))[1]
+    )
+
+    assert not store.is_category_dir("/전혀/다른/곳/폴더")
+    assert calls == []                       # 문자열 비교만으로 끝났다
+
+    # 진짜 분류 폴더는 여전히 잡는다(이때만 isdir 을 만진다)
+    assert store.is_category_dir(store.category_dir("설계"))
+    assert calls

@@ -84,8 +84,9 @@ class RecentStore(FavoritesStore):
         if not os.path.isfile(target) or self.is_inside(target):
             return None
 
-        if self.link_for(self.name, target) is not None:
-            self.remove(self.name, target)      # 새로 만들어 최신으로 끌어올린다
+        # 있으면 지우고 다시 만들어 최신으로 끌어올린다. 없을 때의 remove 는
+        # 목록 한 번 훑고 끝이라, 미리 있는지 조회하는 것보다 싸다.
+        self.remove(self.name, target)
 
         link = self.add(self.name, target)
         self._evict()

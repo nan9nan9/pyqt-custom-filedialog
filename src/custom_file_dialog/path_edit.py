@@ -215,8 +215,9 @@ class FilePathEdit(QWidget):
         self._edit.setPlaceholderText(
             placeholder if placeholder is not None else DEFAULT_PLACEHOLDERS[self._mode]
         )
+        self._clear_button = bool(clear_button)
         self._edit.setReadOnly(bool(read_only))
-        self._edit.setClearButtonEnabled(bool(clear_button) and not read_only)
+        self._edit.setClearButtonEnabled(self._clear_button and not read_only)
         self._edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(self._edit, 1)
 
@@ -408,7 +409,12 @@ class FilePathEdit(QWidget):
     def _remember(self, paths):
         first = paths[0]
         self._history.add(first)
-        directory = first if os.path.isdir(first) else os.path.dirname(first)
+        isdir = (
+            os.path.isdir
+            if self._path_timeout is None
+            else (lambda p: safety.safe_isdir(p, self._path_timeout))
+        )
+        directory = first if isdir(first) else os.path.dirname(first)
         self._history.set_last_dir(directory)
 
     def history_items(self):
@@ -466,6 +472,16 @@ class FilePathEdit(QWidget):
             self._must_exist = DEFAULT_MUST_EXIST[mode]
         self._edit.setPlaceholderText(DEFAULT_PLACEHOLDERS[mode])
         self._button.setToolTip(self._caption or DEFAULT_CAPTIONS[mode])
+        # 자동완성 후보도 모드를 따라간다(폴더 모드는 폴더만, 나머지는 전부)
+        if self._completer_model is not None:
+            if mode == SelectMode.DIRECTORY:
+                self._completer_model.setFilter(
+                    QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot | QDir.Filter.Drives
+                )
+            else:
+                self._completer_model.setFilter(
+                    QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot
+                )
         if not is_multi_mode(mode):
             self.set_paths(self.paths()[:1])
         self._update_validity()
@@ -642,7 +658,8 @@ class FilePathEdit(QWidget):
 
     def set_read_only(self, read_only):
         self._edit.setReadOnly(bool(read_only))
-        self._edit.setClearButtonEnabled(not read_only)
+        # 생성 시 끈 X 버튼이 read_only 토글로 되살아나지 않게 한다
+        self._edit.setClearButtonEnabled(self._clear_button and not read_only)
 
     def set_drag_drop_enabled(self, enabled):
         self._drag_drop = bool(enabled)
