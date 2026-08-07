@@ -62,6 +62,8 @@ def test_safety_mount_lookup(dead_nfs):
     assert safety.mount_for(os.path.join(mount, "x"))[1] == "nfs4"
     assert safety.server_of("nfs1.corp:/export/proj") == "nfs1.corp"
     assert safety.server_of("//winsrv/share") == "winsrv"
+    assert safety.server_of("[fe80::1]:/export") == "fe80::1"    # IPv6 는 대괄호부터
+    assert safety.server_of("user@host:/dir") == "host"
     assert safety.server_of("/dev/sda1") is None
     assert safety.mount_for("") is None
 
@@ -814,3 +816,67 @@ def test_accept_blocker_lets_clicks_into_edit(qapp, guarded_root):
     assert not blocker.eventFilter(edit, release())      # 입력창 클릭은 통과
     assert blocker.eventFilter(button, release())        # 버튼 클릭은 차단
     dialog.deleteLater()
+
+
+def test_probe_port_follows_fstype(monkeypatch, tmp_path):
+    """서버 프로브는 마운트 종류에 맞는 포트로만 두드린다.
+
+    모든 원격 종류에 NFS 포트(2049)를 두드리면, 멀쩡한 CIFS/SSHFS 서버가
+    거부(그 포트를 안 듣는다)해서 "죽었다"로 오판됐다 — 유효한 경로가
+    "없는 경로"로 표시되고 시작 폴더에서도 빠졌다.
+    """
+    from custom_file_dialog import safety
+
+    probed = []
+    monkeypatch.setattr(
+        safety, "probe_host", lambda host, port, timeout=None: (
+            probed.append((host, port)), True)[1]
+    )
+    stats = []
+    monkeypatch.setattr(
+        safety, "call_with_timeout", lambda func, *a, **k: (stats.append(a), (True, None))[1]
+    )
+
+    assert safety.self_check("/mnt/win", "//winsrv/share", 0.1, fstype="cifs")
+    assert probed == [("winsrv", 445)]                   # 2049 가 아니라 445
+
+    probed.clear()
+    assert safety.self_check("/mnt/ssh", "user@box:/dir", 0.1, fstype="fuse.sshfs")
+    assert probed == [("box", 22)]
+
+    # 포트를 모르는 종류는 서버를 두드리지 않고 stat 으로만 판정한다
+    probed.clear()
+    stats.clear()
+    assert safety.self_check("/mnt/gl", "gl1:/vol", 0.1, fstype="glusterfs")
+    assert probed == []
+    assert stats                                          # stat 은 돌았다
+
+    # fstype 을 안 주면 예전처럼 NFS 포트 (하위 호환)
+    probed.clear()
+    assert safety.self_check("/mnt/nfs", "nfs1:/export", 0.1)
+    assert probed == [("nfs1", safety.NFS_PORT)]
+
+
+def test_is_reachable_passes_fstype(monkeypatch, tmp_path):
+    """is_reachable 이 마운트 종류를 self_check 까지 전달한다."""
+    from custom_file_dialog import safety
+
+    mountpoint = str(tmp_path / "win")
+    os.mkdir(mountpoint)
+    monkeypatch.setattr(
+        safety, "iter_mounts",
+        lambda refresh=False: [(mountpoint, "cifs", "//winsrv/share")],
+    )
+    seen = {}
+
+    def fake_self_check(mp, source, timeout=None, fstype=None):
+        seen.update(fstype=fstype, source=source)
+        return True
+
+    monkeypatch.setattr(safety, "self_check", fake_self_check)
+    safety.clear_cache()
+    try:
+        assert safety.is_reachable(os.path.join(mountpoint, "a.txt"), use_cache=False)
+        assert seen["fstype"] == "cifs"
+    finally:
+        safety.clear_cache()

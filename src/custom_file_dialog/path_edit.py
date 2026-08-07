@@ -406,15 +406,16 @@ class FilePathEdit(QWidget):
     def _reset_places(self):
         self._places_cache = None
 
+    def _isdir(self, path):
+        """죽은 마운트에서 멈추지 않는 isdir (위젯의 path_timeout 설정을 따른다)."""
+        if self._path_timeout is None:
+            return os.path.isdir(path)
+        return safety.safe_isdir(path, self._path_timeout)
+
     def _remember(self, paths):
         first = paths[0]
         self._history.add(first)
-        isdir = (
-            os.path.isdir
-            if self._path_timeout is None
-            else (lambda p: safety.safe_isdir(p, self._path_timeout))
-        )
-        directory = first if isdir(first) else os.path.dirname(first)
+        directory = first if self._isdir(first) else os.path.dirname(first)
         self._history.set_last_dir(directory)
 
     def history_items(self):
@@ -728,10 +729,10 @@ class FilePathEdit(QWidget):
                 continue
             if self._mode == SelectMode.DIRECTORY:
                 # 폴더 모드에 파일을 떨어뜨리면 그 파일이 든 폴더로 받아 준다.
-                path = path if os.path.isdir(path) else os.path.dirname(path)
+                path = path if self._isdir(path) else os.path.dirname(path)
                 if not path:
                     continue
-            elif os.path.isdir(path):
+            elif self._isdir(path):
                 continue    # 파일 모드에 폴더는 받지 않는다
             paths.append(path)
 

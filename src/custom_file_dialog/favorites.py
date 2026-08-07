@@ -205,7 +205,8 @@ class FavoritesStore:
 
         directory = self.add_category(category)
 
-        existing = self.link_for(category, target)
+        index = self._load_index()
+        existing = self.link_for(category, target, _index=index)
         if existing is not None:
             return existing
 
@@ -213,7 +214,6 @@ class FavoritesStore:
         link_path = self._available_link_path(directory, link_name)
         self._make_link(target, link_path)
 
-        index = self._load_index()
         index[os.path.normpath(link_path)] = target
         self._save_index(index)
         return link_path
@@ -261,13 +261,16 @@ class FavoritesStore:
         """해당 대상이 이미 등록되어 있는지."""
         return self.link_for(category, path) is not None
 
-    def link_for(self, category, path):
-        """대상에 해당하는 링크 경로(없으면 None)."""
+    def link_for(self, category, path, _index=None):
+        """대상에 해당하는 링크 경로(없으면 None).
+
+        ``_index`` 로 이미 읽어 둔 인덱스를 재사용할 수 있다(내부 최적화용).
+        """
         target = abspath(path)
         directory = self.category_dir(category)
         if not os.path.isdir(directory):
             return None
-        index = self._load_index()
+        index = self._load_index() if _index is None else _index
         for name in sorted(os.listdir(directory)):
             link = os.path.join(directory, name)
             if self._target_of(link, index) == target:
@@ -298,7 +301,22 @@ class FavoritesStore:
         return self._target_of(absolute, self._load_index())
 
     def resolve_all(self, paths):
-        return [self.resolve(p) for p in (paths or [])]
+        """여러 경로를 한 번에 되돌린다.
+
+        인덱스 파일은 **처음 저장소 안 경로를 만났을 때 한 번만** 읽는다.
+        여러 개 선택(수십~수백 경로)마다 경로 수만큼 다시 읽지 않게 한다.
+        """
+        index = None
+        out = []
+        for path in paths or []:
+            absolute = abspath(path) if path else None
+            if absolute is None or not self._is_inside(absolute):
+                out.append(path)
+                continue
+            if index is None:
+                index = self._load_index()
+            out.append(self._target_of(absolute, index))
+        return out
 
     def is_inside(self, path):
         """주어진 경로가 즐겨찾기 폴더 안에 있는지 여부."""

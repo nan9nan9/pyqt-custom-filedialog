@@ -9,7 +9,8 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
    속하는지, 원격 파일시스템인지 본다. **파일시스템을 건드리지 않는다.**
 2. **소켓 프로브** — 원격이면 서버에 TCP 연결만 시도해 본다. 역시 파일시스템을
    건드리지 않으므로 절대 멈추지 않고, 방화벽에 막혀 있으면 타임아웃으로 바로
-   판별된다. NFS 서버(2049)는 마운트 정보에서 자동으로 알아내고, uid/gid 를
+   판별된다. 서버는 마운트 정보에서 자동으로 알아내 **종류에 맞는 포트**로만
+   두드리고(NFS 2049 · CIFS 445 · sshfs 22, :data:`SERVER_PORTS`), uid/gid 를
    찾느라 멈추는 LDAP 서버처럼 **다른 의존 서비스는 직접 등록**할 수 있다
    (:func:`configure`).
 3. **스레드 + 타임아웃** — 위를 통과했을 때만 실제 ``os.stat()`` 을 별도 스레드에서
@@ -65,6 +66,20 @@ REMOTE_FSTYPES = frozenset(
 # NFS 서버에 연결해 볼 기본 포트
 NFS_PORT = 2049
 
+# 원격 종류별로 살펴볼 서버 포트. **모르는 종류는 소켓 프로브를 건너뛰고**
+# 스레드+타임아웃 stat 만으로 판정한다 — 엉뚱한 포트를 두드리면 멀쩡한 서버가
+# 거부(ECONNREFUSED)해서 "죽었다"로 오판하기 때문이다(예: CIFS 서버는 2049 를
+# 듣지 않는다). 프로브를 건너뛰어도 stat 이 타임아웃으로 지켜 주므로 GUI 는
+# 멈추지 않고, 죽은 마운트 판별이 한 타임아웃만큼 느려질 뿐이다.
+SERVER_PORTS = {
+    "nfs": NFS_PORT,
+    "nfs4": NFS_PORT,
+    "cifs": 445,
+    "smbfs": 445,
+    "smb3": 445,
+    "fuse.sshfs": 22,
+}
+
 DEFAULT_TIMEOUT = 1.0       # 한 번의 확인에 기다릴 최대 시간(초)
 DEFAULT_TTL = 30.0          # 판정 결과를 재사용할 시간(초)
 
@@ -112,7 +127,7 @@ def configure(
         timeout: 한 번의 확인에 기다릴 최대 시간(초).
         ttl: 판정 결과를 재사용할 시간(초). 0 이면 캐시하지 않는다.
         probes: 원격 경로를 만지기 전에 연결해 볼 ``(호스트, 포트)`` 목록.
-            NFS 서버는 마운트 정보에서 자동으로 알아내므로, 여기에는 **경로만
+            마운트한 서버는 정보에서 자동으로 알아내므로, 여기에는 **경로만
             봐서는 알 수 없는 의존 서비스**를 넣는다. 예: uid/gid 조회가 막혀
             멈추게 만드는 LDAP 서버 ``[("ldap.corp", 389)]``.
         guarded_roots: **그 폴더 자체는 열지 않을** 경로 목록.
@@ -339,7 +354,8 @@ def is_remote(path):
 def server_of(source, fstype=None):
     """마운트 원본에서 서버 호스트를 뽑는다 (없으면 None).
 
-    ``server:/export`` (NFS) 와 ``//server/share`` (CIFS) 형태를 안다.
+    ``server:/export`` (NFS) · ``[fe80::1]:/export`` (IPv6) ·
+    ``//server/share`` (CIFS) · ``user@host:/dir`` (sshfs) 형태를 안다.
     """
     if not source:
         return None
@@ -348,6 +364,12 @@ def server_of(source, fstype=None):
         rest = text[2:].replace("\\", "/")
         host = rest.split("/", 1)[0]
         return host or None
+    if text.startswith("["):                                    # IPv6 NFS
+        # "[fe80::1]:/export" — 주소 안에 콜론이 있어 대괄호 먼저 벗긴다
+        end = text.find("]")
+        if end > 1:
+            return text[1:end]
+        return None
     if ":" in text:                                             # NFS
         host = text.split(":", 1)[0]
         # "sshfs" 처럼 user@host 형태도 있다
@@ -433,19 +455,24 @@ def is_reachable(path, timeout=None, use_cache=True):
     if mount is None or mount[1] not in REMOTE_FSTYPES:
         return True                          # 로컬 -> 그대로 진행
 
-    mountpoint, _fstype, source = mount
+    mountpoint, fstype, source = mount
     if use_cache:
         cached = _cached(mountpoint)
         if cached is not None:
             return cached
 
-    result = self_check(mountpoint, source, timeout)
+    result = self_check(mountpoint, source, timeout, fstype=fstype)
     _remember(mountpoint, result)
     return result
 
 
-def self_check(mountpoint, source, timeout=None):
-    """캐시 없이 실제로 확인한다(프로브 → stat)."""
+def self_check(mountpoint, source, timeout=None, fstype=None):
+    """캐시 없이 실제로 확인한다(프로브 → stat).
+
+    ``fstype`` 을 주면 그 종류에 맞는 포트로 서버를 두드린다
+    (:data:`SERVER_PORTS`). 표에 없는 종류는 서버 프로브를 건너뛴다.
+    주지 않으면 예전처럼 NFS 포트를 쓴다.
+    """
     wait = _settings["timeout"] if timeout is None else float(timeout)
 
     # 1) 등록된 의존 서비스(예: LDAP) 부터. 여기가 막히면 stat 도 멈춘다.
@@ -453,10 +480,12 @@ def self_check(mountpoint, source, timeout=None):
         if not probe_host(host, port, wait):
             return False
 
-    # 2) 마운트한 서버 자체
-    host = server_of(source)
-    if host and not probe_host(host, NFS_PORT, wait):
-        return False
+    # 2) 마운트한 서버 자체 — 종류에 맞는 포트로만
+    port = SERVER_PORTS.get(fstype) if fstype is not None else NFS_PORT
+    if port is not None:
+        host = server_of(source, fstype)
+        if host and not probe_host(host, port, wait):
+            return False
 
     # 3) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈춘다)
     finished, _value = call_with_timeout(os.stat, mountpoint, timeout=wait)
