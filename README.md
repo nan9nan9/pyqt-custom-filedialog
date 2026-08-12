@@ -1098,7 +1098,11 @@ NFS 하드 마운트에서 서버가 응답하지 않으면 `os.stat()` 이 커�
 1·2 단계는 파일시스템을 전혀 건드리지 않으므로 **절대 멈추지 않습니다**. 3 단계에서
 스레드가 못 돌아와도 블로킹 I/O 중에는 GIL 이 풀려 있어 GUI 는 계속 움직입니다
 (프로세스를 죽이는 방식은 D 상태에서 `SIGKILL` 조차 밀려서 쓰지 않습니다).
-판정은 **마운트 단위로 캐시**해 죽은 서버를 매번 두드리지 않습니다.
+판정은 **마운트 단위로 캐시**해 죽은 서버를 매번 두드리지 않고, 멈춘 확인
+스레드가 있는 마운트는 **돌아올 때까지 다시 두드리지 않고 즉시 실패로**
+판정합니다 — 키 입력마다 확인해도 멈춘 스레드는 **마운트당 한 개**를 넘지
+않습니다. autofs 위 경로는 3 단계로도 가지 않습니다(만지는 것 자체가 마운트
+시도라 스레드 없이 바로 실패 판정).
 
 ### 나열하면 안 되는 자리 — `guarded_roots`
 
@@ -1163,17 +1167,19 @@ safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
 /user/jekai/ →  평소대로 완성 (/user/jekai 는 2단계)
 ```
 
-나열과 함께 **키 입력마다의 자동 stat 도** 얕은 자리에서 막습니다 — Qt 는 글자를
-칠 때마다 입력 경로를 `access()`/`stat()` 으로 만져 보는데(항목 자동 선택 · 버튼
-활성 판정), automount 아래에서는 그 한 번 한 번이 마운트 시도입니다. 경로를
-끝까지 쳐서 **확정**하는 것은 그대로 되고(확인은 그때 한 번만), `/ho` → `/home`
-처럼 **얕은 자리의 완성·자동 확인이 함께 없어지는 것**이 대가입니다.
+나열과 함께 **키 입력마다의 자동 stat 도** 막습니다 — Qt 는 글자를 칠 때마다
+입력 경로를 `access()`/`stat()` 으로 만져 보는데(항목 자동 선택 · 버튼 활성
+판정), automount 아래에서는 그 한 번 한 번이 마운트 시도입니다. 깊이가
+min_depth 보다 **작거나 같은** 경로(`min_depth=2` 면 `/user/je` 까지)는
+**디스크에 아예 접근하지 않습니다.** 경로를 끝까지 쳐서 **확정**하는 것은
+그대로 되고(확인은 그때 한 번만), `/ho` → `/home` 처럼 **얕은 자리의
+완성·자동 확인이 함께 없어지는 것**이 대가입니다.
 
 > **autofs 는 자동으로 압니다.** `/proc/self/mountinfo` 에 autofs 로 잡히는
-> 마운트 지점은 `guarded_roots`/`min_depth` 를 설정하지 않아도 나열과 자동
-> stat 이 막힙니다(`safety.may_stat` · `safety.is_automount_point`). 죽은
-> automounter 뒷단 때문에 stat 이 돌아오지 않는 경우도 원격 마운트처럼
-> 스레드+타임아웃으로 처리해 GUI 가 멈추지 않습니다.
+> 마운트 위 경로는 `guarded_roots`/`min_depth` 를 설정하지 않아도 나열·자동
+> stat·`safe_*` 확인이 전부 막힙니다(`safety.may_stat` · `safety.on_automount`).
+> 만지는 것 자체가 마운트 시도라, 스레드+타임아웃으로 두드리는 것도 하지 않고
+> **디스크 접근 없이 즉시** 판정합니다.
 
 ### 자동완성 아예 끄기 — `allow_listing` / `completer=False`
 
@@ -1284,8 +1290,8 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | `safety.is_guarded(path)` / `guarded_roots()` | 그 자리 자체를 막았는지 / 막은 목록 |
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
-| `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단/얕음/autofs 면 False) |
-| `safety.is_automount_point(path)` / `has_automounts()` | autofs 마운트 지점인지 / 시스템에 있는지 |
+| `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단 경로 · 깊이 ≤ min_depth · autofs 위면 False) |
+| `safety.on_automount(path)` / `is_automount_point(path)` / `has_automounts()` | autofs 위인지 / 지점 자체인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
 | `safety.reset()` | 모든 설정을 기본값으로 |
 | `safety.is_reachable(path, timeout)` | 만져도 멈추지 않을지 판정 |

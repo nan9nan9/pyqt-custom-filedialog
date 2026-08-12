@@ -945,13 +945,19 @@ def test_may_stat_guarded_parent(guarded_root):
 
 
 def test_may_stat_min_depth(shallow_tree):
-    """min_depth 는 나열만이 아니라 자동 stat 도 얕은 자리에서 막는다."""
+    """깊이가 min_depth 보다 **작거나 같으면** 자동 stat 을 아예 하지 않는다.
+
+    min_depth=2 기준으로 ``/user`` (1) 도 ``/user/je`` (2) 도 디스크를 만지지
+    않고, ``/user/jekai/x`` (3) 부터 평소대로 확인한다.
+    """
     from custom_file_dialog import safety
 
     root, depth = shallow_tree
     safety.configure(min_depth=depth + 1)
-    assert not safety.may_stat(os.path.join(root, "j"))          # 부모가 얕다
-    assert safety.may_stat(os.path.join(root, "jekai", "proj"))  # 충분히 깊다
+    assert not safety.may_stat(root)                             # 깊이 < limit
+    assert not safety.may_stat(os.path.join(root, "j"))          # 깊이 == limit
+    assert not safety.may_stat(os.path.join(root, "je"))         # 깊이 == limit
+    assert safety.may_stat(os.path.join(root, "jekai", "proj"))  # 깊이 > limit
 
 
 def test_automount_autodetected(monkeypatch, tmp_path):
@@ -979,18 +985,28 @@ def test_automount_autodetected(monkeypatch, tmp_path):
         assert not safety.is_automount_point(mounted)
         assert not safety.is_automount_point(str(tmp_path))
 
+        assert safety.on_automount(str(root))
+        assert safety.on_automount(str(root / "아직안붙음"))      # 지점 아래도
+        assert not safety.on_automount(mounted)                  # 붙은 하위는 아님
+
         assert not safety.may_list(str(root))                    # 나열 금지
+        assert not safety.may_list(str(root / "아직안붙음"))      # 안 붙은 하위도
         assert not safety.may_stat(str(root / "j"))              # 자식 stat 금지
         assert safety.may_stat(os.path.join(mounted, "a.csv"))   # 붙은 하위는 평소대로
+
+        # 만지는 판정과 safe_* 도 같은 규칙 — 디스크 접근 없이 즉시 False
+        assert not safety.is_reachable(str(root / "j"))
+        assert safety.safe_isdir(str(root / "jekai")) is False
     finally:
         safety.clear_cache()
 
 
-def test_safe_call_autofs_uses_timeout(monkeypatch, tmp_path):
-    """automounter 가 멈춰 있어도 safe_* 는 제한 시간 안에 돌아온다.
+def test_safe_call_never_touches_autofs(monkeypatch, tmp_path):
+    """autofs 위 경로는 safe_* 가 **아예 만지지 않는다** — 스레드도 안 만든다.
 
     autofs 는 원격 종류가 아니라서 예전에는 "로컬"로 보고 GUI 스레드에서 곧바로
-    stat 했다 — automounter 뒷단(LDAP/NIS)이 죽어 있으면 그대로 멈췄다.
+    stat 했다 — automounter 뒷단(LDAP/NIS)이 죽어 있으면 그대로 멈췄다. 확인
+    스레드를 만들어 두드리는 것도 마운트 시도라, 이제 즉시 default 로 판정한다.
     """
     from custom_file_dialog import safety
 
@@ -1007,20 +1023,81 @@ def test_safe_call_autofs_uses_timeout(monkeypatch, tmp_path):
         ],
     )
 
+    touched = []
     real_stat = os.stat
 
-    def hanging_child_stat(path, *args, **kwargs):
-        # 자식 이름의 stat = 마운트 시도. 뒷단이 죽어 돌아오지 않는 상황 흉내.
-        if str(path).startswith(mountpoint + os.sep):
-            time.sleep(1.0)
+    def counting_stat(path, *args, **kwargs):
+        if str(path).startswith(mountpoint):
+            touched.append(str(path))
         return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, "stat", hanging_child_stat)
+    monkeypatch.setattr(os, "stat", counting_stat)
     try:
+        before = safety.pending_checks()
         start = time.time()
         assert safety.safe_exists(os.path.join(mountpoint, "j"), timeout=0.2) is False
-        assert time.time() - start < 0.9        # 1초짜리 stat 을 기다리지 않았다
+        assert not safety.is_reachable(os.path.join(mountpoint, "j"))
+        assert time.time() - start < 0.1        # 기다림 없이 즉시
+        assert touched == []                    # 디스크 접근 0회
+        assert safety.pending_checks() == before    # 스레드도 0개
     finally:
+        safety.clear_cache()
+
+
+def test_hung_mount_spawns_only_one_thread(monkeypatch, tmp_path):
+    """죽은 마운트를 키 입력마다 확인해도 멈춘 스레드는 마운트당 하나뿐이다.
+
+    입력 한 자마다 확인 스레드가 생겨 쌓이면 그것대로 문제다. 멈춘 확인이
+    걸려 있는 마운트는 다시 두드리지 않고 곧바로 실패로 판정해야 한다.
+    """
+    from custom_file_dialog import safety
+
+    mountpoint = str(tmp_path / "nfs")
+    os.mkdir(mountpoint)
+
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety,
+        "iter_mounts",
+        lambda refresh=False: [
+            ("/", "ext4", "/dev/sda1"),
+            (mountpoint, "nfs4", "srv:/export"),
+        ],
+    )
+    monkeypatch.setattr(safety, "probe_host", lambda *a, **k: True)
+
+    stat_calls = []
+    real_stat = os.stat
+
+    def hanging_stat(path, *args, **kwargs):
+        text = str(path)
+        if text.startswith(mountpoint + os.sep):
+            stat_calls.append(text)
+            time.sleep(0.8)                     # 제한 시간(0.2초)보다 길게
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", hanging_stat)
+    try:
+        # 첫 확인: 실제로 두드리고(스레드 1) 제한 시간 뒤 실패로 돌아온다
+        assert safety.safe_isfile(os.path.join(mountpoint, "a"), timeout=0.2) is False
+        assert len(stat_calls) == 1
+
+        # 그 스레드가 멈춰 있는 동안의 확인들: 즉시 실패, 새 스레드 없음
+        start = time.time()
+        for name in ("ab", "abc", "abcd"):
+            assert (
+                safety.safe_isfile(os.path.join(mountpoint, name), timeout=0.2)
+                is False
+            )
+        assert time.time() - start < 0.1
+        assert len(stat_calls) == 1             # 더 두드리지 않았다
+
+        # 멈췄던 스레드가 돌아오면 다시 실제로 확인한다
+        time.sleep(0.9)
+        assert safety.safe_isfile(os.path.join(mountpoint, "e"), timeout=0.2) is False
+        assert len(stat_calls) == 2
+    finally:
+        time.sleep(0.9)                         # 남은 스레드가 조용히 끝나게
         safety.clear_cache()
 
 
@@ -1189,3 +1266,36 @@ def test_typing_touches_no_guarded_child_at_syscall_level(tmp_path):
         pytest.skip("이 Qt 는 타이핑 중 경로를 만지지 않는다 — 관측 불가")
 
     assert typed_child_touches(safety_on=True) == []
+
+
+def test_dialog_start_at_avoids_automount_parent(qapp, monkeypatch, tmp_path):
+    """안 붙은 automount 하위를 시작 위치로 줘도 automount 뿌리를 열지 않는다.
+
+    ``directory="/user/jekai/f.csv"`` 인데 jekai 가 아직 안 붙어 있으면
+    safe_isdir 가 False 라 부모로 올라가는데, 그 부모(``/user``)를 열면
+    나열 = 전부 마운트다. 그때는 시작 위치를 잡지 않는 편이 안전하다.
+    """
+    from custom_file_dialog import CustomFileDialog, safety
+
+    root = tmp_path / "user"
+    root.mkdir()
+
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety,
+        "iter_mounts",
+        lambda refresh=False: [
+            ("/", "ext4", "/dev/sda1"),
+            (str(root), "autofs", "auto.user"),
+        ],
+    )
+    try:
+        dialog = CustomFileDialog(
+            None, mode="save_file", directory=str(root / "jekai" / "f.csv")
+        )
+        opened = os.path.normpath(dialog.directory().absolutePath())
+        assert opened != os.path.normpath(str(root))       # automount 뿌리가 아니다
+        assert not opened.startswith(str(root) + os.sep)   # 그 아래도 아니다
+        dialog.deleteLater()
+    finally:
+        safety.clear_cache()

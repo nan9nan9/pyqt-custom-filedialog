@@ -35,9 +35,15 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
 마운트를 부른다. ``/user/j`` 를 stat 하면 automounter 가 ``j`` 라는 이름을
 마운트하려고 시도한다 — 경로를 한 글자씩 칠 때마다 이 일이 일어나면 그것만으로
 시스템이 주저앉는다. 그래서 "입력 중인 경로를 **자동으로** 만져 봐도 되는가"를
-:func:`may_stat` 하나로 판정한다. 부모 폴더가 ``guarded_roots`` 이거나
-``min_depth`` 보다 얕거나 **autofs 마운트 지점**이면 False 다. autofs 는
+:func:`may_stat` 하나로 판정한다. 부모 폴더가 ``guarded_roots`` 이거나, 깊이가
+``min_depth`` 보다 **작거나 같거나**, **autofs 마운트 위**면 False — 그때는
+스레드+타임아웃 확인조차 하지 않고 **디스크를 아예 만지지 않는다.** autofs 는
 설정 없이도 ``/proc/self/mountinfo`` 에서 자동으로 알아본다.
+
+멈춘 확인 스레드가 쌓이지도 않는다 — 죽은 원격 마운트를 실제로 만져 보는
+확인은 **마운트당 한 번에 하나만** 돌고(:func:`call_with_timeout` 의
+``pending_key``), 그 스레드가 돌아오기 전에는 같은 마운트를 다시 두드리지
+않고 곧바로 실패로 판정한다.
 
 판정 결과는 **마운트 단위로 캐시**해서, 죽은 서버를 매번 다시 두드리지 않는다.
 
@@ -118,6 +124,7 @@ _settings = {
 _cache = {}                 # key -> (판정, 시각)
 _mounts = {"list": None, "stamp": 0.0}
 _pending = set()            # 아직 돌아오지 않은(=멈춘) 확인 스레드 이름
+_pending_keys = set()       # 멈춘 확인이 걸려 있는 마운트지점 — 다시 안 두드린다
 
 
 def _abspath(path):
@@ -158,7 +165,10 @@ def configure(
             나열과 키 입력마다의 자동 확인(:func:`may_stat`)에만 걸리므로,
             경로를 끝까지 쳐서 **확정**하는 것과 다이얼로그에서 폴더를 눌러
             들어가는 것은 그대로 된다. 들어가는 것까지 막으려면
-            ``guarded_roots`` 를 함께 쓴다.
+            ``guarded_roots`` 를 함께 쓴다. 자동 확인 쪽은 깊이가 이 값보다
+            **작거나 같은** 경로를 디스크에 아예 접근하지 않는다
+            (``min_depth=2`` 면 ``/user/je`` 까지 — 나열은 어차피 그 부모를
+            읽는 일이라 두 규칙은 같은 자리에서 멈춘다).
         allow_listing: **자동완성이 폴더 목록을 읽어도 되는지.** ``False`` 면
             깊이와 무관하게 어떤 폴더도 읽지 않아 완성 후보가 아예 뜨지 않는다.
             자동완성을 통째로 끄는 스위치다.
@@ -267,15 +277,16 @@ def may_list(path):
     """그 폴더를 자동완성이 읽어도 되는지 — 세 설정과 automount 를 한 번에 본다.
 
     ``allow_listing`` 이 꺼져 있거나, ``guarded_roots`` 에 지목됐거나,
-    ``min_depth`` 보다 얕거나, 그 폴더 자체가 **autofs 마운트 지점**이면 False.
-    (autofs 는 항목을 나열해 stat 하는 것만으로 전부 마운트된다 — 설정이 없어도
-    mountinfo 에서 자동으로 알아보고 막는다.)
+    ``min_depth`` 보다 얕거나, **autofs 마운트 위**면 False.
+    (autofs 는 항목을 나열해 stat 하는 것만으로 전부 마운트되고, 아직 안 붙은
+    하위 폴더는 나열하려면 먼저 마운트해야 한다 — 설정이 없어도 mountinfo 에서
+    자동으로 알아보고 아예 읽지 않는다.)
     """
     return (
         listing_allowed()
         and not is_guarded(path)
         and not is_too_shallow(path)
-        and not is_automount_point(path)
+        and not on_automount(path)
     )
 
 
@@ -301,13 +312,28 @@ def has_automounts():
     return any(fstype in AUTOMOUNT_FSTYPES for _point, fstype, _src in iter_mounts())
 
 
+def on_automount(path):
+    """autofs 마운트 위의 경로인지 (지점 자체든 그 아래든).
+
+    autofs 위에서는 나열도, 자식 stat 도, 아직 안 붙은 하위 폴더를 여는 것도
+    전부 마운트 시도가 된다. 이미 다른 종류(nfs 등)로 붙은 하위 경로는 그
+    마운트가 더 길게 잡히므로 여기서 걸리지 않는다.
+    """
+    mount = mount_for(path)
+    return bool(mount) and mount[1] in AUTOMOUNT_FSTYPES
+
+
 def may_stat(path):
     """입력 중인 경로를 **자동으로** 만져(stat) 봐도 되는지.
 
     타이핑 도중의 미완성 경로를 키 입력마다 stat 하면, automount 아래에서는
-    글자마다 마운트 시도가 일어난다(``/user/j`` → ``j`` 마운트 시도). 그래서
-    **부모 폴더**를 기준으로 판정한다 — 부모가 ``guarded_roots`` 로 지목된
-    자리거나, ``min_depth`` 보다 얕거나, autofs 마운트 지점이면 False.
+    글자마다 마운트 시도가 일어난다(``/user/j`` → ``j`` 마운트 시도). 다음이면
+    False — **디스크를 아예 만지지 않는다** (스레드+타임아웃 확인조차 안 한다).
+
+    - 부모 폴더가 ``guarded_roots`` 로 지목된 자리
+    - 깊이가 ``min_depth`` 보다 **작거나 같음** (``min_depth=2`` 면 ``/user/je``
+      까지 금지, ``/user/jekai/x`` 부터 허용)
+    - autofs 마운트 위 (지점 자체든 아직 안 붙은 그 아래든 — 설정 없이 자동)
 
     자동 확인(자동완성 · 키 입력마다의 유효성 표시)에만 쓰는 판정이다. 사용자가
     Enter 나 버튼으로 **확정**한 경로를 여는 것까지 막는 판정이 아니다 — 확정은
@@ -315,19 +341,24 @@ def may_stat(path):
     """
     if not path:
         return True
-    parent = os.path.dirname(_abspath(path))
-    if is_guarded(parent):
+    absolute = _abspath(path)
+    if is_guarded(os.path.dirname(absolute)):
         return False
     limit = min_depth()
-    if limit > 0 and path_depth(parent) < limit:
+    if limit > 0 and path_depth(absolute) <= limit:
         return False
-    return not is_automount_point(parent)
+    return not on_automount(absolute)
 
 
 def clear_cache():
-    """캐시된 판정과 마운트 표를 모두 지운다(마운트를 고친 뒤 등)."""
+    """캐시된 판정과 마운트 표를 모두 지운다(마운트를 고친 뒤 등).
+
+    멈춘 확인 때문에 눌러 둔 마운트(``pending_key``)도 다시 두드릴 수 있게
+    푼다 — 최악의 경우 스레드가 하나 더 생길 뿐이다.
+    """
     with _lock:
         _cache.clear()
+        _pending_keys.clear()
     _mounts["list"] = None
 
 
@@ -414,16 +445,6 @@ def is_remote(path):
     return bool(mount) and mount[1] in REMOTE_FSTYPES
 
 
-def _may_hang(fstype):
-    """만졌을 때 멈출 수 있는 종류인지 — 원격, 또는 automount(autofs).
-
-    autofs 는 원격이 아니지만 자식을 stat 하면 automounter 가 마운트를
-    시도한다. 그 뒷단(NIS/LDAP · 마운트 대상 서버)이 죽어 있으면 stat 이
-    돌아오지 않으므로, 원격과 같은 스레드+타임아웃 취급을 받아야 한다.
-    """
-    return fstype in REMOTE_FSTYPES or fstype in AUTOMOUNT_FSTYPES
-
-
 def server_of(source, fstype=None):
     """마운트 원본에서 서버 호스트를 뽑는다 (없으면 None).
 
@@ -474,13 +495,25 @@ def probe_host(host, port, timeout=None):
 def call_with_timeout(func, *args, **kwargs):
     """``func`` 을 별도 스레드에서 돌리고 정해진 시간만 기다린다.
 
+    ``pending_key`` 를 주면(보통 마운트지점) **그 키의 확인이 아직 멈춰 있는
+    동안에는 새 스레드를 만들지 않고** 곧바로 ``(False, None)`` 을 돌려준다.
+    죽은 마운트 위의 경로를 키 입력마다 확인해도 멈춘 스레드는 마운트당
+    한 개뿐이고, 그 스레드가 돌아오면 다시 실제로 확인한다.
+
     Returns:
         ``(끝났는가, 반환값)``. 시간 안에 못 끝내면 ``(False, None)`` 이고,
         그 스레드는 그대로 둔다(D 상태라 죽일 수 없다). 블로킹 I/O 중에는
         GIL 이 풀려 있으므로 호출한 쪽은 계속 움직인다.
     """
     timeout = kwargs.pop("timeout", None)
+    key = kwargs.pop("pending_key", None)
     wait = _settings["timeout"] if timeout is None else float(timeout)
+
+    if key is not None:
+        with _lock:
+            if key in _pending_keys:
+                return False, None          # 이미 멈춘 확인이 있다 -> 안 두드린다
+
     box = {}
     done = threading.Event()
 
@@ -493,6 +526,8 @@ def call_with_timeout(func, *args, **kwargs):
             done.set()
             with _lock:
                 _pending.discard(threading.current_thread())
+                if key is not None:
+                    _pending_keys.discard(key)
 
     thread = threading.Thread(target=run, daemon=True)
     with _lock:
@@ -500,6 +535,11 @@ def call_with_timeout(func, *args, **kwargs):
     thread.start()
 
     if not done.wait(wait):
+        if key is not None:
+            with _lock:
+                # 방금 끝났으면(finally 가 먼저 돌았으면) 키를 남기지 않는다
+                if not done.is_set():
+                    _pending_keys.add(key)
         return False, None                  # 멈췄다 -> 스레드는 두고 나온다
     if "error" in box:
         return True, None
@@ -525,7 +565,11 @@ def is_reachable(path, timeout=None, use_cache=True):
         return False                         # 그 자리 자체는 열지 않는다
 
     mount = mount_for(path)
-    if mount is None or not _may_hang(mount[1]):
+    if mount is None:
+        return True                          # 마운트 표에 없으면 로컬로 본다
+    if mount[1] in AUTOMOUNT_FSTYPES:
+        return False                         # 만지는 것 자체가 마운트 시도다
+    if mount[1] not in REMOTE_FSTYPES:
         return True                          # 로컬 -> 그대로 진행
 
     mountpoint, fstype, source = mount
@@ -560,8 +604,11 @@ def self_check(mountpoint, source, timeout=None, fstype=None):
         if host and not probe_host(host, port, wait):
             return False
 
-    # 3) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈춘다)
-    finished, _value = call_with_timeout(os.stat, mountpoint, timeout=wait)
+    # 3) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈추고,
+    #    같은 마운트에서 멈춘 확인이 있으면 스레드를 더 만들지 않는다)
+    finished, _value = call_with_timeout(
+        os.stat, mountpoint, timeout=wait, pending_key=mountpoint
+    )
     return finished
 
 
@@ -599,12 +646,19 @@ def safe_call(func, path, default=False, timeout=None):
         return default                      # 그 자리 자체는 만지지 않는다
 
     mount = mount_for(path)
-    if mount is None or not _may_hang(mount[1]):
+    if mount is None:
+        return func(path)                   # 마운트 표에 없으면 로컬로 본다
+    if mount[1] in AUTOMOUNT_FSTYPES:
+        return default                      # autofs 위 -> 아예 만지지 않는다
+    if mount[1] not in REMOTE_FSTYPES:
         return func(path)                   # 로컬 -> 곧바로
 
     if not is_reachable(path, timeout=timeout):
         return default
-    finished, value = call_with_timeout(func, path, timeout=timeout)
+    # 같은 마운트에서 이미 멈춘 확인이 있으면 스레드를 더 만들지 않는다
+    finished, value = call_with_timeout(
+        func, path, timeout=timeout, pending_key=mount[0]
+    )
     return value if finished else default
 
 
