@@ -565,3 +565,53 @@ def test_sidebar_menu_installed_through_widget(qapp, tmp_path, monkeypatch):
     plain.browse()
     assert not seen["places"]
 
+
+
+def test_copy_path_menu(qapp, tmp_path):
+    """파일 목록 우클릭에 "경로 복사"가 구분선으로 나뉘어 붙고, 실제로 복사된다."""
+    from qtpy.QtWidgets import QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+
+    dialog, menus = _menu_dialog(store, os.path.dirname(design))
+    dialog.show()
+    _spin(qapp, 400)
+
+    copied = []
+    menus.pathCopied.connect(copied.append)
+
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+    rows = {model.index(r, 0, root).data(): model.index(r, 0, root)
+            for r in range(model.rowCount(root))}
+
+    _path, menu = _view_menu(menus, tree, rows["설계도.csv"])
+    assert "경로 복사" in _menu_labels(menu)
+
+    # 구분선으로 나뉘어 있다 — 바로 앞뒤 어느 한쪽에 separator 가 있다
+    actions = menu.actions()
+    at = [a.text() for a in actions].index("경로 복사")
+    assert actions[at - 1].isSeparator() and actions[at + 1].isSeparator()
+
+    action = [a for a in actions if a.text() == "경로 복사"][0]
+    action.trigger()
+    assert QApplication.clipboard().text() == design
+    assert copied == [design]
+    dialog.close()
+
+
+def test_copy_path_resolves_links(qapp, tmp_path):
+    """분류 안의 링크에서 "경로 복사"는 링크가 아니라 **원본 경로**를 복사한다."""
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    link = store.add("설계", design)
+
+    dialog, menus = _menu_dialog(store, str(tmp_path))
+    assert menus.copy_path(link) == design               # 링크 -> 원본
+    assert QApplication.clipboard().text() == design
+
+    assert menus.copy_path(design) == design             # 일반 경로는 그대로
+    assert menus.copy_path("") is None                   # 빈 경로는 아무 일 없음
+    dialog.close()

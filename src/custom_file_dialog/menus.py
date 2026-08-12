@@ -4,8 +4,9 @@
 
 **파일 목록**(오른쪽)에서 파일이나 폴더를 우클릭하면 맨 위에
 ``즐겨찾기에 추가 ▸`` 가 붙는다. 기존 분류를 고르거나 새 분류를 만들 수 있다.
-그 아래에는 Qt 기본 메뉴 항목(이름 변경 · 삭제 · 숨김 파일 · 새 폴더)이 그대로
-따라붙는다.
+구분선 아래에 ``경로 복사`` (클립보드로, 분류 안의 링크는 원본 경로), 다시
+구분선 아래에 Qt 기본 메뉴 항목(이름 변경 · 삭제 · 숨김 파일 · 새 폴더)이
+그대로 따라붙는다.
 
 **분류 폴더 안**(즐겨찾기 분류 · 최근 파일)에서는 Qt 기본 "삭제" 대신
 ``'설계'에서 제거`` · ``'최근 파일'에서 제거`` 가 나온다. 거기 보이는 것은
@@ -28,6 +29,7 @@ import os
 
 from qtpy.QtCore import QFileInfo, QObject, Qt, Signal
 from qtpy.QtWidgets import (
+    QApplication,
     QFileDialog,
     QInputDialog,
     QListView,
@@ -73,6 +75,7 @@ class FavoritesMenus(QObject):
         categoryRemoved(str): 메뉴로 분류를 삭제했을 때 분류 이름.
         recentCleared(str): 메뉴로 최근 목록을 비웠을 때 항목 이름.
         sidebarEntryRemoved(str): 사이드바에서 일반 항목을 뺐을 때 그 경로.
+        pathCopied(str): 메뉴로 경로를 클립보드에 복사했을 때 그 경로.
     """
 
     favoriteAdded = Signal(str, str)
@@ -80,6 +83,7 @@ class FavoritesMenus(QObject):
     categoryRemoved = Signal(str)
     recentCleared = Signal(str)
     sidebarEntryRemoved = Signal(str)
+    pathCopied = Signal(str)
 
     def __init__(self, dialog, places, confirm=True, add_menu=True, parent=None):
         # 다이얼로그를 부모로 삼아 다이얼로그가 사는 동안 함께 살아 있게 한다
@@ -205,7 +209,15 @@ class FavoritesMenus(QObject):
             self._add_favorite_submenu(menu, path)
             menu.addSeparator()
 
-        # 2) Qt 기본 항목 (이름 변경 · 삭제 · 숨김 파일 · 새 폴더)
+        # 2) 경로 복사 — 파일/폴더가 있으면 늘 붙는다 (읽기 전용에서도 되는 동작)
+        if path:
+            action = menu.addAction("경로 복사")
+            action.triggered.connect(
+                lambda _checked=False, p=path: self.copy_path(p)
+            )
+            menu.addSeparator()
+
+        # 3) Qt 기본 항목 (이름 변경 · 삭제 · 숨김 파일 · 새 폴더)
         self._add_default_actions(menu, path, allow_delete=store is None)
         return None if menu.isEmpty() else menu
 
@@ -252,6 +264,22 @@ class FavoritesMenus(QObject):
             action = dialog.findChild(QAction, name)
             if action is not None and action.isVisible():
                 menu.addAction(action)
+
+    def copy_path(self, path):
+        """경로를 클립보드에 복사한다. 분류 안의 링크는 **원본 경로**를 복사한다.
+
+        링크 경로(``<favorites>/설계/도면.csv``)는 앱 밖에 붙여 넣는 순간 링크
+        창고가 새는 셈이라, 사용자가 실제로 아는 위치를 준다.
+
+        Returns:
+            복사한 경로 (빈 경로가 들어오면 None).
+        """
+        if not path:
+            return None
+        target = self._places.link_target(path) or str(path)
+        QApplication.clipboard().setText(target)
+        self.pathCopied.emit(target)
+        return target
 
     def add_to_favorites(self, path, category=None):
         """경로를 즐겨찾기에 등록한다. ``category`` 가 None 이면 새 분류를 묻는다."""
