@@ -27,7 +27,7 @@ False 를 돌려주면 아무 일도 하지 않은 것이다.
 
 import os
 
-from qtpy.QtCore import QFileInfo, QObject, Qt, Signal
+from qtpy.QtCore import QObject, Qt, Signal
 from qtpy.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -43,8 +43,14 @@ try:                                    # Qt6 는 QtGui, Qt5 는 QtWidgets
 except ImportError:                     # pragma: no cover
     from qtpy.QtWidgets import QAction
 
+from . import safety
 from .constants import PATH_ROLE
 from .util import exec_menu, url_path
+
+
+def _writable(path):
+    """쓰기 가능 여부 — ``QFileInfo.isWritable`` 대신 safe_call 로 감쌀 수 있는 형태."""
+    return os.access(path, os.W_OK)
 
 URL_ROLE = FILE_PATH_ROLE = PATH_ROLE
 
@@ -249,7 +255,11 @@ class FavoritesMenus(QObject):
         read_only = bool(dialog.options() & QFileDialog.Option.ReadOnly)
 
         if path:
-            writable = QFileInfo(path).isWritable()
+            # 우클릭 -> 메뉴가 뜨는 그 순간 GUI 스레드에서 도는 코드다. 쓰기 가능
+            # 여부 확인은 stat 이라, 원격/automount 경로를 그대로 만지면 메뉴가
+            # 늦게 뜨거나 멈춘다. 안전 확인으로 감싸고, 만질 수 없는 자리는
+            # 이름 변경·삭제를 비활성으로 둔다.
+            writable = safety.safe_call(_writable, path, default=False)
             for name in QT_ITEM_ACTIONS:
                 if name == "qt_delete_action" and not allow_delete:
                     continue

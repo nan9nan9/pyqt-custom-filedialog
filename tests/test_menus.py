@@ -615,3 +615,51 @@ def test_copy_path_resolves_links(qapp, tmp_path):
     assert menus.copy_path(design) == design             # 일반 경로는 그대로
     assert menus.copy_path("") is None                   # 빈 경로는 아무 일 없음
     dialog.close()
+
+
+def test_view_menu_never_stats_automount_paths(qapp, tmp_path, monkeypatch):
+    """우클릭 메뉴 구성이 automount 위 경로를 stat 하지 않는다.
+
+    메뉴는 GUI 스레드에서 그 자리에서 만들어지므로, 쓰기 가능 여부 확인이
+    원격/automount 경로를 그대로 만지면 메뉴가 뜨는 순간 멈춘다. 만질 수 없는
+    자리는 확인 없이 이름 변경·삭제만 비활성으로 둔다.
+    """
+    from qtpy.QtWidgets import QMenu
+
+    from custom_file_dialog import safety
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    dialog, menus = _menu_dialog(store, str(tmp_path))
+
+    root = tmp_path / "user"
+    root.mkdir()
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety,
+        "iter_mounts",
+        lambda refresh=False: [
+            ("/", "ext4", "/dev/sda1"),
+            (str(root), "autofs", "auto.user"),
+        ],
+    )
+
+    touched = []
+    real_access = os.access
+
+    def counting_access(path, *args, **kwargs):
+        touched.append(str(path))
+        return real_access(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "access", counting_access)
+    try:
+        menu = QMenu()
+        menus._add_default_actions(menu, str(root / "jekai" / "f.csv"))
+        assert not [p for p in touched if p.startswith(str(root))]
+
+        # 로컬 경로는 평소대로 확인한다
+        local = _touch(tmp_path, "일반.txt")
+        menus._add_default_actions(QMenu(), local)
+        assert local in touched
+    finally:
+        safety.clear_cache()
+    dialog.close()
