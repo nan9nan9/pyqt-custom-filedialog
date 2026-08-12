@@ -205,7 +205,6 @@ safety.configure(
     guarded_roots=["/user", "/mnt/nfs", "/net"],  # 그 자리 자체는 열지 않음
     min_depth=2,                                  # 얕은 자리는 자동완성이 나열 안 함
     timeout=1.0,                                  # 죽은 마운트 판별 제한 시간
-    probes=[("ldap.corp", 389)],                  # 경로만 봐서는 모르는 의존 서비스
 )
 ```
 
@@ -1242,11 +1241,9 @@ safety.configure(
 ```python
 from custom_file_dialog import FilePathEdit, safety
 
-# uid/gid 조회가 막혀 멈추게 만드는 LDAP 처럼, 경로만 봐서는 모르는 의존 서비스를 등록
 safety.configure(
     timeout=1.0,
     ttl=30.0,
-    probes=[("ldap.corp", 389)],          # 경로만 봐서는 모르는 의존 서비스
     guarded_roots=["/user", "/mnt/nfs"],  # 그 자리 자체는 열지 않을 경로
 )
 
@@ -1286,12 +1283,12 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 
 | 함수 | 설명 |
 | --- | --- |
-| `safety.configure(timeout, ttl, probes, guarded_roots, min_depth, allow_listing)` | 제한 시간 · 캐시 · 프로브 대상 · 차단 경로 · 자동완성 최소 깊이 · 나열 허용 |
+| `safety.configure(timeout, ttl, guarded_roots, min_depth, allow_listing)` | 제한 시간 · 캐시 · 차단 경로 · 자동완성 최소 깊이 · 나열 허용 |
 | `safety.is_guarded(path)` / `guarded_roots()` | 그 자리 자체를 막았는지 / 막은 목록 |
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
 | `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단 경로 · 깊이 ≤ min_depth · autofs 위면 False) |
-| `safety.on_automount(path)` / `is_automount_point(path)` / `has_automounts()` | autofs 위인지 / 지점 자체인지 / 시스템에 있는지 |
+| `safety.on_automount(path)` / `has_automounts()` | autofs 마운트 위인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
 | `safety.reset()` | 모든 설정을 기본값으로 |
 | `safety.is_reachable(path, timeout)` | 만져도 멈추지 않을지 판정 |

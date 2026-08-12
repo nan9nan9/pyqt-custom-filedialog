@@ -116,22 +116,6 @@ def test_safety_local_paths_are_fast(dead_nfs):
     assert safety.safe_isfile("/etc") is False
 
 
-def test_safety_extra_probes(dead_nfs, monkeypatch):
-    """LDAP 처럼 경로만 봐서는 모르는 의존 서비스도 등록해 검사한다."""
-    safety = dead_nfs["safety"]
-    state = dead_nfs["state"]
-    state["probe_ok"] = True
-    state["stat_hangs"] = False
-
-    safety.configure(probes=[("ldap.corp", 389)])
-    try:
-        assert safety.settings()["probes"] == [("ldap.corp", 389)]
-        safety.is_reachable(os.path.join(dead_nfs["mount"], "x"), timeout=0.2)
-        assert ("ldap.corp", 389) in state["probes"]
-    finally:
-        safety.configure(probes=[])
-
-
 def test_guarded_root_blocks_itself_only(guarded_root):
     """그 자리 자체만 막고, 하위 경로는 평소대로 쓴다."""
     from custom_file_dialog import safety
@@ -868,11 +852,6 @@ def test_probe_port_follows_fstype(monkeypatch, tmp_path):
     assert probed == []
     assert stats                                          # stat 은 돌았다
 
-    # fstype 을 안 주면 예전처럼 NFS 포트 (하위 호환)
-    probed.clear()
-    assert safety.self_check("/mnt/nfs", "nfs1:/export", 0.1)
-    assert probed == [("nfs1", safety.NFS_PORT)]
-
 
 def test_is_reachable_passes_fstype(monkeypatch, tmp_path):
     """is_reachable 이 마운트 종류를 self_check 까지 전달한다."""
@@ -981,13 +960,10 @@ def test_automount_autodetected(monkeypatch, tmp_path):
     )
     try:
         assert safety.has_automounts()
-        assert safety.is_automount_point(str(root))
-        assert not safety.is_automount_point(mounted)
-        assert not safety.is_automount_point(str(tmp_path))
-
         assert safety.on_automount(str(root))
         assert safety.on_automount(str(root / "아직안붙음"))      # 지점 아래도
         assert not safety.on_automount(mounted)                  # 붙은 하위는 아님
+        assert not safety.on_automount(str(tmp_path))            # 밖은 아님
 
         assert not safety.may_list(str(root))                    # 나열 금지
         assert not safety.may_list(str(root / "아직안붙음"))      # 안 붙은 하위도

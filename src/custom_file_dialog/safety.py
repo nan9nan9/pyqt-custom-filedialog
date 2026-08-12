@@ -10,9 +10,7 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
 2. **소켓 프로브** — 원격이면 서버에 TCP 연결만 시도해 본다. 역시 파일시스템을
    건드리지 않으므로 절대 멈추지 않고, 방화벽에 막혀 있으면 타임아웃으로 바로
    판별된다. 서버는 마운트 정보에서 자동으로 알아내 **종류에 맞는 포트**로만
-   두드리고(NFS 2049 · CIFS 445 · sshfs 22, :data:`SERVER_PORTS`), uid/gid 를
-   찾느라 멈추는 LDAP 서버처럼 **다른 의존 서비스는 직접 등록**할 수 있다
-   (:func:`configure`).
+   두드린다(NFS 2049 · CIFS 445 · sshfs 22, :data:`SERVER_PORTS`).
 3. **스레드 + 타임아웃** — 위를 통과했을 때만 실제 ``os.stat()`` 을 별도 스레드에서
    돌리고 정해진 시간만 기다린다. 블로킹 I/O 중에는 GIL 이 풀리므로 그 스레드가
    못 돌아와도 GUI 는 계속 움직인다. (프로세스를 죽이는 방식은 D 상태에서는
@@ -49,7 +47,7 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
 
     from custom_file_dialog import safety
 
-    safety.configure(timeout=1.0, probes=[("ldap.corp", 389)])
+    safety.configure(timeout=1.0, guarded_roots=["/user"], min_depth=2)
     if safety.is_reachable("/nfs/proj/a.csv"):
         ...
 """
@@ -81,17 +79,14 @@ REMOTE_FSTYPES = frozenset(
 # systemd .automount 유닛과 autofs 데몬 모두 mountinfo 에 "autofs" 로 나온다.
 AUTOMOUNT_FSTYPES = frozenset({"autofs"})
 
-# NFS 서버에 연결해 볼 기본 포트
-NFS_PORT = 2049
-
 # 원격 종류별로 살펴볼 서버 포트. **모르는 종류는 소켓 프로브를 건너뛰고**
 # 스레드+타임아웃 stat 만으로 판정한다 — 엉뚱한 포트를 두드리면 멀쩡한 서버가
 # 거부(ECONNREFUSED)해서 "죽었다"로 오판하기 때문이다(예: CIFS 서버는 2049 를
 # 듣지 않는다). 프로브를 건너뛰어도 stat 이 타임아웃으로 지켜 주므로 GUI 는
 # 멈추지 않고, 죽은 마운트 판별이 한 타임아웃만큼 느려질 뿐이다.
 SERVER_PORTS = {
-    "nfs": NFS_PORT,
-    "nfs4": NFS_PORT,
+    "nfs": 2049,
+    "nfs4": 2049,
     "cifs": 445,
     "smbfs": 445,
     "smb3": 445,
@@ -116,7 +111,6 @@ _lock = threading.Lock()
 _settings = {
     "timeout": DEFAULT_TIMEOUT,
     "ttl": DEFAULT_TTL,
-    "probes": [],
     "guarded_roots": [],
     "min_depth": DEFAULT_MIN_DEPTH,
     "allow_listing": DEFAULT_ALLOW_LISTING,
@@ -135,7 +129,6 @@ def _abspath(path):
 def configure(
     timeout=None,
     ttl=None,
-    probes=None,
     guarded_roots=None,
     min_depth=None,
     allow_listing=None,
@@ -145,10 +138,6 @@ def configure(
     Args:
         timeout: 한 번의 확인에 기다릴 최대 시간(초).
         ttl: 판정 결과를 재사용할 시간(초). 0 이면 캐시하지 않는다.
-        probes: 원격 경로를 만지기 전에 연결해 볼 ``(호스트, 포트)`` 목록.
-            마운트한 서버는 정보에서 자동으로 알아내므로, 여기에는 **경로만
-            봐서는 알 수 없는 의존 서비스**를 넣는다. 예: uid/gid 조회가 막혀
-            멈추게 만드는 LDAP 서버 ``[("ldap.corp", 389)]``.
         guarded_roots: **그 폴더 자체는 열지 않을** 경로 목록.
             ``/user`` 처럼 아래에 마운트가 잔뜩 달린 자리를 그대로 나열하면
             전부 마운트되면서 시스템이 주저앉는다. 여기에 ``["/user"]`` 를 넣으면
@@ -183,8 +172,6 @@ def configure(
             _settings["timeout"] = float(timeout)
         if ttl is not None:
             _settings["ttl"] = float(ttl)
-        if probes is not None:
-            _settings["probes"] = [(str(h), int(p)) for h, p in probes]
         if guarded_roots is not None:
             _settings["guarded_roots"] = [
                 _abspath(p) for p in guarded_roots if str(p).strip()
@@ -199,11 +186,7 @@ def configure(
 def settings():
     """현재 설정 사본."""
     with _lock:
-        return dict(
-            _settings,
-            probes=list(_settings["probes"]),
-            guarded_roots=list(_settings["guarded_roots"]),
-        )
+        return dict(_settings, guarded_roots=list(_settings["guarded_roots"]))
 
 
 def reset():
@@ -212,7 +195,6 @@ def reset():
         _settings.update(
             timeout=DEFAULT_TIMEOUT,
             ttl=DEFAULT_TTL,
-            probes=[],
             guarded_roots=[],
             min_depth=DEFAULT_MIN_DEPTH,
             allow_listing=DEFAULT_ALLOW_LISTING,
@@ -287,23 +269,6 @@ def may_list(path):
         and not is_guarded(path)
         and not is_too_shallow(path)
         and not on_automount(path)
-    )
-
-
-def is_automount_point(path):
-    """그 폴더 **자체**가 automount(autofs) 지점인지.
-
-    autofs 아래에서는 자식 이름을 stat 하는 것이 곧 마운트 시도다. 마운트 표만
-    보고 판정하므로 파일시스템을 건드리지 않는다. 이미 마운트된 하위(예: nfs 로
-    붙은 ``/user/jekai``)는 그 마운트가 더 길게 잡히므로 False 가 된다.
-    """
-    if not path:
-        return False
-    mount = mount_for(path)
-    return (
-        bool(mount)
-        and mount[1] in AUTOMOUNT_FSTYPES
-        and os.path.normpath(mount[0]) == _abspath(path)
     )
 
 
@@ -547,11 +512,33 @@ def call_with_timeout(func, *args, **kwargs):
 
 
 # --------------------------------------------------------------- 판정
+# 경로를 만졌을 때 무슨 일이 나는지에 따른 네 갈래. is_reachable 과 safe_call 이
+# 같은 분기를 공유한다(마운트 표 조회도 한 번만 한다).
+_BLOCKED = "blocked"        # 차단 경로 · automount 위 — 만지는 것 자체가 금지
+_LOCAL = "local"            # 곧바로 만져도 되는 곳
+_REMOTE = "remote"          # 서버가 죽으면 멈출 수 있는 곳 — 프로브+타임아웃
+
+
+def _classify(path):
+    """경로를 ``( _BLOCKED | _LOCAL | _REMOTE, 마운트 )`` 로 가른다."""
+    if is_guarded(path):
+        return _BLOCKED, None                # 그 자리 자체는 열지 않는다
+    mount = mount_for(path)
+    if mount is None:
+        return _LOCAL, None                  # 마운트 표에 없으면 로컬로 본다
+    if mount[1] in AUTOMOUNT_FSTYPES:
+        return _BLOCKED, mount               # 만지는 것 자체가 마운트 시도다
+    if mount[1] in REMOTE_FSTYPES:
+        return _REMOTE, mount
+    return _LOCAL, mount
+
+
 def is_reachable(path, timeout=None, use_cache=True):
     """그 경로를 만져도 멈추지 않을지 판정한다.
 
-    로컬 경로는 곧바로 True. 원격이면 서버 소켓 프로브 → 실제 ``os.stat()``
-    (스레드+타임아웃) 순으로 확인하고, 결과를 마운트 단위로 캐시한다.
+    로컬 경로는 곧바로 True, 차단 경로와 autofs 위는 만지지 않고 False.
+    원격이면 서버 소켓 프로브 → 실제 ``os.stat()`` (스레드+타임아웃) 순으로
+    확인하고, 결과를 마운트 단위로 캐시한다.
 
     Args:
         path: 확인할 경로.
@@ -561,50 +548,42 @@ def is_reachable(path, timeout=None, use_cache=True):
     Returns:
         만져도 되면 True, 멈출 것 같으면 False.
     """
-    if is_guarded(path):
-        return False                         # 그 자리 자체는 열지 않는다
+    kind, mount = _classify(path)
+    if kind == _BLOCKED:
+        return False
+    if kind == _LOCAL:
+        return True
+    return _mount_reachable(mount, timeout, use_cache)
 
-    mount = mount_for(path)
-    if mount is None:
-        return True                          # 마운트 표에 없으면 로컬로 본다
-    if mount[1] in AUTOMOUNT_FSTYPES:
-        return False                         # 만지는 것 자체가 마운트 시도다
-    if mount[1] not in REMOTE_FSTYPES:
-        return True                          # 로컬 -> 그대로 진행
 
+def _mount_reachable(mount, timeout=None, use_cache=True):
+    """원격 마운트 하나의 판정 — 캐시를 먼저 보고, 없으면 실제로 확인한다."""
     mountpoint, fstype, source = mount
     if use_cache:
         cached = _cached(mountpoint)
         if cached is not None:
             return cached
-
     result = self_check(mountpoint, source, timeout, fstype=fstype)
     _remember(mountpoint, result)
     return result
 
 
 def self_check(mountpoint, source, timeout=None, fstype=None):
-    """캐시 없이 실제로 확인한다(프로브 → stat).
+    """캐시 없이 실제로 확인한다(서버 프로브 → stat).
 
-    ``fstype`` 을 주면 그 종류에 맞는 포트로 서버를 두드린다
-    (:data:`SERVER_PORTS`). 표에 없는 종류는 서버 프로브를 건너뛴다.
-    주지 않으면 예전처럼 NFS 포트를 쓴다.
+    ``fstype`` 이 :data:`SERVER_PORTS` 에 있으면 그 종류에 맞는 포트로 서버를
+    두드리고, 없는(모르는) 종류는 서버 프로브를 건너뛰고 stat 으로만 판정한다.
     """
     wait = _settings["timeout"] if timeout is None else float(timeout)
 
-    # 1) 등록된 의존 서비스(예: LDAP) 부터. 여기가 막히면 stat 도 멈춘다.
-    for host, port in _settings["probes"]:
-        if not probe_host(host, port, wait):
-            return False
-
-    # 2) 마운트한 서버 자체 — 종류에 맞는 포트로만
-    port = SERVER_PORTS.get(fstype) if fstype is not None else NFS_PORT
+    # 1) 마운트한 서버부터 — 종류에 맞는 포트로만
+    port = SERVER_PORTS.get(fstype)
     if port is not None:
         host = server_of(source, fstype)
         if host and not probe_host(host, port, wait):
             return False
 
-    # 3) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈추고,
+    # 2) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈추고,
     #    같은 마운트에서 멈춘 확인이 있으면 스레드를 더 만들지 않는다)
     finished, _value = call_with_timeout(
         os.stat, mountpoint, timeout=wait, pending_key=mountpoint
@@ -640,20 +619,16 @@ def safe_call(func, path, default=False, timeout=None):
     ``os.path.isfile`` / ``isdir`` / ``exists`` 를 그대로 넘겨 쓰면 된다.
 
     **로컬 경로는 그대로 호출한다.** 멈출 일이 없는데 스레드를 만들면 입력 한 자마다
-    스레드가 생기는 꼴이라, 원격/automount 마운트일 때만 프로브와 타임아웃을 거친다.
+    스레드가 생기는 꼴이라, 원격 마운트일 때만 프로브와 타임아웃을 거친다.
+    차단 경로와 autofs 위 경로는 아예 만지지 않고 ``default`` 다.
     """
-    if is_guarded(path):
-        return default                      # 그 자리 자체는 만지지 않는다
+    kind, mount = _classify(path)
+    if kind == _BLOCKED:
+        return default
+    if kind == _LOCAL:
+        return func(path)
 
-    mount = mount_for(path)
-    if mount is None:
-        return func(path)                   # 마운트 표에 없으면 로컬로 본다
-    if mount[1] in AUTOMOUNT_FSTYPES:
-        return default                      # autofs 위 -> 아예 만지지 않는다
-    if mount[1] not in REMOTE_FSTYPES:
-        return func(path)                   # 로컬 -> 곧바로
-
-    if not is_reachable(path, timeout=timeout):
+    if not _mount_reachable(mount, timeout):
         return default
     # 같은 마운트에서 이미 멈춘 확인이 있으면 스레드를 더 만들지 않는다
     finished, value = call_with_timeout(

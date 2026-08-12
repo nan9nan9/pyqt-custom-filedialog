@@ -36,15 +36,6 @@ from .history import PathHistory
 from .validators import join_paths, split_paths, validate_paths
 
 
-def _make_recent_store(recent_files, recent_max=None):
-    """``recent_files`` 인자를 :class:`RecentStore` (또는 None) 로 바꾼다.
-
-    규칙(True=기본 위치에 자동 생성)은 다이얼로그와 같으므로
-    :func:`~custom_file_dialog.places.as_recent_store` 하나만 쓴다.
-    """
-    return as_recent_store(recent_files, recent_max)
-
-
 class FilePathEdit(QWidget):
     """경로 하나(또는 여럿)를 고르는 한 줄짜리 위젯.
 
@@ -185,7 +176,7 @@ class FilePathEdit(QWidget):
         )
         self._favorites = favorites
         self._favorites_icon = favorites_icon
-        self._recent = _make_recent_store(recent_files, recent_max)
+        self._recent = as_recent_store(recent_files, recent_max)
         # Places 는 아이콘 제공자 참조도 들고 있다(Qt 가 소유하지 않으므로 필요)
         self._places_cache = None
         self._separator = separator or DEFAULT_SEPARATOR
@@ -646,7 +637,7 @@ class FilePathEdit(QWidget):
         쓰지 않는다. :class:`~custom_file_dialog.recent.RecentStore` 를 직접
         넘기면 여러 위젯이 같은 목록을 공유할 수 있다.
         """
-        self._recent = _make_recent_store(recent_files, recent_max)
+        self._recent = as_recent_store(recent_files, recent_max)
         self._reset_places()
 
     def recent_files(self):
