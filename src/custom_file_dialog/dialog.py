@@ -30,6 +30,7 @@ from .qt_compat import enum_value, exec_dialog, make_options
 from .recent import DEFAULT_RECENT_MAX
 from .sidebar import fit_sidebar
 from .util import to_urls
+from .validators import isdir_check
 
 
 def exec_file_dialog(
@@ -399,11 +400,7 @@ class CustomFileDialog(QFileDialog):
     # ------------------------------------------------------------- 내부
     def _start_at(self, directory):
         """시작 위치를 잡는다. 파일 경로면 그 폴더를 열고 이름을 미리 채운다."""
-        isdir = (
-            os.path.isdir
-            if self._path_timeout is None
-            else (lambda p: safety.safe_isdir(p, self._path_timeout))
-        )
+        isdir = isdir_check(self._path_timeout)
         if isdir(directory):
             self.setDirectory(directory)
             return
@@ -449,11 +446,7 @@ def resolve_start_dir(
     마운트에서 열려 통째로 멈추는 것을 막는다
     (:mod:`~custom_file_dialog.safety` 참고).
     """
-    isdir = (
-        os.path.isdir
-        if timeout is None
-        else (lambda p: safety.safe_isdir(p, timeout))
-    )
+    isdir = isdir_check(timeout)
 
     if current_paths:
         current = current_paths[0]

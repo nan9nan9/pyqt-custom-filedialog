@@ -33,7 +33,7 @@ from .icons import standard_icon
 from .places import Places, as_recent_store
 from .filters import build_filter, ensure_suffix, suffix_of
 from .history import PathHistory
-from .validators import join_paths, split_paths, validate_paths
+from .validators import isdir_check, join_paths, split_paths, validate_paths
 
 
 class FilePathEdit(QWidget):
@@ -399,9 +399,7 @@ class FilePathEdit(QWidget):
 
     def _isdir(self, path):
         """죽은 마운트에서 멈추지 않는 isdir (위젯의 path_timeout 설정을 따른다)."""
-        if self._path_timeout is None:
-            return os.path.isdir(path)
-        return safety.safe_isdir(path, self._path_timeout)
+        return isdir_check(self._path_timeout)(path)
 
     def _remember(self, paths):
         first = paths[0]

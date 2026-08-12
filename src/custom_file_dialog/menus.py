@@ -52,7 +52,8 @@ def _writable(path):
     """쓰기 가능 여부 — ``QFileInfo.isWritable`` 대신 safe_call 로 감쌀 수 있는 형태."""
     return os.access(path, os.W_OK)
 
-URL_ROLE = FILE_PATH_ROLE = PATH_ROLE
+# 예전 이름 — 외부/테스트가 이 이름으로 import 한다 (값은 PATH_ROLE 하나다)
+URL_ROLE = PATH_ROLE
 
 # 파일 목록 우클릭 메뉴에서 쓰는 Qt 기본 액션들 (objectName)
 QT_ITEM_ACTIONS = ("qt_rename_action", "qt_delete_action")
@@ -157,7 +158,7 @@ class FavoritesMenus(QObject):
         """파일 목록 인덱스가 가리키는 경로(없으면 None)."""
         if not index.isValid():
             return None
-        path = index.data(FILE_PATH_ROLE)
+        path = index.data(PATH_ROLE)
         if path:
             return str(path)
         # 모델이 경로를 안 주면 현재 폴더 + 이름으로 만든다
@@ -333,7 +334,7 @@ class FavoritesMenus(QObject):
         """사이드바 인덱스의 ``(저장소, 분류이름)`` (분류가 아니면 ``(None, None)``)."""
         if not index.isValid():
             return None, None
-        path = url_path(index.data(URL_ROLE))
+        path = url_path(index.data(PATH_ROLE))
         if not path:
             return None, None
         store = self._places.category_store(path)
@@ -357,7 +358,7 @@ class FavoritesMenus(QObject):
             # 분류가 아닌 항목(사용자가 끌어다 놓은 폴더, 홈 …)
             # -> Qt 기본 "Remove" 와 같은 동작
             action = menu.addAction("사이드바에서 제거")
-            local = url_path(index.data(URL_ROLE))
+            local = url_path(index.data(PATH_ROLE))
             # "Computer"(경로 없음)와 보호 위치(기본: 홈)는 뺄 수 없다
             action.setEnabled(bool(local) and not self.is_fixed(local))
             action.triggered.connect(

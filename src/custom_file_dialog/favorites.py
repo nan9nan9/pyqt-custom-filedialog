@@ -143,6 +143,7 @@ class FavoritesStore:
             raise ValueError("link_mode 는 'auto' 또는 'symlink' 여야 합니다.")
         self.base_dir = abspath(base_dir) or abspath(default_base_dir())
         self._link_mode = link_mode
+        self._index_cache = None        # (파일 mtime_ns, 크기, dict) — _load_index 참고
         if create:
             os.makedirs(self.base_dir, exist_ok=True)
 
@@ -411,24 +412,49 @@ class FavoritesStore:
     _INDEX_ERRORS = "surrogateescape"
 
     def _load_index(self):
+        """인덱스를 읽는다. 파일이 안 바뀌었으면 캐시 사본을 돌려준다.
+
+        이 함수는 선택이 바뀔 때마다(링크 -> 원본 복원) 불리는데, 저장소가
+        네트워크 홈에 있으면 그때마다 파일을 다시 읽는 비용이 그대로 지연이
+        된다. (mtime, 크기)가 같으면 디스크를 열지 않는다. 다른 프로세스가
+        고친 것은 mtime 변화로 알아챈다. 돌려주는 dict 은 늘 **사본**이다 —
+        호출자들이 고쳐서 다시 저장하는 패턴이라 캐시 원본을 주면 안 된다.
+        """
+        path = self._index_path()
         try:
-            with open(
-                self._index_path(), encoding="utf-8", errors=self._INDEX_ERRORS
-            ) as handle:
+            stat = os.stat(path)
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            self._index_cache = None
+            return {}
+        cached = self._index_cache
+        if cached is not None and cached[:2] == stamp:
+            return dict(cached[2])
+        try:
+            with open(path, encoding="utf-8", errors=self._INDEX_ERRORS) as handle:
                 data = json.load(handle)
         except (OSError, ValueError):
+            self._index_cache = None
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            data = {}
+        self._index_cache = stamp + (dict(data),)
+        return data
 
     def _save_index(self, index):
         try:
+            path = self._index_path()
             os.makedirs(self.base_dir, exist_ok=True)
             with open(
-                self._index_path(), "w", encoding="utf-8", errors=self._INDEX_ERRORS
+                path, "w", encoding="utf-8", errors=self._INDEX_ERRORS
             ) as handle:
                 json.dump(index, handle, ensure_ascii=False, indent=1)
+            stat = os.stat(path)
+            self._index_cache = (stat.st_mtime_ns, stat.st_size, dict(index))
         except (OSError, UnicodeError):
-            pass        # 인덱스는 보조 수단이라 실패해도 치명적이지 않다
+            # 인덱스는 보조 수단이라 실패해도 치명적이지 않다. 캐시만 비워서
+            # 다음 읽기가 디스크 상태를 그대로 따르게 한다.
+            self._index_cache = None
 
 
 def _make_junction(target, link_path):

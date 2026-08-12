@@ -25,6 +25,15 @@ def _checks(timeout):
     )
 
 
+def isdir_check(timeout):
+    """``timeout`` 규칙이 적용된 isdir 하나.
+
+    "None 이면 os.path.isdir, 아니면 safe_isdir" 분기가 위젯·다이얼로그
+    곳곳에서 되풀이되던 것을 한곳에 모은다.
+    """
+    return _checks(timeout)[0]
+
+
 def split_paths(text, separator="; "):
     """한 줄에 들어 있는 여러 경로를 리스트로 나눈다.
 

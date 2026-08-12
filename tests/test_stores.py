@@ -506,3 +506,29 @@ def test_safe_name_strips_windows_chars_on_nt(monkeypatch):
     monkeypatch.setattr(os, "name", "nt")
     assert _safe_name('시간:분*?"<>|') == "시간_분" + "_" * 6
     assert _safe_name("보통이름") == "보통이름"
+
+
+def test_index_cache_sees_other_instances(tmp_path):
+    """인덱스 캐시가 다른 인스턴스(프로세스)의 변경을 놓치지 않는다.
+
+    _load_index 는 (mtime, 크기)가 같으면 캐시를 쓴다. 같은 폴더를 가리키는
+    다른 저장소가 항목을 더하면 파일이 바뀌므로 다시 읽어야 하고, 돌려주는
+    dict 은 사본이라 호출자가 고쳐도 캐시가 오염되면 안 된다.
+    """
+    base = str(tmp_path / "favorites")
+    a = FavoritesStore(base_dir=base)
+    b = FavoritesStore(base_dir=base)
+
+    f1 = _touch(tmp_path, "하나.csv")
+    f2 = _touch(tmp_path, "둘.csv")
+
+    link1 = a.add("설계", f1)
+    assert b.resolve(link1) == f1            # b 가 a 의 저장을 읽는다 (캐시 생성)
+
+    link2 = b.add("설계", f2)                # b 쪽 변경
+    assert a.resolve(link2) == f2            # a 캐시가 무효화되어 새로 읽는다
+
+    # 호출자가 돌려받은 dict 을 고쳐도 캐시는 오염되지 않는다
+    index = a._load_index()
+    index.clear()
+    assert a.resolve(link1) == f1

@@ -325,6 +325,7 @@ def clear_cache():
         _cache.clear()
         _pending_keys.clear()
     _mounts["list"] = None
+    _mount_keys.clear()
 
 
 def pending_checks():
@@ -386,6 +387,23 @@ def iter_mounts(refresh=False):
     return mounts
 
 
+# 마운트지점 문자열 -> (정규화 경로, 하위 판별용 접두사). 마운트지점은 몇 개
+# 안 되는 고정 문자열이라 무한히 자라지 않는다. mount_for 가 키 입력마다,
+# 그리고 자동완성 모델의 인덱스마다 불리므로 normpath 반복을 여기서 없앤다.
+_mount_keys = {}
+
+
+def _mount_key(mountpoint):
+    keys = _mount_keys.get(mountpoint)
+    if keys is None:
+        normalized = os.path.normpath(mountpoint)
+        keys = _mount_keys[mountpoint] = (
+            normalized,
+            normalized.rstrip(os.sep) + os.sep,
+        )
+    return keys
+
+
 def mount_for(path):
     """경로가 속한 ``(마운트지점, 종류, 원본)`` (못 찾으면 None).
 
@@ -396,11 +414,12 @@ def mount_for(path):
         return None
     absolute = _abspath(path)
     best = None
-    for mountpoint, fstype, source in iter_mounts():
-        normalized = os.path.normpath(mountpoint)
-        if absolute == normalized or absolute.startswith(normalized.rstrip(os.sep) + os.sep):
-            if best is None or len(normalized) > len(os.path.normpath(best[0])):
-                best = (mountpoint, fstype, source)
+    best_length = -1
+    for entry in iter_mounts():
+        normalized, prefix = _mount_key(entry[0])
+        if absolute == normalized or absolute.startswith(prefix):
+            if len(normalized) > best_length:
+                best, best_length = entry, len(normalized)
     return best
 
 
