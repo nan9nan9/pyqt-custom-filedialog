@@ -7,12 +7,14 @@
 """
 
 import math
+import os
 
 from qtpy.QtCore import QFileInfo, QPointF, Qt
 from qtpy.QtGui import QColor, QIcon, QPainter, QPixmap, QPolygonF
 from qtpy.QtWidgets import QFileIconProvider, QStyle
 
 from .qt_compat import scoped_attr
+from .util import abspath
 
 # 만들어 둘 크기들
 ICON_SIZES = (16, 20, 24, 32, 48)
@@ -143,6 +145,7 @@ class CategoryIconProvider(QFileIconProvider):
     def __init__(self, store=None, icon=None):
         super().__init__()
         self._entries = []          # [(저장소, 아이콘 또는 None)]
+        self._bases = set()         # 저장소 뿌리들 — "/" 구분자로 통일한 절대 경로
         self._star = None
         if store is not None:
             self.add_store(store, icon)
@@ -151,6 +154,9 @@ class CategoryIconProvider(QFileIconProvider):
         """분류 폴더를 알아볼 저장소를 추가한다(icon 이 None 이면 별표)."""
         if store is not None:
             self._entries.append((store, icon))
+            base = abspath(store.base_dir)
+            if base:
+                self._bases.add(base.replace(os.sep, "/"))
         return self
 
     def star(self):
@@ -161,9 +167,16 @@ class CategoryIconProvider(QFileIconProvider):
 
     def icon(self, arg):        # noqa: A003 (Qt 시그니처)
         # icon(QFileInfo) 와 icon(IconType) 두 가지 오버로드가 들어온다.
+        #
+        # QFileSystemModel 이 **목록의 항목마다** 부르는 함수라, 큰 폴더에서는
+        # 여기서 쓰는 시간이 그대로 나열 시간에 더해진다. 분류 폴더일 수 있는
+        # 항목(부모가 저장소 뿌리)만 문자열 비교 하나로 먼저 골라내고, 경로
+        # 정규화와 저장소 질의는 그때만 한다. 대부분의 항목은 Qt 기본 아이콘
+        # 경로로 바로 넘어간다.
         if isinstance(arg, QFileInfo):
-            path = arg.absoluteFilePath()
-            for store, icon in self._entries:
-                if store.is_category_dir(path):
-                    return icon if icon is not None else self.star()
+            path = arg.absoluteFilePath()       # Qt 는 늘 "/" 구분자를 쓴다
+            if path.rsplit("/", 1)[0] in self._bases:
+                for store, icon in self._entries:
+                    if store.is_category_dir(path):
+                        return icon if icon is not None else self.star()
         return super().icon(arg)
