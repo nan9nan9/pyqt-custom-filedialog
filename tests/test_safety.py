@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 import tempfile
 import time
 
@@ -408,11 +409,19 @@ def test_allow_listing_alone_installs_completer_guard(qapp):
 
     from custom_file_dialog import GuardedFileSystemModel, safety
 
+    from custom_file_dialog.guard import _TypingGuard
+
     try:
         safety.configure(allow_listing=False)
         dialog = QFileDialog()
         dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        assert hooks_module.guard_dialog(dialog) == ["completer"]
+        installed = hooks_module.guard_dialog(dialog)
+        # 자동완성 모델 + 타이핑 가드까지만 — "못 들어가게" 장치는 걸지 않는다
+        assert installed[0] == "completer"
+        assert all(
+            item == "completer" or isinstance(item, _TypingGuard)
+            for item in installed
+        )
 
         name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
         model = name_edit.completer().model()
@@ -437,22 +446,29 @@ def test_min_depth_alone_installs_completer_guard(qapp, shallow_tree):
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     installed = hooks_module.guard_dialog(dialog)
 
-    # 자동완성 모델만 바꾼다. 얕은 자리를 "못 들어가게" 하는 설정은 아니므로
-    # 이벤트 필터(더블클릭 · 확정 차단)까지 걸지는 않는다.
-    assert installed == ["completer"]
+    # 자동완성 모델과 타이핑 가드만 바꾼다. 얕은 자리를 "못 들어가게" 하는
+    # 설정은 아니므로 이벤트 필터(더블클릭 · 확정 차단)까지 걸지는 않는다.
+    from custom_file_dialog.guard import _TypingGuard
+
+    assert installed[0] == "completer"
+    assert all(
+        item == "completer" or isinstance(item, _TypingGuard) for item in installed
+    )
     name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
     assert isinstance(name_edit.completer().model(), GuardedFileSystemModel)
 
     dialog.deleteLater()
 
 
-def test_min_depth_off_installs_nothing(qapp):
-    """둘 다 꺼져 있으면 다이얼로그에 아무것도 걸지 않는다."""
+def test_min_depth_off_installs_nothing(qapp, monkeypatch):
+    """설정도 automount 도 없으면 다이얼로그에 아무것도 걸지 않는다."""
     from qtpy.QtWidgets import QFileDialog
 
     from custom_file_dialog import safety
 
     safety.reset()
+    # autofs 가 있는 시스템에서는 설정 없이도 걸리므로, "없는 시스템"을 고정한다
+    monkeypatch.setattr(safety, "has_automounts", lambda: False)
     dialog = QFileDialog()
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     assert hooks_module.guard_dialog(dialog) == []
@@ -479,13 +495,14 @@ def test_guard_dialog_installs_hooks(qapp, guarded_root):
     dialog.close()
 
 
-def test_guard_dialog_noop_without_guarded_roots(qapp, tmp_path):
-    """차단 경로가 없으면 아무것도 걸지 않는다."""
+def test_guard_dialog_noop_without_guarded_roots(qapp, tmp_path, monkeypatch):
+    """차단 경로가 없으면(automount 도 없으면) 아무것도 걸지 않는다."""
     from qtpy.QtWidgets import QFileDialog
 
     from custom_file_dialog import guard_dialog, safety
 
     safety.configure(guarded_roots=[])
+    monkeypatch.setattr(safety, "has_automounts", lambda: False)
     dialog = QFileDialog()
     dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
     dialog.setDirectory(str(tmp_path))
@@ -909,3 +926,266 @@ def test_mountinfo_parser_survives_malformed_lines(monkeypatch, tmp_path):
         assert safety.mount_for("/mnt/ok/a")[0] == "/mnt/ok"
     finally:
         safety.clear_cache()
+
+
+# ---------------------------------------------------------------------------
+# 키 입력마다의 자동 stat 방어 — may_stat · 타이핑 가드 · automount 자동 인지
+# ---------------------------------------------------------------------------
+
+
+def test_may_stat_guarded_parent(guarded_root):
+    """부모가 차단 경로면 자동 stat 금지 — 하위와 그 자리 자체는 허용."""
+    from custom_file_dialog import safety
+
+    assert not safety.may_stat(os.path.join(guarded_root, "j"))
+    # 한 단계 아래(실제로 쓰는 홈)는 평소대로
+    assert safety.may_stat(os.path.join(guarded_root, "jekai", "f.csv"))
+    # 차단 경로 "자체"의 stat 은 마운트를 부르지 않는다(나열과 다르다)
+    assert safety.may_stat(guarded_root)
+
+
+def test_may_stat_min_depth(shallow_tree):
+    """min_depth 는 나열만이 아니라 자동 stat 도 얕은 자리에서 막는다."""
+    from custom_file_dialog import safety
+
+    root, depth = shallow_tree
+    safety.configure(min_depth=depth + 1)
+    assert not safety.may_stat(os.path.join(root, "j"))          # 부모가 얕다
+    assert safety.may_stat(os.path.join(root, "jekai", "proj"))  # 충분히 깊다
+
+
+def test_automount_autodetected(monkeypatch, tmp_path):
+    """autofs 마운트 지점은 설정 없이도 나열·자동 stat 이 막힌다."""
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    (root / "jekai").mkdir(parents=True)
+    mounted = str(root / "jekai")
+
+    safety.reset()
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety,
+        "iter_mounts",
+        lambda refresh=False: [
+            ("/", "ext4", "/dev/sda1"),
+            (str(root), "autofs", "auto.user"),
+            (mounted, "nfs4", "srv:/export/jekai"),   # 이미 붙은 하위 마운트
+        ],
+    )
+    try:
+        assert safety.has_automounts()
+        assert safety.is_automount_point(str(root))
+        assert not safety.is_automount_point(mounted)
+        assert not safety.is_automount_point(str(tmp_path))
+
+        assert not safety.may_list(str(root))                    # 나열 금지
+        assert not safety.may_stat(str(root / "j"))              # 자식 stat 금지
+        assert safety.may_stat(os.path.join(mounted, "a.csv"))   # 붙은 하위는 평소대로
+    finally:
+        safety.clear_cache()
+
+
+def test_safe_call_autofs_uses_timeout(monkeypatch, tmp_path):
+    """automounter 가 멈춰 있어도 safe_* 는 제한 시간 안에 돌아온다.
+
+    autofs 는 원격 종류가 아니라서 예전에는 "로컬"로 보고 GUI 스레드에서 곧바로
+    stat 했다 — automounter 뒷단(LDAP/NIS)이 죽어 있으면 그대로 멈췄다.
+    """
+    from custom_file_dialog import safety
+
+    mountpoint = str(tmp_path / "user")
+    os.mkdir(mountpoint)
+
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety,
+        "iter_mounts",
+        lambda refresh=False: [
+            ("/", "ext4", "/dev/sda1"),
+            (mountpoint, "autofs", "auto.user"),
+        ],
+    )
+
+    real_stat = os.stat
+
+    def hanging_child_stat(path, *args, **kwargs):
+        # 자식 이름의 stat = 마운트 시도. 뒷단이 죽어 돌아오지 않는 상황 흉내.
+        if str(path).startswith(mountpoint + os.sep):
+            time.sleep(1.0)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", hanging_child_stat)
+    try:
+        start = time.time()
+        assert safety.safe_exists(os.path.join(mountpoint, "j"), timeout=0.2) is False
+        assert time.time() - start < 0.9        # 1초짜리 stat 을 기다리지 않았다
+    finally:
+        safety.clear_cache()
+
+
+def test_validate_skips_untouchable_paths(monkeypatch, guarded_root):
+    """유효성 검사는 만지면 안 되는 자리를 stat 하지 않고 판정을 보류한다."""
+    touched = []
+    for name in ("isfile", "isdir", "exists"):
+        real = getattr(os.path, name)
+
+        def wrapper(path, _real=real):
+            touched.append(str(path))
+            return _real(path)
+
+        monkeypatch.setattr(os.path, name, wrapper)
+
+    dangerous = os.path.join(guarded_root, "j")
+    valid, reason = validate_paths([dangerous], mode="open_file", must_exist=True)
+    assert valid and reason == ""                 # 판정 보류 = 입력을 막지 않는다
+    assert not [p for p in touched if p.startswith(dangerous)]
+
+    # 한 단계 아래는 평소대로 실제 확인한다
+    deep = os.path.join(guarded_root, "jekai", "proj")
+    valid, _reason = validate_paths([deep], mode="directory", must_exist=True)
+    assert valid
+    assert [p for p in touched if p.startswith(deep)]
+
+
+def test_typing_guard_skips_dangerous_autochecks(qapp, guarded_root):
+    """파일 이름 칸에 차단 경로 아래를 칠 때 자동 경로 확인을 건너뛴다."""
+    from qtpy.QtTest import QTest
+    from qtpy.QtWidgets import QDialogButtonBox, QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog
+    from custom_file_dialog.guard import _TypingGuard
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(os.path.dirname(guarded_root))
+    dialog.show()
+    _spin(qapp, 300)
+
+    guards = [h for h in guard_dialog(dialog) if isinstance(h, _TypingGuard)]
+    assert guards, "타이핑 가드가 걸려야 한다"
+    guard = guards[0]
+
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    edit.setFocus()
+    QTest.keyClicks(edit, guarded_root + os.sep + "jX")
+    qapp.processEvents()
+
+    # "<차단>/j" 부터는 글자마다 건너뛴 기록이 남는다
+    assert len(guard.skipped) >= 2, guard.skipped
+    assert all(os.path.dirname(p) == guarded_root for p in guard.skipped)
+
+    # 자동 판정 없이도 경로를 마저 쳐서 확정할 수 있게 버튼은 살아 있다
+    box = dialog.findChild(QDialogButtonBox, "buttonBox")
+    assert box.button(QDialogButtonBox.StandardButton.Open).isEnabled()
+    dialog.done(0)
+
+
+def test_typing_guard_keeps_normal_autochecks(qapp, guarded_root, tmp_path):
+    """안전한 자리에서는 Qt 원래의 자동 확인(버튼 활성 판정)이 그대로 돈다."""
+    from qtpy.QtTest import QTest
+    from qtpy.QtWidgets import QDialogButtonBox, QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog
+    from custom_file_dialog.guard import _TypingGuard
+
+    (tmp_path / "hello.txt").write_text("x")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    dialog.setDirectory(str(tmp_path))
+    dialog.show()
+    _spin(qapp, 300)
+
+    guards = [h for h in guard_dialog(dialog) if isinstance(h, _TypingGuard)]
+    assert guards
+    guard = guards[0]
+
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    box = dialog.findChild(QDialogButtonBox, "buttonBox")
+    button = box.button(QDialogButtonBox.StandardButton.Open)
+
+    edit.setFocus()
+    QTest.keyClicks(edit, "hello.txt")
+    qapp.processEvents()
+    assert button.isEnabled()                    # 있는 파일 -> 열기 가능
+
+    edit.clear()
+    QTest.keyClicks(edit, "nope.txt")
+    qapp.processEvents()
+    assert not button.isEnabled()                # 없는 파일 -> 원래처럼 비활성
+
+    assert not guard.skipped                     # 안전한 자리는 건너뛴 것이 없다
+    dialog.done(0)
+
+
+_SYSCALL_REPRO = """
+import os, sys, tempfile
+from qtpy.QtTest import QTest
+from qtpy.QtWidgets import QApplication, QLineEdit
+from custom_file_dialog import CustomFileDialog, safety
+
+app = QApplication([])
+root = tempfile.mkdtemp(prefix="cfd-syscall-")
+guard = os.path.join(root, "user")
+os.makedirs(os.path.join(guard, "jekai"))
+work = os.path.join(root, "work")
+os.makedirs(work)
+
+if os.environ.get("CFD_SAFETY") == "1":
+    safety.configure(guarded_roots=[guard], min_depth=2)
+else:
+    safety.reset()
+    safety.has_automounts = lambda: False   # 이 머신의 autofs 와 무관하게
+
+dialog = CustomFileDialog(None, mode="open_file", directory=work)
+dialog.show()
+app.processEvents()
+edit = dialog.findChild(QLineEdit, "fileNameEdit")
+edit.setFocus()
+QTest.keyClicks(edit, guard + "/zZ")        # "/user/z", "/user/zZ" 를 친다
+for _ in range(20):
+    app.processEvents()
+dialog.done(0)
+"""
+
+
+@pytest.mark.skipif(shutil.which("strace") is None, reason="strace 필요")
+def test_typing_touches_no_guarded_child_at_syscall_level(tmp_path):
+    """시스템 콜 수준의 증명 — 타이핑한 미완성 경로를 정말 안 만지는지.
+
+    automount 에서는 자식 이름의 access()/stat() 하나하나가 마운트 시도라,
+    파이썬 쪽 기록이 아니라 **실제 syscall 이 없는 것**까지 확인해야 한다.
+    가드를 끈 대조 실행으로 관측 자체가 되는지도 함께 확인한다(Qt 가 언젠가
+    동작을 바꿔 관측이 안 되면 실패 대신 skip).
+    """
+    import subprocess
+
+    import custom_file_dialog
+
+    script = tmp_path / "repro.py"
+    script.write_text(_SYSCALL_REPRO, encoding="utf-8")
+    src = os.path.dirname(os.path.dirname(custom_file_dialog.__file__))
+
+    def typed_child_touches(safety_on):
+        trace = tmp_path / ("trace_%d.out" % safety_on)
+        env = dict(
+            os.environ,
+            QT_QPA_PLATFORM="offscreen",
+            PYTHONPATH=src,
+            CFD_SAFETY="1" if safety_on else "0",
+        )
+        subprocess.run(
+            ["strace", "-f", "-e", "trace=%file", "-o", str(trace),
+             sys.executable, str(script)],
+            env=env, check=True, capture_output=True, timeout=120,
+        )
+        lines = trace.read_text(errors="replace").splitlines()
+        return [line for line in lines if "user/z" in line]
+
+    control = typed_child_touches(safety_on=False)
+    if not control:
+        pytest.skip("이 Qt 는 타이핑 중 경로를 만지지 않는다 — 관측 불가")
+
+    assert typed_child_touches(safety_on=True) == []

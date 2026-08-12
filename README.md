@@ -161,7 +161,9 @@ print(edit.path())
 - **나열하면 안 되는 자리 차단** — `/user` 처럼 아래에 마운트가 잔뜩 달린 경로를
   등록해 두면 그 자리는 열지 않고 하위 경로만 쓰게 합니다 (`guarded_roots`).
   경로를 미리 다 알기 어렵다면 `min_depth=2` 로 **얕은 자리는 자동완성이 아예
-  나열하지 않게** 할 수 있습니다.
+  나열하지 않게** 할 수 있습니다. 파일 이름 칸에 `/user/j` 를 **한 글자씩 치는
+  것만으로** 일어나던 글자당 마운트 시도(자동 stat)도 함께 막고, autofs 마운트
+  지점은 설정 없이도 자동으로 알아봅니다.
 - **폼 헬퍼** — `FilePathForm` 으로 여러 줄을 라벨 정렬해 묶고 `values()` 로 한 번에 꺼냅니다.
 - **패키지 / 소스 모두 사용 가능** — `pip install` 하거나 `src/` 를 그대로 import
 
@@ -1124,9 +1126,10 @@ safety.configure(guarded_roots=["/user", "/mnt/nfs", "/net"])
 | 곳 | 동작 |
 | --- | --- |
 | 위젯 입력창 자동완성 | 그 폴더의 목록을 **아예 요청하지 않음** (하위는 정상) |
-| 유효성 검사 | "없는 경로"로 판정 |
+| 유효성 검사 | 차단 경로 자체는 "없는 경로"로 판정, 그 **바로 아래의 미완성 경로**(`/user/j`)는 stat 없이 판정 보류 |
 | 다이얼로그 시작 폴더 | 그 자리에서 열지 않고 안전한 곳으로 대체 |
 | 다이얼로그 파일 이름 칸 자동완성 | 같은 모델로 갈아 끼워 차단 |
+| 다이얼로그 파일 이름 칸 **키 입력마다의 자동 확인** | Qt 가 글자마다 하던 입력 경로 `access()`/`stat()` 을 위험한 자리에서 **하지 않음** — `/user/j` 를 치는 순간의 마운트 시도가 사라짐 |
 | 다이얼로그 파일 목록 | 차단 경로를 **더블클릭/Enter 로 열 수 없음** |
 | "Look in" 드롭다운 | 차단 경로 항목을 **고를 수 없음** |
 | 파일 이름 칸 + Enter / 열기 버튼 | 차단 경로를 **확정할 수 없음** (`..` 처럼 상대 경로로 올라가는 것도 포함) |
@@ -1160,9 +1163,17 @@ safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
 /user/jekai/ →  평소대로 완성 (/user/jekai 는 2단계)
 ```
 
-**나열만 막습니다.** 경로를 끝까지 직접 치거나 붙여 넣어 쓰는 것은 그대로 되고,
-유효성 검사·다이얼로그 동작도 달라지지 않습니다. 대신 `/ho` → `/home` 처럼
-**얕은 자리의 완성도 함께 없어지는 것**이 대가입니다.
+나열과 함께 **키 입력마다의 자동 stat 도** 얕은 자리에서 막습니다 — Qt 는 글자를
+칠 때마다 입력 경로를 `access()`/`stat()` 으로 만져 보는데(항목 자동 선택 · 버튼
+활성 판정), automount 아래에서는 그 한 번 한 번이 마운트 시도입니다. 경로를
+끝까지 쳐서 **확정**하는 것은 그대로 되고(확인은 그때 한 번만), `/ho` → `/home`
+처럼 **얕은 자리의 완성·자동 확인이 함께 없어지는 것**이 대가입니다.
+
+> **autofs 는 자동으로 압니다.** `/proc/self/mountinfo` 에 autofs 로 잡히는
+> 마운트 지점은 `guarded_roots`/`min_depth` 를 설정하지 않아도 나열과 자동
+> stat 이 막힙니다(`safety.may_stat` · `safety.is_automount_point`). 죽은
+> automounter 뒷단 때문에 stat 이 돌아오지 않는 경우도 원격 마운트처럼
+> 스레드+타임아웃으로 처리해 GUI 가 멈추지 않습니다.
 
 ### 자동완성 아예 끄기 — `allow_listing` / `completer=False`
 
@@ -1206,9 +1217,9 @@ edit.set_completer(False)                                # 실행 중에도 전�
 | | `guarded_roots` | `min_depth` | `allow_listing=False` |
 | --- | --- | --- | --- |
 | 지정 방식 | 위험한 경로를 이름으로 나열 | 깊이 하나로 일괄 | 스위치 하나 |
-| 막는 것 | 나열 + **그 자리로 이동** | 자동완성 나열만 | 자동완성 나열만 |
-| 모르는 위험 경로 | 못 막음 | 얕으면 막힘 | **전부 막힘** |
-| 부작용 | 없음 (그 자리만) | 얕은 자리의 완성이 사라짐 | 자동완성이 통째로 사라짐 |
+| 막는 것 | 나열 + 자동 stat + **그 자리로 이동** | 자동완성 나열 + 얕은 자리의 자동 stat | 자동완성 나열만 |
+| 모르는 위험 경로 | 못 막음 (autofs 는 자동 인지) | 얕으면 막힘 | **전부 막힘** |
+| 부작용 | 없음 (그 자리만) | 얕은 자리의 완성·자동 확인이 사라짐 | 자동완성이 통째로 사라짐 |
 
 ```python
 safety.configure(
@@ -1272,7 +1283,9 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | `safety.configure(timeout, ttl, probes, guarded_roots, min_depth, allow_listing)` | 제한 시간 · 캐시 · 프로브 대상 · 차단 경로 · 자동완성 최소 깊이 · 나열 허용 |
 | `safety.is_guarded(path)` / `guarded_roots()` | 그 자리 자체를 막았는지 / 막은 목록 |
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
-| `safety.may_list(path)` / `listing_allowed()` | 위 셋을 한 번에 판정 / 나열 스위치 상태 |
+| `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
+| `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단/얕음/autofs 면 False) |
+| `safety.is_automount_point(path)` / `has_automounts()` | autofs 마운트 지점인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
 | `safety.reset()` | 모든 설정을 기본값으로 |
 | `safety.is_reachable(path, timeout)` | 만져도 멈추지 않을지 판정 |

@@ -31,6 +31,14 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
   폴더도 읽지 않는다.** 파일이 수만 개인 폴더처럼 깊이로는 가릴 수 없는 자리까지
   막아야 할 때 쓰는 마지막 스위치다.
 
+나열만이 아니라 **한 경로를 만져 보는 것(stat)** 도 automount 아래에서는
+마운트를 부른다. ``/user/j`` 를 stat 하면 automounter 가 ``j`` 라는 이름을
+마운트하려고 시도한다 — 경로를 한 글자씩 칠 때마다 이 일이 일어나면 그것만으로
+시스템이 주저앉는다. 그래서 "입력 중인 경로를 **자동으로** 만져 봐도 되는가"를
+:func:`may_stat` 하나로 판정한다. 부모 폴더가 ``guarded_roots`` 이거나
+``min_depth`` 보다 얕거나 **autofs 마운트 지점**이면 False 다. autofs 는
+설정 없이도 ``/proc/self/mountinfo`` 에서 자동으로 알아본다.
+
 판정 결과는 **마운트 단위로 캐시**해서, 죽은 서버를 매번 다시 두드리지 않는다.
 
     from custom_file_dialog import safety
@@ -62,6 +70,10 @@ REMOTE_FSTYPES = frozenset(
         "fuse.s3fs",
     }
 )
+
+# 건드리는 것만으로 마운트가 붙는(= 자식 stat 이 마운트 시도가 되는) 종류.
+# systemd .automount 유닛과 autofs 데몬 모두 mountinfo 에 "autofs" 로 나온다.
+AUTOMOUNT_FSTYPES = frozenset({"autofs"})
 
 # NFS 서버에 연결해 볼 기본 포트
 NFS_PORT = 2049
@@ -143,9 +155,10 @@ def configure(
             나열하지 않으므로 멈추지 않고, ``/user/jekai/`` 부터 완성이 살아난다.
             그 대신 ``/ho`` → ``/home`` 처럼 **얕은 자리의 완성도 함께 없어진다**.
 
-            나열만 막는 것이라 경로를 끝까지 직접 쳐서 쓰는 것은 그대로 된다.
-            자동완성에만 걸리므로 다이얼로그에서 폴더를 눌러 들어가는 것은
-            막지 않는다. 그쪽까지 막으려면 ``guarded_roots`` 를 함께 쓴다.
+            나열과 키 입력마다의 자동 확인(:func:`may_stat`)에만 걸리므로,
+            경로를 끝까지 쳐서 **확정**하는 것과 다이얼로그에서 폴더를 눌러
+            들어가는 것은 그대로 된다. 들어가는 것까지 막으려면
+            ``guarded_roots`` 를 함께 쓴다.
         allow_listing: **자동완성이 폴더 목록을 읽어도 되는지.** ``False`` 면
             깊이와 무관하게 어떤 폴더도 읽지 않아 완성 후보가 아예 뜨지 않는다.
             자동완성을 통째로 끄는 스위치다.
@@ -251,16 +264,64 @@ def listing_allowed():
 
 
 def may_list(path):
-    """그 폴더를 자동완성이 읽어도 되는지 — 세 설정을 한 번에 본다.
+    """그 폴더를 자동완성이 읽어도 되는지 — 세 설정과 automount 를 한 번에 본다.
 
     ``allow_listing`` 이 꺼져 있거나, ``guarded_roots`` 에 지목됐거나,
-    ``min_depth`` 보다 얕으면 False.
+    ``min_depth`` 보다 얕거나, 그 폴더 자체가 **autofs 마운트 지점**이면 False.
+    (autofs 는 항목을 나열해 stat 하는 것만으로 전부 마운트된다 — 설정이 없어도
+    mountinfo 에서 자동으로 알아보고 막는다.)
     """
     return (
         listing_allowed()
         and not is_guarded(path)
         and not is_too_shallow(path)
+        and not is_automount_point(path)
     )
+
+
+def is_automount_point(path):
+    """그 폴더 **자체**가 automount(autofs) 지점인지.
+
+    autofs 아래에서는 자식 이름을 stat 하는 것이 곧 마운트 시도다. 마운트 표만
+    보고 판정하므로 파일시스템을 건드리지 않는다. 이미 마운트된 하위(예: nfs 로
+    붙은 ``/user/jekai``)는 그 마운트가 더 길게 잡히므로 False 가 된다.
+    """
+    if not path:
+        return False
+    mount = mount_for(path)
+    return (
+        bool(mount)
+        and mount[1] in AUTOMOUNT_FSTYPES
+        and os.path.normpath(mount[0]) == _abspath(path)
+    )
+
+
+def has_automounts():
+    """시스템에 automount(autofs) 마운트가 하나라도 있는지."""
+    return any(fstype in AUTOMOUNT_FSTYPES for _point, fstype, _src in iter_mounts())
+
+
+def may_stat(path):
+    """입력 중인 경로를 **자동으로** 만져(stat) 봐도 되는지.
+
+    타이핑 도중의 미완성 경로를 키 입력마다 stat 하면, automount 아래에서는
+    글자마다 마운트 시도가 일어난다(``/user/j`` → ``j`` 마운트 시도). 그래서
+    **부모 폴더**를 기준으로 판정한다 — 부모가 ``guarded_roots`` 로 지목된
+    자리거나, ``min_depth`` 보다 얕거나, autofs 마운트 지점이면 False.
+
+    자동 확인(자동완성 · 키 입력마다의 유효성 표시)에만 쓰는 판정이다. 사용자가
+    Enter 나 버튼으로 **확정**한 경로를 여는 것까지 막는 판정이 아니다 — 확정은
+    한 번뿐이라 의도한 마운트(``/user/jekai``)는 그때 일어나면 된다.
+    """
+    if not path:
+        return True
+    parent = os.path.dirname(_abspath(path))
+    if is_guarded(parent):
+        return False
+    limit = min_depth()
+    if limit > 0 and path_depth(parent) < limit:
+        return False
+    return not is_automount_point(parent)
 
 
 def clear_cache():
@@ -351,6 +412,16 @@ def is_remote(path):
     """원격 파일시스템 위의 경로인지."""
     mount = mount_for(path)
     return bool(mount) and mount[1] in REMOTE_FSTYPES
+
+
+def _may_hang(fstype):
+    """만졌을 때 멈출 수 있는 종류인지 — 원격, 또는 automount(autofs).
+
+    autofs 는 원격이 아니지만 자식을 stat 하면 automounter 가 마운트를
+    시도한다. 그 뒷단(NIS/LDAP · 마운트 대상 서버)이 죽어 있으면 stat 이
+    돌아오지 않으므로, 원격과 같은 스레드+타임아웃 취급을 받아야 한다.
+    """
+    return fstype in REMOTE_FSTYPES or fstype in AUTOMOUNT_FSTYPES
 
 
 def server_of(source, fstype=None):
@@ -454,7 +525,7 @@ def is_reachable(path, timeout=None, use_cache=True):
         return False                         # 그 자리 자체는 열지 않는다
 
     mount = mount_for(path)
-    if mount is None or mount[1] not in REMOTE_FSTYPES:
+    if mount is None or not _may_hang(mount[1]):
         return True                          # 로컬 -> 그대로 진행
 
     mountpoint, fstype, source = mount
@@ -522,13 +593,13 @@ def safe_call(func, path, default=False, timeout=None):
     ``os.path.isfile`` / ``isdir`` / ``exists`` 를 그대로 넘겨 쓰면 된다.
 
     **로컬 경로는 그대로 호출한다.** 멈출 일이 없는데 스레드를 만들면 입력 한 자마다
-    스레드가 생기는 꼴이라, 원격 마운트일 때만 프로브와 타임아웃을 거친다.
+    스레드가 생기는 꼴이라, 원격/automount 마운트일 때만 프로브와 타임아웃을 거친다.
     """
     if is_guarded(path):
         return default                      # 그 자리 자체는 만지지 않는다
 
     mount = mount_for(path)
-    if mount is None or mount[1] not in REMOTE_FSTYPES:
+    if mount is None or not _may_hang(mount[1]):
         return func(path)                   # 로컬 -> 곧바로
 
     if not is_reachable(path, timeout=timeout):
