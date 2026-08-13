@@ -1420,3 +1420,109 @@ def test_typing_guard_python_route(qapp, guarded_root, tmp_path):
     assert guard.skipped
     assert button.isEnabled()
     dialog.done(0)
+
+
+def test_consecutive_enter_navigation(qapp, shallow_tree):
+    """얕은 폴더로 연속해서 Enter 이동이 된다 (한 번 들어간 뒤에도).
+
+    자동 확인을 건너뛸 때 목록 선택을 그대로 두면, 직전에 들어간 폴더의 선택이
+    남아 selectedFiles() 가 **입력한 경로 대신 그 선택**을 돌려준다. 그래서
+    "/user/abcd/ 로 들어간 뒤 /user/abcdddd/ 를 쳐도 안 들어가지는" 버그가 났다.
+    """
+    from qtpy.QtCore import Qt
+    from qtpy.QtTest import QTest
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+
+    root, depth = shallow_tree
+    for name in ("abcd", "abcdddd"):
+        os.makedirs(os.path.join(root, name), exist_ok=True)
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    dialog.setDirectory(os.path.dirname(root))
+    dialog.show()
+    _spin(qapp, 300)
+    guard_dialog(dialog)
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+
+    def go(name):
+        edit.clear()
+        _spin(qapp, 50)
+        edit.setFocus()
+        QTest.keyClicks(edit, os.path.join(root, name) + os.sep)
+        _spin(qapp, 100)
+        QTest.keyClick(edit, Qt.Key.Key_Return)
+        _spin(qapp, 300)
+        return os.path.basename(dialog.directory().absolutePath())
+
+    assert go("abcd") == "abcd"
+    assert go("abcdddd") == "abcdddd"        # 다른 계정으로도 이동된다
+    assert go("abcd") == "abcd"              # 다시 돌아오는 것도 된다
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_typing_guard_keeps_matching_selection(qapp, shallow_tree):
+    """텍스트와 **일치하는** 선택은 남기고, 어긋나는 묵은 선택만 지운다.
+
+    목록에서 클릭해 고르면 Qt 가 파일 이름 칸을 그 이름으로 채우므로 둘이
+    일치한다 — 그 선택까지 지우면 클릭 선택이 즉시 풀려 버린다.
+    """
+    from qtpy.QtCore import QItemSelectionModel
+    from qtpy.QtWidgets import QFileDialog, QLineEdit, QListView
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _TypingGuard
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    for name in ("고른파일.csv", "다른파일.csv"):
+        with open(os.path.join(inner, name), "w", encoding="utf-8") as handle:
+            handle.write("x")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    dialog.setDirectory(inner)
+    dialog.show()
+    _spin(qapp, 500)
+    guard = [h for h in guard_dialog(dialog) if isinstance(h, _TypingGuard)][0]
+
+    view = dialog.findChild(QListView, "listView")
+    model, root_index = view.model(), view.rootIndex()
+    rows = {
+        model.index(r, 0, root_index).data(): model.index(r, 0, root_index)
+        for r in range(model.rowCount(root_index))
+    }
+    assert "고른파일.csv" in rows, sorted(rows)
+
+    def select(name):
+        view.selectionModel().select(
+            rows[name], QItemSelectionModel.SelectionFlag.ClearAndSelect
+        )
+
+    def selected():
+        return sorted(
+            index.data()
+            for index in view.selectionModel().selectedIndexes()
+            if index.column() == 0
+        )
+
+    # 텍스트와 일치하는 선택 -> 남는다
+    select("고른파일.csv")
+    guard._sync_selection("고른파일.csv")
+    assert selected() == ["고른파일.csv"]
+
+    # 다른 경로를 치면 묵은 선택은 지워진다(그래야 그 경로로 확정된다)
+    guard._sync_selection(os.path.join(root, "abcd") + os.sep)
+    assert selected() == []
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)

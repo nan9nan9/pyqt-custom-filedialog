@@ -238,8 +238,10 @@ class _TypingGuard(QObject):
 
     ``textChanged`` 에 걸린 Qt 내부 동작을 **보내는 쪽에서** 전부 끊고, 입력된
     경로가 안전할 때만(:func:`~custom_file_dialog.safety.may_stat`) 같은 일을
-    다시 해 준다. 위험한 자리에서는 자동 확인을 건너뛰고 열기/저장 버튼만
-    직접 켠다 — 확정(Enter·버튼)은 원래 흐름대로 가되, 차단/얕은 경로는
+    다시 해 준다. 위험한 자리에서 건너뛸 때도 **파일시스템을 만지지 않는 부분은
+    반드시 대신 한다** — 목록 선택 동기화(:meth:`_sync_selection`)와 열기/저장
+    버튼 활성이 그것이다. 그 둘을 빠뜨리면 확정이 엉뚱한 대상으로 가거나 아예
+    안 된다. 확정(Enter·버튼) 자체는 원래 흐름대로 가되, 차단/얕은 경로는
     :class:`_AcceptBlocker` 가 계속 막는다.
 
     "같은 일을 다시" 하는 방법은 바인딩마다 다르다 (전부 설치 시점에 정한다):
@@ -313,6 +315,10 @@ class _TypingGuard(QObject):
         path = _typed_path(self._dialog, text)
         if path and not safety.may_stat(path):
             self.skipped.append(path)
+            # Qt 가 하던 일 중 **파일시스템을 만지지 않는 부분**은 대신 해 준다.
+            # 목록 선택 동기화를 빠뜨리면 이전 선택이 남아, 확정할 때
+            # selectedFiles() 가 입력한 경로 대신 그 선택을 돌려준다(이동 불발).
+            self._sync_selection(text)
             # 자동 판정 없이도 경로를 끝까지 쳐서 열 수는 있어야 한다.
             # (열기 시점의 존재 확인은 QFileDialog.accept() 가 한 번만 한다)
             self._enable_accept(bool(text.strip()))
@@ -327,6 +333,51 @@ class _TypingGuard(QObject):
             self.relayPlain.emit()
         else:
             self._update_accept_python(text)
+
+    def _sync_selection(self, text):
+        """입력한 텍스트와 어긋나는 **묵은 목록 선택**을 지운다.
+
+        ``QFileDialog.accept()`` 는 ``selectedFiles()`` 를 쓰는데, 그 함수는
+        **파일 목록에 선택이 남아 있으면 파일 이름 칸의 텍스트를 무시한다.**
+        Qt 는 글자를 칠 때마다(``_q_autoCompleteFileName``) 선택을 텍스트에 맞춰
+        갱신해 이를 막는데, 그 호출을 건너뛰면 직전에 들어간 폴더의 선택이 남아
+        **다른 경로를 쳐도 그 선택으로 확정**된다(= 이동이 안 된다).
+
+        선택 항목의 경로는 모델에 이미 들어 있는 문자열이라 **파일시스템을
+        건드리지 않고** 비교할 수 있다. 텍스트가 가리키는 경로와 다를 때만
+        지우므로, 목록에서 클릭해 고른 선택은 그대로 남는다.
+
+        지울 때는 **시그널을 막고** 지운다. 선택이 바뀌면 Qt 가 버튼 상태를
+        다시 계산하면서 입력 경로를 ``access()`` 하는데, 그게 automount 를
+        부르기 때문이다(우리가 막으려던 바로 그 호출). 화면의 하이라이트는
+        시그널 없이 갱신되지 않으므로 뷰포트만 다시 그리게 한다.
+        """
+        wanted = {
+            path
+            for path in (
+                _typed_path(self._dialog, part) for part in _split_typed(text)
+            )
+            if path
+        }
+        for name, kind in (("listView", QListView), ("treeView", QTreeView)):
+            view = self._dialog.findChild(kind, name)
+            model = view.selectionModel() if view is not None else None
+            if model is None:
+                continue
+            current = {
+                abspath(index.data(PATH_ROLE))
+                for index in model.selectedIndexes()
+                if index.column() == 0
+            }
+            current.discard(None)
+            if not current or current == wanted:
+                continue
+            blocked = model.blockSignals(True)
+            try:
+                model.clearSelection()
+            finally:
+                model.blockSignals(blocked)
+            view.viewport().update()
 
     def _update_accept_python(self, text):
         """Qt6 — 내부 슬롯이 없어 열기/저장 버튼 활성 판정을 직접 한다.
@@ -350,6 +401,8 @@ class _TypingGuard(QObject):
             enabled = bool(paths) and all(safety.safe_exists(p) for p in paths if p)
         else:                           # AnyFile (저장)
             enabled = True
+        # 이 경로에서는 Qt 가 선택을 갱신해 주지 않으므로 우리가 맞춘다
+        self._sync_selection(text)
         self._enable_accept(bool(enabled))
 
     def _enable_accept(self, enabled):
