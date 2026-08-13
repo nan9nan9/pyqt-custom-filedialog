@@ -466,6 +466,9 @@ class CustomFileDialog(QFileDialog):
         문자열만 보므로 그대로 동작한다.
         """
         isdir = isdir_check(self._path_timeout)
+        # ``~`` 는 여기서 편다. Qt 는 풀어 주지 않아, 그대로 넘기면
+        # ``setDirectory("~/문서")`` 가 cwd 기준 상대 경로로 해석된다.
+        directory = os.path.expanduser(directory or "")
         if safety.may_enter(directory) and isdir(directory):
             self.setDirectory(directory)
             return
@@ -514,7 +517,10 @@ def resolve_start_dir(
     isdir = isdir_check(timeout)
 
     if current_paths:
-        current = current_paths[0]
+        # 판정(isdir_check)만 ``~`` 를 펴고 **결과를 안 펴면** 호출자가 그대로
+        # Qt 에 넘겨 cwd 에서 열린다 — Qt 는 ``~`` 를 풀지 않는다. 후보로
+        # 인정한 순간 편 형태로 바꿔서 다음 단계에 넘긴다.
+        current = os.path.expanduser(current_paths[0] or "")
         if current:
             if mode == SelectMode.DIRECTORY:
                 # 폴더 모드는 그 폴더 자체에서 시작하는 편이 자연스럽다.
@@ -537,6 +543,6 @@ def resolve_start_dir(
 
     for candidate in (start_dir, last_dir):
         if candidate and isdir(candidate):
-            return candidate
+            return os.path.expanduser(candidate)
 
     return os.getcwd()

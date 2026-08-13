@@ -699,3 +699,66 @@ def test_custom_file_dialog_records_recent(qapp, tmp_path):
     _close_soon(cancelled, accepted=False)
     _run(cancelled)
     assert recent.items() == [design]
+
+
+def test_history_add_keeps_other_widgets_entries(tmp_path, monkeypatch):
+    """이미 있는 경로를 다시 골라도 **남의 기록이 줄지 않는다.**
+
+    30개짜리 위젯이 채워 둔 목록을 20개짜리가 건드릴 때, 자르는 기준을 삽입
+    **후** 길이로 잡으면 중복 승격(길이가 그대로다)에서 맨 뒤 하나가 잘린다.
+    다시 고를 때마다 한 칸씩 사라져 결국 작은 쪽 크기로 줄어든다.
+    """
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(history_module, "default_settings", lambda: settings)
+
+    big = PathHistory("공유", max_items=30)
+    small = PathHistory("공유", max_items=20)
+    big.clear()
+    try:
+        paths = ["/tmp/경로%02d" % i for i in range(30)]
+        for path in paths:
+            big.add(path)
+        assert len(big._stored_items()) == 30
+
+        # 작은 쪽이 **이미 있는** 경로를 다시 고른다 -> 길이는 그대로여야 한다
+        for path in paths[:5]:
+            small.add(path)
+        assert len(big._stored_items()) == 30
+
+        # 새 경로를 더하면 그때만 자기 몫(20)이 아니라 저장분(30)이 유지된다
+        small.add("/tmp/새경로")
+        assert len(big._stored_items()) == 30
+        assert big._stored_items()[0] == "/tmp/새경로"
+    finally:
+        big.clear()
+
+
+def test_start_dir_expands_tilde(qapp, tmp_path, monkeypatch):
+    """``~`` 가 든 시작 위치가 cwd 가 아니라 홈 아래에서 열린다.
+
+    Qt 는 ``~`` 를 풀지 않는다. 유효성 판정만 펴고 결과를 안 펴면
+    ``setDirectory("~/문서")`` 가 cwd 기준 상대 경로가 되어, 유효한 last_dir
+    이 있어도 엉뚱한 곳에서 열렸다(저장 모드면 cwd 에 저장된다).
+    """
+    from custom_file_dialog import CustomFileDialog
+
+    home = tmp_path / "home"
+    (home / "문서").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))     # 윈도우에서 보는 이름
+
+    assert dialog_module.resolve_start_dir([], start_dir="~/문서") == str(
+        home / "문서"
+    )
+    # 입력창에 남아 있는 경로(1순위 후보)도 마찬가지다
+    (home / "문서" / "a.csv").write_text("x")
+    assert dialog_module.resolve_start_dir(["~/문서/a.csv"]) == str(home / "문서")
+    assert dialog_module.resolve_start_dir(
+        ["~/문서/a.csv"], mode=SelectMode.SAVE_FILE
+    ) == str(home / "문서" / "a.csv")
+
+    dialog = CustomFileDialog(None, mode="open_file", directory="~/문서")
+    assert dialog.directory().absolutePath() == str(home / "문서")
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)

@@ -261,9 +261,27 @@ def is_reachable(path, timeout=None, use_cache=True):
     if kind == _LOCAL:
         return True
     if kind == _UNKNOWN:
-        finished, _value = call_with_timeout(os.stat, path, timeout=timeout)
+        # 예외를 내지 않는 프로브를 쓴다. os.stat 은 **없는 경로**에서도 예외를
+        # 내는데 call_with_timeout 은 그것을 "못 끝냈다"로 보므로, 아직 만들지
+        # 않은 저장 대상이 마운트 표 없는 곳(윈도우 등)에서만 "도달 불가"가
+        # 됐다 — 같은 경로가 리눅스에서는 True 라 판정이 플랫폼마다 갈렸다.
+        finished, _value = call_with_timeout(
+            os.path.lexists, path, timeout=timeout, pending_key=_unknown_key(path)
+        )
         return finished
     return _mount_reachable(mount, timeout, use_cache)
+
+
+def _unknown_key(path):
+    """마운트 표가 없을 때 쓸 "멈춘 확인" 묶음 키 — 볼륨 단위.
+
+    윈도우면 드라이브(``C:``)나 UNC 공유(``\\\\서버\\공유``), 그 밖에는
+    파일시스템 뿌리. 경로마다 키를 따로 주면 묶는 의미가 없어져, 죽은 UNC
+    경로를 입력창에 치는 동안 키 입력마다 멈춘 스레드가 하나씩 쌓인다
+    (이 모듈이 "마운트당 하나"로 약속한 것이 이 갈래에서만 깨졌다).
+    """
+    drive, _rest = os.path.splitdrive(os.path.abspath(path))
+    return drive or os.sep
 
 
 def _mount_reachable(mount, timeout=None, use_cache=True):
@@ -353,8 +371,11 @@ def safe_call(func, path, default=False, timeout=None):
     if kind == _LOCAL:
         return func(path)
     if kind == _UNKNOWN:
-        # 원격인지 알 수 없다 — 프로브할 서버도 모르니 타임아웃만 씌운다
-        finished, value = call_with_timeout(func, path, timeout=timeout)
+        # 원격인지 알 수 없다 — 프로브할 서버도 모르니 타임아웃만 씌운다.
+        # 멈춘 확인은 볼륨 단위로 묶는다(마운트 표가 있을 때의 마운트지점 몫).
+        finished, value = call_with_timeout(
+            func, path, timeout=timeout, pending_key=_unknown_key(path)
+        )
         return value if finished else default
 
     if not _mount_reachable(mount, timeout):

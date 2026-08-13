@@ -1049,3 +1049,27 @@ def test_index_survives_interrupted_save(tmp_path, monkeypatch):
     # 인덱스 파일은 예전 내용 그대로다(깨지지 않았다)
     assert open(index_path, encoding="utf-8").read() == before
     assert store.resolve(store.link_for("설계", first)) == first
+
+
+def test_places_options_keeps_recent_max_on_explicit_none(tmp_path):
+    """``recent_max=None`` 을 명시해도 기억해 둔 개수를 잃지 않는다.
+
+    하나뿐인 호출자(``FilePathEdit.set_recent_files``)가 이 인자를 늘 함께
+    넘기므로, 기본값만 보던 예전 pop 은 매번 None 을 돌려주었다 — 저장소만
+    다시 지정할 때마다 20개짜리가 새로 생겨 21번째부터 즉시 지워졌다.
+    """
+    from custom_file_dialog import configure_storage
+    from custom_file_dialog.places import PlacesOptions
+
+    configure_storage(str(tmp_path / "저장소"))
+    try:
+        options = PlacesOptions(recent=True, recent_max=100)
+        options.update(recent=True, recent_max=None)
+        assert options.recent_max == 100
+        assert options.places().recent.max_items == 100
+
+        options.update(recent_max=5)                # 값을 주면 그대로 바뀐다
+        assert options.recent_max == 5
+        assert options.places().recent.max_items == 5
+    finally:
+        configure_storage(None)

@@ -433,12 +433,26 @@ class PlacesOptions:
 
         # 개수는 기억해 둔다 — 저장소만 다시 지정할 때(set_recent_files(True))
         # 그 값을 잃으면 기본 20개짜리가 새로 생겨 21번째부터 즉시 지워진다.
-        recent_max = changes.pop("recent_max", self.recent_max)
+        # 키를 아예 안 준 경우만이 아니라 **명시적으로 None 을 준 경우**도
+        # "안 바꾼다"로 본다. 하나뿐인 호출자(FilePathEdit.set_recent_files)가
+        # recent_max=None 을 늘 함께 넘겨서, 기본값만 보던 예전 pop 은 기억해 둔
+        # 개수를 매번 None 으로 지웠다(= 20개짜리가 새로 생긴다).
+        recent_max = changes.pop("recent_max", None)
+        if recent_max is None:
+            recent_max = self.recent_max
         self.recent_max = recent_max
         if "favorites" in changes:
             changes["favorites"] = as_favorites_store(changes["favorites"])
         if "recent" in changes:
             changes["recent"] = as_recent_store(changes["recent"], recent_max)
+        elif (
+            recent_max is not None
+            and isinstance(self.recent, RecentStore)
+            and self.recent.max_items != recent_max
+        ):
+            # 개수만 바꾼 경우 — 쓰고 있는 저장소에 바로 반영한다. 여기서 안
+            # 하면 저장소를 다시 지정할 때까지 조용히 무시된다.
+            self.recent.set_max_items(recent_max)
         for key, value in changes.items():
             if key in ("sidebar_urls", "fixed_urls") and value is not None:
                 value = list(value)

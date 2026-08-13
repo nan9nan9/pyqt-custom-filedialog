@@ -65,7 +65,7 @@ class FavoritesMenus(QObject):
 
     사용 예::
 
-        menus = FavoritesMenus(dialog, [favorites, recent])
+        menus = FavoritesMenus(dialog, Places(favorites=favorites, recent=recent))
         menus.install()
         dialog.exec_()
 
@@ -115,7 +115,10 @@ class FavoritesMenus(QObject):
         # 얹을 것이 없어도 사이드바 메뉴는 건다. 기본 보호(사용자 홈)를
         # 집행하는 곳이 여기라, 걸지 않으면 Qt 기본 "Remove" 가 남아 홈이
         # 빠지고 그 상태가 사용자 설정에 영구 저장된다.
-        if self._dialog is None:
+        # 저장소가 **비어 있는** Places 는 통과시키되(falsy 한 인스턴스라 예전
+        # `if not self._places` 는 이 경우까지 걸러 냈다), 아예 없는 것은 여기서
+        # 막는다. 아래 stores() 가 첫 역참조라 그냥 두면 AttributeError 다.
+        if self._dialog is None or self._places is None:
             return False
 
         self._sidebar = self._dialog.findChild(QListView, "sidebar")

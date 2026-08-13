@@ -44,7 +44,13 @@ _mounts = {"list": None, "stamp": 0.0}
 
 
 def _abspath(path):
-    """``~`` 를 펴고 절대·정규 경로로. (util.abspath 와 같지만 Qt 를 끌어오지 않는다)"""
+    """``~`` 를 펴고 절대·정규 경로로. (util.abspath 와 같지만 Qt 를 끌어오지 않는다)
+
+    ``bytes`` 는 ``os.fsdecode`` 로 푼다. ``str()`` 로 감싸면 ``b'/user'`` 라는
+    **글자 그대로의** 이름이 되어, 막아 달라고 준 자리가 조용히 안 막힌다.
+    """
+    if isinstance(path, bytes):
+        path = os.fsdecode(path)
     return os.path.normpath(os.path.abspath(os.path.expanduser(str(path))))
 
 

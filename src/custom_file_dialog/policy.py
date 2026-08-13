@@ -59,9 +59,13 @@ def configure(guarded_roots=None, min_depth=None, allow_listing=None):
                 # 흔한 실수: configure(guarded_roots="/user"). 그대로 순회하면
                 # 한 글자씩 쪼개져 막으려던 자리는 안 막히고 루트가 차단된다.
                 guarded_roots = [guarded_roots]
-            _settings["guarded_roots"] = [
-                _abspath(p) for p in guarded_roots if str(p).strip()
-            ]
+            roots = []
+            for root in guarded_roots:
+                if isinstance(root, bytes):
+                    root = os.fsdecode(root)    # 빈 값 판정도 편 뒤에 한다
+                if str(root).strip():
+                    roots.append(_abspath(root))
+            _settings["guarded_roots"] = roots
         if min_depth is not None:
             _settings["min_depth"] = max(0, int(min_depth))
         if allow_listing is not None:

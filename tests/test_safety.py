@@ -2323,3 +2323,169 @@ def test_accept_guard_handles_quotes_and_multiple_paths(qapp, shallow_tree):
     bad = '"설계도.csv" "%s"' % os.path.join(root, "someone")
     assert blocked_for(good, multi) is False
     assert blocked_for(bad, multi) is True
+
+
+def test_unknown_paths_do_not_pile_up_threads(monkeypatch, tmp_path):
+    """마운트 표가 없는 곳에서도 멈춘 확인은 **볼륨당 하나**만 돈다.
+
+    윈도우·macOS·/proc 없는 컨테이너에서는 모든 경로가 "알 수 없음"이라
+    이 갈래만 탄다. 여기에 묶음 키를 안 주면 죽은 UNC 경로를 입력창에 치는
+    동안 키 입력마다 멈춘 스레드가 하나씩 쌓인다 — 이 모듈이 약속한
+    "마운트당 하나"가 이 갈래에서만 깨졌다.
+    """
+    import threading
+
+    from custom_file_dialog import safety
+
+    monkeypatch.setattr(safety_mounts, "iter_mounts", lambda refresh=False: [])
+    monkeypatch.setattr(safety_mounts, "table_available", lambda: False)
+    safety.clear_cache()
+
+    release = threading.Event()
+
+    def never_returns(path):
+        release.wait(10)            # 죽은 마운트 흉내 — 시간 안에 안 돌아온다
+        return True
+
+    try:
+        for index in range(8):
+            assert safety.safe_call(
+                never_returns, str(tmp_path / ("이름%d" % index)), timeout=0.05
+            ) is False
+        # 첫 확인만 스레드를 만들고, 나머지는 곧바로 실패로 판정한다
+        assert safety_reach.pending_checks() == 1
+    finally:
+        release.set()
+        safety.clear_cache()
+
+
+def test_missing_path_is_reachable_without_a_mount_table(monkeypatch, tmp_path):
+    """마운트 표가 없어도 "아직 없는 파일"이 도달 불가로 뒤집히지 않는다.
+
+    ``os.stat`` 은 없는 경로에서 예외를 내고 :func:`call_with_timeout` 은 그것을
+    "못 끝냈다"로 보므로, 저장 모드가 검사하는 새 파일 경로가 윈도우에서만
+    거절됐다(같은 경로가 리눅스에서는 True).
+    """
+    from custom_file_dialog import safety
+
+    monkeypatch.setattr(safety_mounts, "iter_mounts", lambda refresh=False: [])
+    monkeypatch.setattr(safety_mounts, "table_available", lambda: False)
+    safety.clear_cache()
+    try:
+        assert safety.is_reachable(str(tmp_path / "아직없는파일.csv")) is True
+        assert safety.is_reachable(str(tmp_path)) is True
+    finally:
+        safety.clear_cache()
+
+
+def test_guarded_root_accepts_bytes(tmp_path):
+    """``bytes`` 로 준 차단 경로가 조용히 무시되지 않는다.
+
+    ``str(b"/user")`` 는 ``"b'/user'"`` 라는 글자 그대로의 이름이 되어, 막아
+    달라고 한 자리가 **보호되지 않은 채** 통과했다.
+    """
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    root.mkdir()
+    safety.configure(guarded_roots=[os.fsencode(str(root))])
+    try:
+        assert safety.guarded_roots() == [str(root)]
+        assert safety.is_guarded(str(root))
+        assert not safety.may_enter(str(root))
+        # 물어보는 쪽이 bytes 여도 같은 답이어야 한다(경로 해석이 한곳이다)
+        assert safety.is_guarded(os.fsencode(str(root)))
+    finally:
+        safety.reset()
+
+
+def test_block_notice_names_the_path_that_blocked(qapp, shallow_tree):
+    """여러 개 모드에서 안내 팝업이 **막은 경로**를 짚는다.
+
+    첫 경로만 넘기면, 뒤에 섞인 경로 때문에 막혔는데도 멀쩡한 쪽을 기준으로
+    "끝에 '/' 를 붙이세요" 라고 안내한다 — 따라 해도 열리지 않는다.
+    """
+    from qtpy.QtCore import QEvent, Qt
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+    dialog.setDirectory(inner)
+    dialog.show()
+    _spin(qapp, 100)
+
+    blocker = [h for h in guard_dialog(dialog) if isinstance(h, _AcceptBlocker)][0]
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    shallow = os.path.join(root, "someone")
+    edit.setText('"설계도.csv" "%s"' % shallow)
+    event = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+    )
+    assert blocker.eventFilter(edit, event) is True
+    assert blocker.blocked == [shallow]         # 멀쩡한 첫 경로가 아니라
+    if blocker.notice is not None:
+        assert "설계도.csv" not in blocker.notice.text()
+        blocker.notice.hide()
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_qt6_button_check_respects_quotes_in_names(qapp, tmp_path):
+    """Qt6 경로(파이썬 판정)도 따옴표를 **모드에 맞게** 다룬다.
+
+    확정 차단(_AcceptBlocker)만 모드를 보고 형제 판정 두 곳이 그대로면, 같은
+    입력을 두 장치가 다르게 읽는다 — 리눅스에서 합법인 ``a"b`` 를 단일 선택
+    모드에 치면 열기 버튼이 엉뚱한 경로로 판정되고, ``"`` 로 끝나는 이름은
+    경로 목록이 비어 버튼이 아예 죽는다.
+    """
+    from qtpy.QtWidgets import QDialogButtonBox, QFileDialog, QLineEdit
+
+    from custom_file_dialog.guard import _TypingGuard
+
+    for name in ('a"b', 'my"'):
+        (tmp_path / name).write_text("x")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    dialog.setDirectory(str(tmp_path))
+    dialog.show()
+    _spin(qapp, 100)
+
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    guard = _TypingGuard(dialog, edit)
+    box = dialog.findChild(QDialogButtonBox, "buttonBox")
+    accept = box.button(QDialogButtonBox.StandardButton.Open)
+
+    # 단일 선택 — 따옴표는 이름의 일부다. 있는 파일이므로 버튼이 살아 있어야 한다.
+    for name in ('a"b', 'my"'):
+        guard._update_accept_python(name)
+        assert accept.isEnabled(), name
+
+    # 없는 이름이면 그대로 죽는다(판정이 그냥 늘 True 인 것이 아님을 못박는다)
+    guard._update_accept_python('없는"이름')
+    assert not accept.isEnabled()
+
+    # 여러 개 모드에서는 따옴표가 구분자다(이름에 든 따옴표는 쪼갤 수 없다)
+    for name in ("하나.txt", "둘.txt"):
+        (tmp_path / name).write_text("x")
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+    guard._update_accept_python('"하나.txt" "둘.txt"')
+    assert accept.isEnabled()
+    guard._update_accept_python('"하나.txt" "없는것.txt"')
+    assert not accept.isEnabled()
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)

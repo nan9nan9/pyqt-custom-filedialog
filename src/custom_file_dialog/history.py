@@ -111,11 +111,15 @@ class PathHistory:
             return
         path = str(path)
         items = self._stored_items()    # 저장소의 **지금** 상태에서 시작한다
+        stored = len(items)             # 손대기 **전** 길이 — 자르는 기준이다
         if path in items:
             items.remove(path)
         items.insert(0, path)
-        # 내 몫보다 많이 들어 있으면 그만큼은 남겨 둔다(남의 기록을 자르지 않는다)
-        del items[max(self.max_items, len(items) - 1) :]
+        # 내 몫보다 많이 들어 있으면 그만큼은 남겨 둔다(남의 기록을 자르지 않는다).
+        # 기준은 반드시 손대기 전 길이여야 한다. 삽입 후 길이에서 1 을 빼면
+        # **이미 있던 경로를 다시 고를 때** 길이가 그대로라 맨 뒤 하나가 잘려,
+        # 큰 쪽이 쌓아 둔 목록이 다시 고를 때마다 한 칸씩 줄어든다.
+        del items[max(self.max_items, stored) :]
         self._write_items(items)
 
     def clear(self):

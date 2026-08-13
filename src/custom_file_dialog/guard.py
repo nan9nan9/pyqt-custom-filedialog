@@ -228,36 +228,40 @@ class _AcceptBlocker(_Blocker):
 
         # 상대 경로("..")도 현재 폴더 기준으로 푼다.
         paths = self._typed_paths()
-        return paths[0] if paths else ""
+        if not paths:
+            return ""
+        # **막는 경로**를 돌려준다. 여러 개 모드에서 뒤에 섞인 경로 때문에
+        # 막혔는데 첫 경로를 넘기면, 기록(blocked)과 안내 팝업이 멀쩡한 쪽을
+        # 가리켜 "끝에 '/' 를 붙이세요" 같은 따라 해도 안 되는 말을 한다.
+        return self._first_blocked(paths) or paths[0]
 
     def _typed_paths(self):
-        """파일 이름 칸이 가리키는 경로들.
-
-        여러 개 모드에서만 따옴표로 쪼갠다 — 리눅스에서 ``"`` 는 합법적인 파일명
-        문자라, 단일 선택인데 쪼개면 ``/user/a"b`` 가 엉뚱한 경로가 되고
-        ``"`` 로 끝나는 입력은 아예 빈 목록이 되어 **확정 차단이 통째로 새어
-        나간다.**
-        """
+        """파일 이름 칸이 가리키는 경로들."""
         text = self._edit.text() or ""
-        multi = self._dialog.fileMode() == enum_value("FileMode", "ExistingFiles")
-        parts = _split_typed(text) if multi else [text]
+        parts = _typed_parts(self._dialog, text)
         return [p for p in (_typed_path(self._dialog, part) for part in parts) if p]
 
-    def allowed(self, path):
+    def _first_blocked(self, paths):
+        """확정하면 막힐 **첫 경로** (전부 통과하면 None).
+
+        **모든** 경로를 본다. accept() 는 전부 stat 하므로 하나만 검사하면
+        뒤에 섞인 절대 경로가 그대로 빠져나간다.
+        """
         # 끝의 구분자는 "이 폴더를 열겠다"는 명시적 표기라 판정에 살려서 넘긴다.
         # 정규화하면 사라지므로 원문에서 다시 본다(기록·안내에는 정규화된 경로만
         # 남겨 진단 값이 두 형태로 섞이지 않게 한다).
-        raw = (self._edit.text() or "").strip()
-        explicit = raw.endswith(("/", os.sep))
-
-        # **모든** 경로를 본다. accept() 는 전부 stat 하므로 하나만 검사하면
-        # 뒤에 섞인 절대 경로가 그대로 빠져나간다.
-        for candidate in self._typed_paths():
+        explicit = (self._edit.text() or "").strip().endswith(("/", os.sep))
+        for path in paths:
+            candidate = path
             if explicit and not candidate.endswith(os.sep):
                 candidate += os.sep
             if not safety.may_open(candidate):
-                return False
-        return True
+                return path
+        return None
+
+    def allowed(self, path):
+        # destination 이 이미 막는 경로를 골라 넘겼으므로 그 하나만 다시 본다.
+        return self._first_blocked([path]) is None
 
     def on_blocked(self, obj, event, path):
         _pressed_button(obj, event)
@@ -352,6 +356,19 @@ def _split_typed(text):
         return [text]
     parts = text.split('"')
     return [p for index, p in enumerate(parts) if index % 2 == 1 and p.strip()]
+
+
+def _typed_parts(dialog, text):
+    """모드에 맞게 나눈 파일 이름 칸의 조각들.
+
+    **여러 개 모드에서만** 따옴표로 쪼갠다 — 리눅스에서 ``"`` 는 합법적인 파일명
+    문자라, 단일 선택인데 쪼개면 ``a"b`` 가 ``b`` 로 바뀌고 ``"`` 로 끝나는
+    입력은 아예 빈 목록이 된다. 이 판정을 쓰는 곳이 여럿이라(확정 차단 ·
+    목록 선택 동기화 · 버튼 활성) 한 함수로 모아 둔다.
+    """
+    if dialog.fileMode() == enum_value("FileMode", "ExistingFiles"):
+        return _split_typed(text or "")
+    return [text or ""]
 
 
 def _first_step_under_automount(path):
@@ -503,7 +520,8 @@ class _TypingGuard(QObject):
         wanted = {
             path
             for path in (
-                _typed_path(self._dialog, part) for part in _split_typed(text)
+                _typed_path(self._dialog, part)
+                for part in _typed_parts(self._dialog, text)
             )
             if path
         }
@@ -545,7 +563,9 @@ class _TypingGuard(QObject):
             enum_value("FileMode", "ExistingFile"),
             enum_value("FileMode", "ExistingFiles"),
         ):
-            paths = [_typed_path(self._dialog, t) for t in _split_typed(text)]
+            paths = [
+                _typed_path(self._dialog, t) for t in _typed_parts(self._dialog, text)
+            ]
             enabled = bool(paths) and all(safety.safe_exists(p) for p in paths if p)
         else:                           # AnyFile (저장)
             enabled = True

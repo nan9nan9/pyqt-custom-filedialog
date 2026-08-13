@@ -807,3 +807,16 @@ def test_sidebar_menu_installed_without_stores(qapp, tmp_path):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_menus_reject_missing_places(qapp):
+    """저장소 묶음을 아예 안 주면 ``AttributeError`` 가 아니라 False 다."""
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import FavoritesMenus
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    assert FavoritesMenus(dialog, None).install() is False
+    dialog.deleteLater()
+    _spin(qapp, 50)
