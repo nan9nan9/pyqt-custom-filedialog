@@ -1171,13 +1171,21 @@ safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
 /user/jekai/ →  평소대로 완성 (/user/jekai 는 2단계)
 ```
 
-나열과 함께 **키 입력마다의 자동 stat 도** 막습니다 — Qt 는 글자를 칠 때마다
-입력 경로를 `access()`/`stat()` 으로 만져 보는데(항목 자동 선택 · 버튼 활성
-판정), automount 아래에서는 그 한 번 한 번이 마운트 시도입니다. 깊이가
-min_depth 보다 **작거나 같은** 경로(`min_depth=2` 면 `/user/je` 까지)는
-**디스크에 아예 접근하지 않습니다.** 경로를 끝까지 쳐서 **확정**하는 것은
-그대로 되고(확인은 그때 한 번만), `/ho` → `/home` 처럼 **얕은 자리의
-완성·자동 확인이 함께 없어지는 것**이 대가입니다.
+깊이가 min_depth 보다 **작거나 같은** 경로는 **어떤 접근도 하지 않습니다** —
+자동완성 나열, 키 입력마다의 자동 stat(Qt 는 글자를 칠 때마다 입력 경로를
+`access()`/`stat()` 으로 만져 봅니다), 그리고 **Enter/열기 버튼으로 확정하는
+것**까지 전부입니다. automount 아래에서는 확정의 stat 한 번도 마운트 시도라,
+`/user/j` 에서 Enter 를 쳐도 시스템이 멈추기 때문입니다.
+
+```
+/user/j      Enter →  막힘 (깊이 2 ≤ min_depth 2 — 예전엔 여기서 멈췄다)
+/user/jekai  Enter →  막힘 (같은 이유 — 더 깊은 전체 경로로 연다)
+/user/jekai/a.csv Enter →  확정됨 (깊이 3 — 의도한 마운트는 이 한 번으로)
+```
+
+대가는 `/ho` → `/home` 처럼 **얕은 자리의 완성·자동 확인·Enter 확정이 함께
+없어지는 것**입니다. 다이얼로그에서 폴더를 **클릭해** 들어가는 것은 막지
+않습니다(목록에 이미 보이는 항목은 안전합니다).
 
 > **autofs 는 자동으로 압니다.** `/proc/self/mountinfo` 에 autofs 로 잡히는
 > 마운트 위 경로는 `guarded_roots`/`min_depth` 를 설정하지 않아도 나열·자동
@@ -1227,7 +1235,7 @@ edit.set_completer(False)                                # 실행 중에도 전�
 | | `guarded_roots` | `min_depth` | `allow_listing=False` |
 | --- | --- | --- | --- |
 | 지정 방식 | 위험한 경로를 이름으로 나열 | 깊이 하나로 일괄 | 스위치 하나 |
-| 막는 것 | 나열 + 자동 stat + **그 자리로 이동** | 자동완성 나열 + 얕은 자리의 자동 stat | 자동완성 나열만 |
+| 막는 것 | 나열 + 자동 stat + 확정 + **그 자리로 이동** | 나열 + 자동 stat + **Enter 확정** (깊이 ≤ 값) | 자동완성 나열만 |
 | 모르는 위험 경로 | 못 막음 (autofs 는 자동 인지) | 얕으면 막힘 | **전부 막힘** |
 | 부작용 | 없음 (그 자리만) | 얕은 자리의 완성·자동 확인이 사라짐 | 자동완성이 통째로 사라짐 |
 
@@ -1293,6 +1301,7 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
 | `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단 경로 · 깊이 ≤ min_depth · autofs 위면 False) |
+| `safety.may_open(path)` | **확정**(Enter·열기)해도 되는지 (차단 경로 · 깊이 ≤ min_depth 면 False — 깊은 경로는 automount 위라도 허용) |
 | `safety.on_automount(path)` / `has_automounts()` | autofs 마운트 위인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
 | `safety.reset()` | 모든 설정을 기본값으로 |

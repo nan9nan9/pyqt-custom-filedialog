@@ -151,13 +151,15 @@ def configure(
             나열하지 않으므로 멈추지 않고, ``/user/jekai/`` 부터 완성이 살아난다.
             그 대신 ``/ho`` → ``/home`` 처럼 **얕은 자리의 완성도 함께 없어진다**.
 
-            나열과 키 입력마다의 자동 확인(:func:`may_stat`)에만 걸리므로,
-            경로를 끝까지 쳐서 **확정**하는 것과 다이얼로그에서 폴더를 눌러
-            들어가는 것은 그대로 된다. 들어가는 것까지 막으려면
-            ``guarded_roots`` 를 함께 쓴다. 자동 확인 쪽은 깊이가 이 값보다
-            **작거나 같은** 경로를 디스크에 아예 접근하지 않는다
-            (``min_depth=2`` 면 ``/user/je`` 까지 — 나열은 어차피 그 부모를
-            읽는 일이라 두 규칙은 같은 자리에서 멈춘다).
+            깊이가 이 값보다 **작거나 같은** 경로는 어떤 자동 접근도 하지
+            않는다 — 나열(:func:`may_list`) · 키 입력마다의 자동 확인
+            (:func:`may_stat`) · **Enter/열기 버튼으로 확정하는 것**
+            (:func:`may_open`)까지 전부다. 확정의 stat 한 번도 automount
+            아래에서는 마운트 시도라 그 한 번으로 멈추기 때문이다.
+            ``min_depth=2`` 면 ``/user/je`` 는 물론 ``/user/jekai`` 도 Enter
+            로는 못 열고, ``/user/jekai/a.csv`` 처럼 더 깊은 경로부터 확정이
+            된다. 다이얼로그에서 폴더를 **눌러** 들어가는 것은 막지 않는다 —
+            그쪽까지 막으려면 ``guarded_roots`` 를 함께 쓴다.
         allow_listing: **자동완성이 폴더 목록을 읽어도 되는지.** ``False`` 면
             깊이와 무관하게 어떤 폴더도 읽지 않아 완성 후보가 아예 뜨지 않는다.
             자동완성을 통째로 끄는 스위치다.
@@ -301,8 +303,9 @@ def may_stat(path):
     - autofs 마운트 위 (지점 자체든 아직 안 붙은 그 아래든 — 설정 없이 자동)
 
     자동 확인(자동완성 · 키 입력마다의 유효성 표시)에만 쓰는 판정이다. 사용자가
-    Enter 나 버튼으로 **확정**한 경로를 여는 것까지 막는 판정이 아니다 — 확정은
-    한 번뿐이라 의도한 마운트(``/user/jekai``)는 그때 일어나면 된다.
+    Enter 나 버튼으로 **확정**하는 쪽은 :func:`may_open` 이 따로 판정한다 —
+    깊은 경로의 의도한 마운트(``/user/jekai/a.csv``)는 확정의 stat 한 번으로
+    일어나면 된다.
     """
     if not path:
         return True
@@ -313,6 +316,28 @@ def may_stat(path):
     if limit > 0 and path_depth(absolute) <= limit:
         return False
     return not on_automount(absolute)
+
+
+def may_open(path):
+    """그 경로를 **확정**(Enter · 열기 버튼)해도 되는지.
+
+    확정은 Qt 가 GUI 스레드에서 그 경로를 곧바로 stat 하는 일이라, automount
+    아래의 얕은 미완성 경로(``/user/j``)에 Enter 를 치면 자동 확인을 다 막아도
+    그 한 번으로 멈춘다. 그래서 ``guarded_roots`` 로 지목한 자리와 깊이가
+    ``min_depth`` 보다 **작거나 같은** 경로는 확정도 막는다.
+
+    :func:`may_stat` 보다 느슨하다 — automount 위라도 **깊은** 경로
+    (``/user/jekai/a.csv``)는 허용한다. 의도한 마운트는 확정의 stat 한 번으로
+    일어나야 하기 때문이다. 그 대신 얕은 경로는 이름이 맞아도 확정할 수 없다
+    (``min_depth=2`` 면 ``/user/jekai`` 도 Enter 로는 못 연다 — 더 깊은 전체
+    경로를 치거나 사이드바/목록으로 이동한다).
+    """
+    if not path:
+        return True
+    if is_guarded(path):
+        return False
+    limit = min_depth()
+    return not (limit > 0 and path_depth(path) <= limit)
 
 
 def clear_cache():

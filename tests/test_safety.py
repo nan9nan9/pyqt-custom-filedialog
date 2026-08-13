@@ -430,13 +430,17 @@ def test_min_depth_alone_installs_completer_guard(qapp, shallow_tree):
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     installed = hooks_module.guard_dialog(dialog)
 
-    # 자동완성 모델과 타이핑 가드만 바꾼다. 얕은 자리를 "못 들어가게" 하는
-    # 설정은 아니므로 이벤트 필터(더블클릭 · 확정 차단)까지 걸지는 않는다.
-    from custom_file_dialog.guard import _TypingGuard
+    # 자동완성 모델 + 타이핑 가드 + 확정 차단까지. 얕은 자리를 "눌러 들어가는"
+    # 것은 막지 않으므로 더블클릭/콤보 차단(_ItemBlocker)과 bounce 는 안 건다.
+    from custom_file_dialog.guard import _AcceptBlocker, _ItemBlocker, _TypingGuard
 
     assert installed[0] == "completer"
+    assert any(isinstance(item, _AcceptBlocker) for item in installed)
+    assert not any(isinstance(item, _ItemBlocker) for item in installed)
+    assert "bounce" not in installed
     assert all(
-        item == "completer" or isinstance(item, _TypingGuard) for item in installed
+        item == "completer" or isinstance(item, (_TypingGuard, _AcceptBlocker))
+        for item in installed
     )
     name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
     assert isinstance(name_edit.completer().model(), GuardedFileSystemModel)
@@ -1275,3 +1279,67 @@ def test_dialog_start_at_avoids_automount_parent(qapp, monkeypatch, tmp_path):
         dialog.deleteLater()
     finally:
         safety.clear_cache()
+
+
+def test_may_open_blocks_shallow_paths(shallow_tree):
+    """확정 판정 — 깊이 ≤ min_depth 는 막고, 더 깊으면 automount 위라도 허용."""
+    from custom_file_dialog import safety
+
+    root, depth = shallow_tree
+    safety.configure(min_depth=depth + 1)
+    assert not safety.may_open(root)                              # 깊이 < limit
+    assert not safety.may_open(os.path.join(root, "j"))           # 깊이 == limit
+    assert not safety.may_open(os.path.join(root, "jekai"))       # 이름이 맞아도
+    assert safety.may_open(os.path.join(root, "jekai", "proj"))   # 깊이 > limit
+
+
+def test_may_open_blocks_guarded_roots(guarded_root):
+    """차단 경로 자체는 확정 불가, 하위는 허용(문서된 규칙 그대로)."""
+    from custom_file_dialog import safety
+
+    assert not safety.may_open(guarded_root)
+    assert safety.may_open(os.path.join(guarded_root, "jekai"))
+
+
+def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):
+    """min_depth 만 켜도 얕은 경로는 Enter/열기 버튼으로 확정할 수 없다.
+
+    타이핑 자동 확인을 다 막아도, Enter 의 확정은 Qt 가 GUI 스레드에서 입력
+    경로를 stat 한다 — automount 에서는 그 한 번으로 멈춘다("/user/j" Enter).
+    """
+    from qtpy.QtCore import QEvent, Qt
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    root, depth = shallow_tree
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(os.path.dirname(root))
+    dialog.show()
+    _spin(qapp, 300)
+
+    installed = guard_dialog(dialog)
+    blocker = [h for h in installed if isinstance(h, _AcceptBlocker)][0]
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+
+    def press_enter():
+        event = QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+        )
+        return blocker.eventFilter(edit, event)
+
+    edit.setText(os.path.join(root, "j"))            # 깊이 == min_depth
+    assert press_enter() is True
+    edit.setText(os.path.join(root, "jekai"))        # 이름이 맞아도 같은 깊이
+    assert press_enter() is True
+
+    edit.setText(os.path.join(root, "jekai", "proj"))    # 더 깊으면 확정 가능
+    assert press_enter() is False
+
+    assert blocker.blocked
+    dialog.close()

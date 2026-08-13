@@ -121,10 +121,13 @@ class _ItemBlocker(QObject):
 
 
 class _AcceptBlocker(QObject):
-    """파일 이름 칸에 차단 경로를 치고 확정하는 것을 막는다.
+    """파일 이름 칸에 친 경로를 확정하는 것을 막는다 — 차단 경로와 얕은 경로.
 
     ``QDialog.accept()`` 는 Qt 가 C++ 에서 부르므로 가로챌 수 없다. 그 앞 단계인
-    **Enter 키와 열기 버튼 클릭**을 삼킨다.
+    **Enter 키와 열기 버튼 클릭**을 삼킨다. accept 는 GUI 스레드에서 입력 경로를
+    곧바로 stat 하므로, automount 아래의 얕은 경로(``/user/j``)는 확정 한 번으로
+    멈춘다 — 무엇을 막을지는 :func:`~custom_file_dialog.safety.may_open`
+    (``guarded_roots`` + 깊이 ≤ ``min_depth``)이 정한다.
     """
 
     def __init__(self, dialog, name_edit, parent=None):
@@ -155,7 +158,7 @@ class _AcceptBlocker(QObject):
 
         # 상대 경로("..")도 현재 폴더 기준으로 풀어서 판정한다
         path = _typed_path(self._dialog, self._edit.text())
-        if path and safety.is_guarded(path):
+        if path and not safety.may_open(path):
             self.blocked.append(path)
             return True
         return False
@@ -259,10 +262,15 @@ def guard_dialog(dialog, bounce=True):
     - ``bounce`` 가 True 면 그래도 들어가진 경우 직전 폴더로 되돌린다
       (이미 읽은 뒤라 늦지만, 그 자리에 머무르지는 않게 하는 마지막 방어)
 
-    ``min_depth`` / ``allow_listing`` 만 켜 두었다면(또는 설정 없이 시스템에
-    autofs 마운트만 있다면) **자동완성 모델과 타이핑 가드까지만** 건다. 목록을
-    읽거나 만지지 않게 하는 설정이지, 그 자리에 못 들어가게 하는 설정은 아니기
-    때문이다. 걸 이유가 하나도 없으면 아무 일도 하지 않는다.
+    무엇이 걸리는지는 설정에 따라 다르다.
+
+    - 설정 없이 시스템에 autofs 마운트만 있음 → 자동완성 모델 + 타이핑 가드
+    - ``allow_listing=False`` 만 → 위와 같음 (나열만 막는 설정이므로)
+    - ``min_depth`` → 위에 더해 **확정 차단** (깊이 ≤ min_depth 는 Enter · 열기
+      버튼으로도 못 연다 — 확정의 stat 한 번이 automount 를 부른다)
+    - ``guarded_roots`` → 전부 (더블클릭 · "Look in" · 확정 · 마지막 방어)
+
+    걸 이유가 하나도 없으면 아무 일도 하지 않는다.
 
     Returns:
         건 장치들의 목록(진단용). 걸 게 없으면 빈 리스트.
@@ -294,33 +302,39 @@ def guard_dialog(dialog, bounce=True):
     if typing_guard is not None:
         installed.append(typing_guard)
 
-    if not guarded:
-        return installed        # 아래는 "그 자리에 못 들어가게" 하는 장치들이다
+    if not guarded and not safety.min_depth():
+        return installed        # 아래는 "확정하거나 들어가지 못하게" 하는 장치들이다
 
-    # 3) 파일 목록에서 열기 차단 (더블클릭)
-    for view in (
-        dialog.findChild(QTreeView, "treeView"),
-        dialog.findChild(QListView, "listView"),
-    ):
-        if view is None:
-            continue
-        blocker = _ItemBlocker(view, (QEvent.Type.MouseButtonDblClick,), parent=dialog)
-        view.viewport().installEventFilter(blocker)
-        view.installEventFilter(blocker)
-        installed.append(blocker)
+    if guarded:
+        # 3) 파일 목록에서 열기 차단 (더블클릭)
+        for view in (
+            dialog.findChild(QTreeView, "treeView"),
+            dialog.findChild(QListView, "listView"),
+        ):
+            if view is None:
+                continue
+            blocker = _ItemBlocker(
+                view, (QEvent.Type.MouseButtonDblClick,), parent=dialog
+            )
+            view.viewport().installEventFilter(blocker)
+            view.installEventFilter(blocker)
+            installed.append(blocker)
 
-    # 4) "Look in" 드롭다운에서 고르기 차단 (클릭 = release)
-    combo = dialog.findChild(QComboBox, "lookInCombo")
-    if combo is not None:
-        view = combo.view()
-        blocker = _ItemBlocker(
-            view, (QEvent.Type.MouseButtonRelease,), combo.hidePopup, parent=dialog
-        )
-        view.viewport().installEventFilter(blocker)
-        view.installEventFilter(blocker)
-        installed.append(blocker)
+        # 4) "Look in" 드롭다운에서 고르기 차단 (클릭 = release)
+        combo = dialog.findChild(QComboBox, "lookInCombo")
+        if combo is not None:
+            view = combo.view()
+            blocker = _ItemBlocker(
+                view, (QEvent.Type.MouseButtonRelease,), combo.hidePopup, parent=dialog
+            )
+            view.viewport().installEventFilter(blocker)
+            view.installEventFilter(blocker)
+            installed.append(blocker)
 
-    # 5) 파일 이름 칸으로 확정하기 차단 (Enter · 열기 버튼)
+    # 5) 파일 이름 칸으로 확정하기 차단 (Enter · 열기 버튼).
+    #    guarded 는 물론 min_depth 만 켜도 건다 — Enter 의 확정은 Qt 가 GUI
+    #    스레드에서 입력 경로를 stat 하는 일이라, automount 의 얕은 경로에서는
+    #    그 한 번으로 멈춘다 (safety.may_open 이 판정).
     if name_edit is not None:
         blocker = _AcceptBlocker(dialog, name_edit, dialog)
         name_edit.installEventFilter(blocker)
@@ -331,8 +345,8 @@ def guard_dialog(dialog, bounce=True):
                 button.installEventFilter(blocker)
         installed.append(blocker)
 
-    # 6) 마지막 방어
-    if bounce:
+    # 6) 마지막 방어 (guarded 전용 — 이동 자체는 guarded 로만 막는다)
+    if bounce and guarded:
         last = {"dir": dialog.directory().absolutePath()}
 
         def on_entered(path):
