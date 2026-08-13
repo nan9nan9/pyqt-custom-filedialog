@@ -371,3 +371,45 @@ def test_follow_link_directories_checks_destination(qapp, tmp_path, monkeypatch)
     finally:
         safety.reset()
     dialog.deleteLater()
+
+
+def test_follow_link_on_parent_respects_may_enter(qapp, tmp_path):
+    """원본의 상위가 **열면 안 되는 자리**면 따라가지 않는다.
+
+    safe_isdir 만 보면 min_depth 로 막아 둔 얕은 자리로 옮겨 간다 —
+    setDirectory 는 directoryEntered 를 내지 않아 마지막 방어도 안 걸린다.
+    """
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import safety
+
+    shallow = tmp_path / "user"
+    inner = shallow / "myaccount"
+    inner.mkdir(parents=True)
+    design = inner / "설계도.csv"
+    design.write_text("x")
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    favorites.add("설계", str(design))
+    places = Places(favorites=favorites)
+    category = favorites.category_dir("설계")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(category)
+    assert hooks_module.follow_link_on_parent(dialog, places)
+
+    # 원본의 상위(inner)가 얕다고 보게 만든다
+    safety.configure(min_depth=safety.path_depth(str(inner)) + 1)
+    try:
+        from qtpy.QtWidgets import QToolButton
+
+        dialog.currentChanged.emit(os.path.join(category, "설계도.csv"))
+        dialog.findChild(QToolButton, "toParentButton").pressed.emit()
+        dialog.directoryEntered.emit(category)
+        assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(
+            category
+        )                                   # 얕은 자리로 옮겨 가지 않았다
+    finally:
+        safety.reset()
+    dialog.deleteLater()

@@ -13,7 +13,7 @@
 import os
 
 from . import safety
-from .favorites import FavoritesStore, _safe_name, default_base_dir
+from .favorites import FavoritesStore, _safe_name, default_storage_dir
 from .util import abspath
 
 # 사이드바에 표시될 이름(= 분류 폴더 이름)
@@ -27,8 +27,14 @@ DEFAULT_RECENT_DIRNAME = "recent"
 
 
 def default_recent_dir():
-    """최근 파일 폴더의 기본 위치 (즐겨찾기 폴더와 나란히 만든다)."""
-    return os.path.join(os.path.dirname(default_base_dir()), DEFAULT_RECENT_DIRNAME)
+    """최근 파일 폴더의 기본 위치 — 저장소 뿌리 아래의 ``recent``.
+
+    예전에는 "즐겨찾기 폴더의 **부모** 아래"로 계산했다. 그러면
+    :func:`~custom_file_dialog.favorites.configure_favorites` 로 즐겨찾기만
+    옮겨 놨을 때 그 부모가 홈이 되어, 사용자 홈에 ``recent/`` 가 덜렁
+    만들어졌다(``configure_storage`` 의 계약과도 어긋난다).
+    """
+    return os.path.join(default_storage_dir(), DEFAULT_RECENT_DIRNAME)
 
 
 class RecentStore(FavoritesStore):

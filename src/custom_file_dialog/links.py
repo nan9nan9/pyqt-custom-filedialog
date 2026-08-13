@@ -89,8 +89,15 @@ def follow_link_on_parent(dialog, places):
 
     def on_entered(_path):
         destination, state["goto"], state["target"] = state["goto"], None, None
+        if not destination:
+            return
+        # 형제 함수(follow_link_directories)와 같은 기준을 쓴다. safe_isdir 만
+        # 보면 min_depth 로 막아 둔 얕은 자리로 옮겨 갈 수 있다 — setDirectory 는
+        # directoryEntered 를 내지 않아 마지막 방어도 안 걸린다.
+        if not safety.may_enter(destination):
+            return
         # 원본이 죽은 마운트에 있으면 그냥 둔다(GUI 를 멈추느니 제자리가 낫다)
-        if destination and safety.safe_isdir(destination):
+        if safety.safe_isdir(destination):
             dialog.setDirectory(destination)
 
     dialog.currentChanged.connect(on_current_changed)

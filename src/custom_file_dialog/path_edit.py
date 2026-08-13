@@ -390,6 +390,7 @@ class FilePathEdit(QWidget):
             native=self._native,
             default_suffix=self._default_suffix,
             places=self._places(),
+            path_timeout=self._path_timeout,    # 위젯 설정을 다이얼로그까지
         )
         self._selected_filter = chosen or self._selected_filter
 

@@ -282,7 +282,10 @@ class FavoritesStore:
         if existing is not None:
             return existing
 
-        link_name = name or os.path.basename(target.rstrip(os.sep)) or "항목"
+        # 표시 이름도 분류 이름과 같은 손질을 거친다. 그러지 않으면
+        # name="../../x" 같은 값이 그대로 경로가 되어 **저장소 밖에** 링크가
+        # 생긴다(그렇게 만들어진 것은 복원도 제거도 되지 않는다).
+        link_name = _safe_name(name or os.path.basename(target.rstrip(os.sep)) or "항목")
         link_path = self._available_link_path(directory, link_name)
         self._make_link(target, link_path)
 

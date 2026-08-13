@@ -27,9 +27,17 @@ def url_path(url):
 
 
 def exec_menu(menu, point):
-    """Qt5 는 ``exec_``, Qt6 은 ``exec`` — 바인딩 차이를 흡수한다."""
+    """메뉴를 띄우고, 닫힌 뒤 **정리까지 예약한다**.
+
+    Qt5 는 ``exec_``, Qt6 은 ``exec`` — 그 차이를 흡수한다. 메뉴는 오래 사는
+    뷰를 부모로 만들어지므로, 놔두면 우클릭할 때마다 하나씩 쌓인다(다이얼로그를
+    닫지 않고 계속 쓰는 앱에서 눈에 띈다). 결과를 읽은 뒤 지운다.
+    """
     run = getattr(menu, "exec_", None) or menu.exec
-    return run(point)
+    try:
+        return run(point)
+    finally:
+        menu.deleteLater()
 
 
 def to_urls(items):

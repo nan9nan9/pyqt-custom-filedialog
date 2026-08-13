@@ -910,3 +910,40 @@ def test_remove_accepts_relative_path_too(tmp_path, monkeypatch):
 
     assert store.remove("설계", "작업/a.csv")            # 상대 경로로 제거
     assert store.items("설계") == []
+
+
+def test_display_name_cannot_escape_the_store(tmp_path):
+    """표시 이름으로 저장소 **밖에** 링크를 만들 수 없다.
+
+    name 은 공개 인자인데 손질 없이 경로로 쓰여, "../../x" 같은 값이 그대로
+    상위 폴더에 링크를 만들었다. 그렇게 생긴 것은 저장소 밖이라 복원도
+    제거도 되지 않는다(목록에도 안 잡힌다).
+    """
+    target = _touch(tmp_path, "원본.csv")
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+
+    link = store.add("설계", target, name="../../탈출.txt")
+    assert store.is_inside(link), link                     # 저장소 안에 있다
+    assert not os.path.lexists(str(tmp_path / "탈출.txt"))  # 밖으로 새지 않았다
+    assert store.items("설계") == [target]                  # 목록에도 제대로 잡힌다
+
+    # 구분자가 든 이름은 손질되어 한 항목이 된다(예외로 죽지 않는다)
+    name = os.path.basename(link)
+    assert os.sep not in name and "/" not in name
+
+
+def test_recent_dir_stays_under_storage_root(tmp_path):
+    """즐겨찾기만 옮겨도 최근 파일 폴더가 홈으로 새지 않는다."""
+    from custom_file_dialog import configure_favorites, configure_storage
+    from custom_file_dialog.recent import default_recent_dir
+
+    try:
+        configure_storage(str(tmp_path / "뿌리"))
+        configure_favorites(str(tmp_path / "즐겨찾기따로"))     # 즐겨찾기만 이동
+        assert default_recent_dir() == os.path.join(
+            os.path.normpath(str(tmp_path / "뿌리")), "recent"
+        )
+        assert RecentStore().base_dir == default_recent_dir()
+    finally:
+        configure_favorites(None)
+        configure_storage(None)

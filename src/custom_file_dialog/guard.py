@@ -278,13 +278,17 @@ class _AcceptBlocker(_Blocker):
             if step and safety.may_open(step):
                 lines.append("예) %s" % step)
         elif safety.may_open(opener):
-            # 깊이 때문에 막혔지만 끝에 구분자만 붙이면 열린다
+            # 끝에 구분자만 붙이면 열린다. 막힌 이유는 깊이일 수도, 부모가
+            # 지목된 자리(guarded_roots)일 수도 있으므로 문구를 갈라 쓴다 —
+            # min_depth 가 0 인데 "0단계 이상" 이라고 하면 말이 안 된다.
             title = "폴더를 열려면 끝에 '%s' 를 붙이세요" % os.sep
             limit = safety.min_depth()
-            lines = [
-                "%d단계 이상의 경로여야 자동으로 열립니다." % limit,
-                "예) %s" % opener,
-            ]
+            reason = (
+                "%d단계 이상의 경로여야 자동으로 열립니다." % limit
+                if limit > 0
+                else "이 자리는 이름만으로는 열지 않습니다 (자동 마운트 보호)."
+            )
+            lines = [reason, "예) %s" % opener]
         else:
             # 구분자를 붙여도 안 되는 자리 — 더 깊은 경로가 필요하다
             limit = safety.min_depth()
