@@ -2026,3 +2026,87 @@ def test_automount_root_never_opens_even_with_separator(monkeypatch, tmp_path):
     finally:
         safety.clear_cache()
         safety.reset()
+
+
+def test_already_mounted_automount_is_usable(monkeypatch, tmp_path):
+    """이미 붙은 automount 지점은 평소대로 쓸 수 있어야 한다.
+
+    systemd automount 는 트리거된 뒤에도 autofs 줄이 mountinfo 에 남고 그 위에
+    실제 파일시스템이 겹쳐 올라온다. 먼저 나온 줄(autofs)을 실효 마운트로 보면
+    **잘 도는 폴더를 영영 열 수 없다** — autofs /home 이나 systemd 로 붙인
+    /mnt/* 를 쓰는 머신에서 다이얼로그가 무용지물이 된다.
+    """
+    from custom_file_dialog import safety
+
+    safety.reset()
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety_mounts, "iter_mounts",
+        lambda refresh=False: [
+            ("/", "ext4", "/dev/sda1"),
+            ("/mnt/data", "autofs", "systemd-1"),
+            ("/mnt/data", "nfs4", "srv:/data"),      # 이미 붙었다(위에 겹친 줄)
+            ("/user", "autofs", "auto.user"),        # 아직 안 붙었다
+        ],
+    )
+    try:
+        # 이미 붙은 자리 — 지점도 하위도 평소대로
+        assert not safety.is_automount_point("/mnt/data")
+        assert safety.may_enter("/mnt/data")
+        assert safety.may_enter("/mnt/data/proj")
+        assert safety.may_open("/mnt/data/")
+        assert safety.mount_for("/mnt/data")[1] == "nfs4"
+
+        # 아직 안 붙은 자리 — 그대로 막힌다
+        assert safety.is_automount_point("/user")
+        assert not safety.may_enter("/user")
+        assert not safety.may_open("/user/")
+    finally:
+        safety.clear_cache()
+        safety.reset()
+
+
+def test_automount_point_block_is_explained(qapp, monkeypatch, tmp_path):
+    """automount 지점을 막을 때도 왜 막혔는지 알려 준다.
+
+    설정 없이 autofs 만 있으면 min_depth 가 0 이라 안내가 통째로 빠져, Enter 를
+    쳐도 아무 반응이 없었다(키가 안 먹는 것으로 읽힌다).
+    """
+    from qtpy.QtCore import QEvent, Qt
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    root = tmp_path / "user"
+    root.mkdir()
+    safety.reset()
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety_mounts, "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (str(root), "autofs", "auto.user")],
+    )
+    try:
+        dialog = QFileDialog()
+        dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setDirectory(str(tmp_path))
+        dialog.show()
+        _spin(qapp, 200)
+        blocker = [h for h in guard_dialog(dialog) if isinstance(h, _AcceptBlocker)][0]
+
+        edit = dialog.findChild(QLineEdit, "fileNameEdit")
+        edit.setText(str(root) + os.sep)
+        event = QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+        )
+        assert blocker.eventFilter(edit, event) is True     # 막고
+        assert blocker.notice is not None                   # 이유를 알려 준다
+        assert "자동 마운트" in blocker.notice.text()
+        dialog.done(0)
+        dialog.deleteLater()
+        _spin(qapp, 50)
+    finally:
+        safety.clear_cache()
+        safety.reset()

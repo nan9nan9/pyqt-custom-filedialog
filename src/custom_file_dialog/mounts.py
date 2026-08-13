@@ -135,7 +135,11 @@ def mount_for(path):
     for entry in iter_mounts():
         normalized, prefix = _mount_key(entry[0])
         if absolute == normalized or absolute.startswith(prefix):
-            if len(normalized) > best_length:
+            # 같은 지점에 여러 줄이 있으면 **나중에 나온 것**이 위에 겹친
+            # 실효 마운트다. systemd automount 는 트리거된 뒤에도 autofs 줄이
+            # 남고 그 위에 실제 파일시스템이 올라오므로, 먼저 나온 것을 고르면
+            # 이미 붙어서 잘 도는 폴더를 "아직 안 붙은 automount" 로 오판한다.
+            if len(normalized) >= best_length:
                 best, best_length = entry, len(normalized)
     return best
 

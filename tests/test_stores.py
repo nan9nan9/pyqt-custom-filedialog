@@ -894,3 +894,19 @@ def test_remove_by_name_does_not_match_cwd_paths(tmp_path, monkeypatch):
 
     남은 = dict(store.entries("설계"))
     assert "원본연결" in 남은 and 남은["원본연결"] == str(victim)
+
+
+def test_remove_accepts_relative_path_too(tmp_path, monkeypatch):
+    """이름으로 못 찾으면 상대 경로로도 지울 수 있다(add 와 대칭)."""
+    work = tmp_path / "작업"
+    work.mkdir()
+    target = work / "a.csv"
+    target.write_text("x")
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    monkeypatch.chdir(tmp_path)
+    store.add("설계", "작업/a.csv", name="보고서")      # 상대 경로로 등록
+    assert store.items("설계") == [str(target)]
+
+    assert store.remove("설계", "작업/a.csv")            # 상대 경로로 제거
+    assert store.items("설계") == []

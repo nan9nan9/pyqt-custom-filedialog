@@ -411,3 +411,18 @@ def test_drag_drop_off_blocks_line_edit_drops(qapp):
 
     on.set_drag_drop_enabled(False)
     assert not on.acceptDrops() and not on.line_edit.acceptDrops()
+
+
+def test_set_mode_trims_paths_when_leaving_multi(qapp):
+    """여러 개 → 하나로 바꾸면 첫 경로만 남는다.
+
+    paths() 가 모드에 따라 다르게 쪼개므로, 새 모드를 넣은 뒤에 읽으면 합쳐진
+    텍스트가 통째로 한 경로가 되어 아무것도 잘리지 않았다.
+    """
+    edit = FilePathEdit(mode="open_files")
+    edit.set_paths(["/tmp/a.txt", "/tmp/b.txt"])
+    assert edit.paths() == ["/tmp/a.txt", "/tmp/b.txt"]
+
+    edit.set_mode("open_file")
+    assert edit.paths() == ["/tmp/a.txt"]
+    assert edit.path() == "/tmp/a.txt"

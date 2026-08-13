@@ -251,17 +251,27 @@ class _AcceptBlocker(_Blocker):
         """
         if safety.is_guarded(path):
             return
-        limit = safety.min_depth()
-        if limit <= 0:
-            return
-        lines = [
-            "이 깊이의 경로는 자동으로 열지 않습니다 (automount 보호).",
-            "%d단계 이상의 경로를 입력하고, 폴더를 열려면 끝에 '%s' 를 붙이세요."
-            % (limit, os.sep),
-        ]
-        example = path + os.sep
-        if safety.may_open(example):
-            lines.append("예) %s" % example)
+
+        if safety.is_automount_point(path):
+            # 그 자리를 여는 것은 "아래 이름을 전부 마운트해 보라"는 뜻이다.
+            # 여기서는 구분자를 붙여도 열 수 없으므로 다른 안내가 필요하다.
+            lines = [
+                "이 자리는 자동 마운트 지점이라 통째로 열지 않습니다.",
+                "그 아래의 폴더를 지정해 주세요 (예: %s)."
+                % os.path.join(path, "이름") + os.sep,
+            ]
+        else:
+            limit = safety.min_depth()
+            if limit <= 0:
+                return
+            lines = [
+                "이 깊이의 경로는 자동으로 열지 않습니다 (automount 보호).",
+                "%d단계 이상의 경로를 입력하고, 폴더를 열려면 끝에 '%s' 를 붙이세요."
+                % (limit, os.sep),
+            ]
+            example = path + os.sep
+            if safety.may_open(example):
+                lines.append("예) %s" % example)
         if self.notice is None:
             self.notice = QMessageBox(self._dialog)
             self.notice.setIcon(QMessageBox.Icon.Warning)

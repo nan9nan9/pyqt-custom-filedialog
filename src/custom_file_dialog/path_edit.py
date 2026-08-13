@@ -475,6 +475,10 @@ class FilePathEdit(QWidget):
         if mode == self._mode:
             return
         old_default = DEFAULT_MUST_EXIST[self._mode]
+        # paths() 는 모드에 따라 쪼개는 방식이 다르다. 새 모드를 넣기 전에
+        # **지금 모드 기준으로** 읽어 두어야 여러 개 -> 하나 전환에서 첫 경로만
+        # 남길 수 있다(나중에 읽으면 합쳐진 텍스트가 통째로 한 경로가 된다).
+        current = self.paths()
         self._mode = mode
         # must_exist 를 따로 지정하지 않았던 경우에만 새 모드 기본값을 따른다.
         if self._must_exist == old_default:
@@ -492,7 +496,7 @@ class FilePathEdit(QWidget):
                     QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot
                 )
         if not is_multi_mode(mode):
-            self.set_paths(self.paths()[:1])
+            self.set_paths(current[:1])
         self._update_validity()
 
     def mode(self):
