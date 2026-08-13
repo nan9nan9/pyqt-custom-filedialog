@@ -136,10 +136,11 @@ class FilePathEdit(QWidget):
             fixed_sidebar_urls: 사이드바 우클릭 "사이드바에서 제거"를 막을 위치
                 목록. None 이면 **사용자 홈만** 보호한다. ``[]`` 를 주면 아무것도
                 보호하지 않고, 경로를 나열하면 그 위치들도 함께 보호한다.
-            favorites: :class:`~custom_file_dialog.favorites.FavoritesStore`.
-                분류들이 사이드바에 덧붙고, 고른 경로는 자동으로 원본 경로로
-                복원된다. ``sidebar_urls`` 를 따로 주지 않았으면 기존 사이드바
-                항목 뒤에 분류가 붙는다.
+            favorites: :class:`~custom_file_dialog.favorites.FavoritesStore`,
+                또는 ``True`` 면 **기본 위치**에 하나 만들어 쓴다(다이얼로그와
+                같은 규칙). 분류들이 사이드바에 덧붙고, 고른 경로는 자동으로
+                원본 경로로 복원된다. ``sidebar_urls`` 를 따로 주지 않았으면
+                기존 사이드바 항목 뒤에 분류가 붙는다.
             favorites_icon: 즐겨찾기 분류를 폴더 아이콘 대신 **별표**로 표시한다
                 (기본 True). ``QIcon`` 을 주면 그 아이콘을 쓰고, False 면 Qt 기본
                 폴더 아이콘을 그대로 둔다.

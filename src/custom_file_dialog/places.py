@@ -113,8 +113,11 @@ class Places:
     def __init__(
         self, favorites=None, recent=None, sidebar_urls=None, fixed_urls=None, icon=True
     ):
-        self.favorites = favorites
-        self.recent = recent
+        # 저장소 인자는 여기서도 정규화한다 — ``True`` 를 그대로 들고 있으면
+        # stores() 에 bool 이 섞여 첫 질의에서 AttributeError 로 터진다.
+        # (:class:`PlacesOptions` 를 거치지 않고 직접 만드는 경우가 있다.)
+        self.favorites = as_favorites_store(favorites)
+        self.recent = as_recent_store(recent)
         self.sidebar_base = sidebar_urls
         self.icon = icon
         self._fixed = {

@@ -792,3 +792,28 @@ def test_unlink_never_follows_dead_link(tmp_path, monkeypatch):
         assert not os.path.lexists(link)
     finally:
         safety.clear_cache()
+
+
+def test_true_means_default_store_everywhere(tmp_path, monkeypatch):
+    """``True`` 는 어느 입구로 들어와도 "기본 위치에 만들어 쓴다" 는 뜻이다.
+
+    예전에는 위젯이 ``favorites=True`` 를 정규화 없이 Places 로 넘겨,
+    stores() 에 bool 이 섞이고 첫 질의에서 AttributeError 로 터졌다.
+    """
+    from custom_file_dialog import FilePathEdit, Places, configure_storage
+
+    configure_storage(str(tmp_path / "저장소"))
+    try:
+        # 1) 저층(Places)에 직접 줘도 안전하다
+        places = Places(favorites=True, recent=True)
+        assert isinstance(places.favorites, FavoritesStore)
+        assert isinstance(places.recent, RecentStore)
+        assert places.is_inside("/tmp/없는경로") is False      # 질의가 터지지 않는다
+
+        # 2) 위젯을 통해서도 같다
+        edit = FilePathEdit(mode="open_file", favorites=True, recent_files=True)
+        assert isinstance(edit.favorites(), FavoritesStore)
+        assert isinstance(edit.recent_files(), RecentStore)
+        assert edit._places().is_inside("/tmp/없는경로") is False
+    finally:
+        configure_storage(None)
