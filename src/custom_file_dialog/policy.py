@@ -210,19 +210,21 @@ def may_enter(path):
 
 
 def may_open(path):
-    """그 경로를 **확정**(Enter · 열기 버튼)해도 되는지.
+    """그 경로를 **확정**(Enter · 열기 버튼)해도 되는지 — 명시적이라 한 단계 관대하다.
 
-    확정은 Qt 가 GUI 스레드에서 그 경로를 곧바로 stat 하는 일이라, automount
-    아래의 얕은 미완성 경로(``/user/my``)에 Enter 를 치면 자동 확인을 다 막아도
-    그 한 번으로 멈춘다. 규칙:
+    확정도 결국 그 이름 하나를 stat 하는 일이라 :func:`risky_name` 을 본다.
+    다만 사용자가 **끝에 구분자를 붙여** "이 폴더를 열겠다"고 밝혔다면, 깊이만
+    충분하면(``min_depth`` 이상) 위험한 자리라도 연다 — 의도한 마운트는 그
+    확정의 stat 한 번으로 일어나야 하기 때문이다.
 
-    - ``guarded_roots`` 로 지목한 자리 → 항상 False (구분자 여부와 무관)
-    - 깊이가 ``min_depth`` 보다 깊음 → True (``/user/myaccount/a.csv``)
-    - 깊이가 ``min_depth`` **이상**이고 끝에 구분자를 붙인 폴더 표기 → True
-      — ``/user/myaccount/`` 는 "이 폴더를 열겠다"는 **명시적 의사**로 본다.
-      의도한 마운트는 이 확정의 stat 한 번으로 일어난다.
-    - 그 외(구분자 없는 얕은 경로) → False — ``/user/myaccount`` 도 ``/user/myacc``
-      도 Enter 로는 안 열린다. 폴더로 가려면 끝에 구분자를 붙인다.
+    ``min_depth=2`` · ``/user`` 가 autofs 인 경우::
+
+        /user/my            Enter -> 막힘  (오타일 수 있다. 부모가 위험한 자리)
+        /user/myaccount     Enter -> 막힘  (이름이 맞아도 구분자가 없으면 같다)
+        /user/myaccount/    Enter -> 열림  (명시적 폴더 표기 + 깊이 충족)
+        /user/myaccount/a.csv Enter -> 열림 (부모가 이미 붙은 자리라 안전)
+
+    지목해서 막은 자리(``guarded_roots``) **자체**는 구분자를 붙여도 열지 않는다.
     """
     if not path:
         return True
@@ -230,9 +232,10 @@ def may_open(path):
     explicit_dir = text.endswith(("/", os.sep))
     absolute = _abspath(text)
     if is_guarded(absolute):
-        return False
+        return False                    # 지목한 자리 자체는 언제나 안 된다
+
     limit = min_depth()
-    if limit <= 0:
-        return True
-    depth = path_depth(absolute)
-    return depth > limit or (explicit_dir and depth >= limit)
+    if explicit_dir:
+        # "이 폴더를 열겠다"는 명시 — 깊이만 본다
+        return limit <= 0 or path_depth(absolute) >= limit
+    return not risky_name(absolute)

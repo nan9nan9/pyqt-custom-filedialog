@@ -203,7 +203,23 @@ _REMOTE = "remote"          # 서버가 죽으면 멈출 수 있는 곳 — 프�
 
 
 def _classify(path):
-    """경로를 ``( _BLOCKED | _LOCAL | _REMOTE, 마운트 )`` 로 가른다."""
+    """경로를 ``( _BLOCKED | _LOCAL | _REMOTE, 마운트 )`` 로 가른다.
+
+    지목한 자리(``guarded_roots``) **자체**만 막는다. 그 아래는 평소대로
+    확인한다 — ``/user`` 는 열지 않아도 ``/user/myaccount`` 는 사용자의 홈이라
+    시작 폴더로도 쓰고 유효성도 봐야 하기 때문이다.
+
+    :func:`~custom_file_dialog.policy.may_stat` 이 같은 경로를 "안 된다"고
+    하는 것과 어긋나 보이지만, **묻는 것이 다르다.**
+
+    - ``may_stat`` — "타이핑 도중 **자동으로** 만져도 되나?" 글자마다 도는
+      일이라 오타 이름(``/user/my``)이 automounter 를 헛돌게 한다. 그래서
+      부모가 위험하면 전부 막는다.
+    - 여기 — "이 경로를 확인해 달라"는 **호출자의 요청**을 어떻게 처리하나.
+      자동으로 도는 자리는 호출자가 ``may_stat`` 을 먼저 보고 부르지 않는다
+      (validators · 타이핑 가드가 그렇게 한다). 여기까지 온 요청은 확정됐거나
+      앱이 기억해 둔 경로라, 한 번의 마운트는 의도된 것이다.
+    """
     if policy.is_guarded(path):
         return _BLOCKED, None                # 그 자리 자체는 열지 않는다
     mount = mounts.mount_for(path)

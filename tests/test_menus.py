@@ -720,3 +720,59 @@ def test_add_to_favorites_survives_os_error(qapp, tmp_path, monkeypatch):
     assert menus.add_to_favorites(design, "설계") is False   # 조용히 실패
     assert warned                                            # 사용자에게 알린다
     dialog.close()
+
+
+def test_remove_category_uses_the_clicked_store(qapp, tmp_path):
+    """같은 이름의 분류가 둘이어도 우클릭한 그 저장소에서 지운다.
+
+    이름으로 다시 찾으면 최근 파일이 먼저 잡혀, 즐겨찾기 분류를 지우려다
+    **최근 파일 목록이 통째로 날아갔다.**
+    """
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"))
+    design, _report, _output = _make_tree(tmp_path)
+    recent.record(design)
+    store.add(recent.name, design)          # 즐겨찾기에 "최근 파일" 이라는 분류
+
+    dialog, menus = _menu_dialog([store, recent], str(tmp_path), confirm=False)
+    assert menus.remove_category(recent.name, store=store)
+
+    assert recent.name not in store.categories()     # 즐겨찾기 쪽만 사라지고
+    assert recent.items() == [design]                # 최근 목록은 그대로다
+    dialog.close()
+
+
+def test_new_category_gets_its_icon_right_away(qapp, tmp_path):
+    """실행 중에 만든 분류도 곧바로 별표로 보인다(폴더 아이콘으로 남지 않는다)."""
+    from qtpy.QtWidgets import QListView, QStyleOptionViewItem
+
+    from custom_file_dialog import CustomFileDialog
+
+    design, _report, _output = _make_tree(tmp_path)
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    store.add("설계", design)
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=os.path.dirname(design), favorites=store
+    )
+    dialog.show()
+    _spin(qapp, 300)
+
+    menus = [c for c in dialog.children() if type(c).__name__ == "FavoritesMenus"][0]
+    assert menus.add_to_favorites(design, "새분류")
+    _spin(qapp, 200)
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    delegate = sidebar.itemDelegate()
+    model = sidebar.model()
+    drawn = {}
+    for row in range(model.rowCount()):
+        option = QStyleOptionViewItem()
+        delegate.initStyleOption(option, model.index(row, 0))
+        drawn[option.text] = option.icon.availableSizes() if option.icon else []
+
+    star = dialog.places().category_icon(store).availableSizes()
+    assert drawn.get("새분류") == star, drawn
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)

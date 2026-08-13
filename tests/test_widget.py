@@ -360,3 +360,24 @@ def test_form_add_path_ignores_parent_kwarg(qapp):
     form = FilePathForm()
     edit = form.add_path("input", "입력:", mode="open_file", parent=None)
     assert edit.parent() is form
+
+
+def test_fixed_sidebar_urls_forces_qt_dialog(qapp, tmp_path, monkeypatch):
+    """보호 위치만 지정해도 Qt 자체 창으로 연다.
+
+    그 지정을 지키려면 우리 우클릭 메뉴가 필요하고, 메뉴는 네이티브 창에
+    걸 수 없다. 예전에는 네이티브로 열려 지정이 조용히 무시됐다.
+    """
+    used = []
+    monkeypatch.setattr(
+        dialog_module, "_run_dialog",
+        lambda *a, **k: (used.append("native"), ([], ""))[1],
+    )
+    monkeypatch.setattr(
+        dialog_module, "exec_dialog",
+        lambda dialog: (used.append(type(dialog).__name__), 0)[1],
+    )
+
+    edit = FilePathEdit(mode="open_file", fixed_sidebar_urls=[str(tmp_path)])
+    edit.browse()
+    assert used == ["CustomFileDialog"], used

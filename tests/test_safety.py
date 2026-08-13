@@ -658,11 +658,18 @@ def test_accept_blocker_swallows_guarded_path(qapp, guarded_root):
     edit.setText("..")
     assert press_enter() is True
 
-    # 하위 경로와 일반 파일 이름은 그대로 통과
-    for text in ("proj", os.path.join(guarded_root, "alice"), "보고서.csv"):
+    # 지금 폴더(차단 경로 **안**) 기준의 이름들은 그대로 통과한다
+    for text in ("proj", "보고서.csv"):
         edit.setText(text)
         assert press_enter() is False, text
         assert click_open() is False, text
+
+    # 차단 경로 **바로 아래**는 구분자 없이는 막히고, 붙이면 열린다
+    sibling = os.path.join(guarded_root, "alice")
+    edit.setText(sibling)
+    assert press_enter() is True
+    edit.setText(sibling + os.sep)
+    assert press_enter() is False
 
     assert blocker.blocked                      # 무엇을 막았는지 기록된다
     dialog.close()
@@ -1318,11 +1325,20 @@ def test_may_open_trailing_separator_is_explicit(shallow_tree):
 
 
 def test_may_open_blocks_guarded_roots(guarded_root):
-    """차단 경로 자체는 확정 불가, 하위는 허용(문서된 규칙 그대로)."""
+    """차단 경로 자체는 물론, **그 바로 아래도** 구분자 없이는 확정 불가.
+
+    확정도 그 이름 하나를 stat 하는 일이라 부모가 위험하면 막아야 한다 —
+    ``/user`` 안에서 ``myaccount`` 를 찾는 것이 곧 마운트 시도다. 폴더로
+    가려면 끝에 구분자를 붙여 "열겠다"고 밝힌다.
+    """
     from custom_file_dialog import safety
 
-    assert not safety.may_open(guarded_root)
-    assert safety.may_open(os.path.join(guarded_root, "myaccount"))
+    inner = os.path.join(guarded_root, "myaccount")
+    assert not safety.may_open(guarded_root)            # 지목한 자리 자체
+    assert not safety.may_open(guarded_root + os.sep)   # 구분자를 붙여도 안 된다
+    assert not safety.may_open(inner)                   # 부모가 위험한 자리다
+    assert safety.may_open(inner + os.sep)              # 명시하면 열린다
+    assert safety.may_open(os.path.join(inner, "a.csv"))    # 부모가 안전한 자리
 
 
 def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):

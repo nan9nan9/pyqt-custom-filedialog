@@ -338,8 +338,20 @@ class FavoritesMenus(QObject):
             url for url in store.sidebar_urls()
             if os.path.normpath(url_path(url)) not in known
         ]
-        if added:
-            self._dialog.setSidebarUrls(existing + added)
+        if not added:
+            return
+        self._dialog.setSidebarUrls(existing + added)
+
+        # 사이드바 아이콘은 델리게이트가 그리기 직전에 씌운다. 새 분류의 몫을
+        # 넣어 주지 않으면 그 항목만 폴더 아이콘으로 남는다(다이얼로그를 다시
+        # 열기 전까지). 이미 있는 표에 더하기만 하므로 다른 표시는 그대로다.
+        sidebar = self._dialog.findChild(QListView, "sidebar")
+        delegate = sidebar.itemDelegate() if sidebar is not None else None
+        marks = getattr(delegate, "marks", None)
+        if marks is not None:
+            marks.update(self._places.sidebar_marks(
+                self._dialog.directory().absolutePath()
+            ))
 
     # --------------------------------------------------- 사이드바 우클릭 메뉴
     def store_at(self, index):
@@ -384,7 +396,7 @@ class FavoritesMenus(QObject):
         else:
             action = menu.addAction("'%s' 즐겨찾기에서 삭제" % category)
             action.triggered.connect(
-                lambda _checked=False: self.remove_category(category)
+                lambda _checked=False, s=store: self.remove_category(category, store=s)
             )
 
         exec_menu(menu, self._sidebar.viewport().mapToGlobal(pos))
@@ -430,8 +442,14 @@ class FavoritesMenus(QObject):
         self.entryRemoved.emit(category, target)
         return True
 
-    def remove_category(self, category):
-        """분류를 삭제하고 사이드바를 갱신한다(원본 파일은 건드리지 않는다)."""
+    def remove_category(self, category, store=None):
+        """분류를 삭제하고 사이드바를 갱신한다(원본 파일은 건드리지 않는다).
+
+        ``store`` 를 주면 그 저장소에서 지운다. 주지 않으면 이름으로 찾는데,
+        즐겨찾기 분류를 최근 파일과 **같은 이름**("최근 파일")으로 만들어 두면
+        엉뚱한 쪽이 지워질 수 있다 — 우클릭 메뉴는 그래서 자기가 찾아낸
+        저장소를 넘긴다.
+        """
         if self._confirm and not self._ask(
             "즐겨찾기 삭제",
             "'%s' 분류를 즐겨찾기에서 삭제할까요?\n"
@@ -439,7 +457,8 @@ class FavoritesMenus(QObject):
         ):
             return False
 
-        store = self._places.store_for_category(category)
+        if store is None:
+            store = self._places.store_for_category(category)
         if store is None:
             return False
         directory = store.category_dir(category)

@@ -120,6 +120,7 @@ class Places:
         self.recent = as_recent_store(recent)
         self.sidebar_base = sidebar_urls
         self.icon = icon
+        self._fixed_given = fixed_urls is not None
         self._fixed = {
             abspath(url_path(u) or u)
             for u in (DEFAULT_FIXED if fixed_urls is None else fixed_urls)
@@ -155,8 +156,18 @@ class Places:
         ).places()
 
     def __bool__(self):
-        """사이드바에 얹을 게 하나라도 있는지."""
-        return bool(self.stores()) or self.sidebar_base is not None
+        """사이드바를 **손댈 것이 있는지** — 네이티브 창을 쓸 수 없다는 뜻이다.
+
+        보호 위치(``fixed_urls``)를 지정한 것도 손대는 것에 든다. 우클릭
+        "사이드바에서 제거"를 막으려면 우리 메뉴가 필요하고, 그 메뉴는 Qt 자체
+        창에만 걸 수 있다. 예전에는 이것이 빠져 있어 ``fixed_sidebar_urls`` 만
+        준 위젯이 네이티브 창으로 열렸다(지정이 조용히 무시됐다).
+        """
+        return (
+            bool(self.stores())
+            or self.sidebar_base is not None
+            or self._fixed_given
+        )
 
     # ------------------------------------------------------------- 저장소
     def stores(self):
