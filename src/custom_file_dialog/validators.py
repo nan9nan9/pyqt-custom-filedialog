@@ -29,9 +29,12 @@ def isdir_check(timeout):
     """``timeout`` 규칙이 적용된 isdir 하나.
 
     "None 이면 os.path.isdir, 아니면 safe_isdir" 분기가 위젯·다이얼로그
-    곳곳에서 되풀이되던 것을 한곳에 모은다.
+    곳곳에서 되풀이되던 것을 한곳에 모은다. ``~`` 도 함께 편다 — 유효성
+    검사는 펴는데 시작 폴더 결정은 안 펴서, ``~/문서/a.txt`` 가 "유효" 로
+    보이면서도 다이얼로그는 엉뚱한 곳에서 열렸다.
     """
-    return _checks(timeout)[0]
+    isdir = _checks(timeout)[0]
+    return lambda path: isdir(os.path.expanduser(path)) if path else False
 
 
 def split_paths(text, separator="; "):

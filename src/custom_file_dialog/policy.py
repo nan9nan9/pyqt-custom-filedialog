@@ -55,6 +55,10 @@ def configure(guarded_roots=None, min_depth=None, allow_listing=None):
     """정책 설정을 바꾼다 (인자 설명은 :func:`custom_file_dialog.safety.configure`)."""
     with _lock:
         if guarded_roots is not None:
+            if isinstance(guarded_roots, (str, bytes, os.PathLike)):
+                # 흔한 실수: configure(guarded_roots="/user"). 그대로 순회하면
+                # 한 글자씩 쪼개져 막으려던 자리는 안 막히고 루트가 차단된다.
+                guarded_roots = [guarded_roots]
             _settings["guarded_roots"] = [
                 _abspath(p) for p in guarded_roots if str(p).strip()
             ]

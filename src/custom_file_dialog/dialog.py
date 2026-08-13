@@ -400,11 +400,13 @@ class CustomFileDialog(QFileDialog):
         self._icon_providers = (provider, plain)
 
         def apply_for(_entered=None):
-            # 신호가 준 경로가 아니라 **지금 서 있는 폴더**를 본다. 링크 추적이
-            # 이 뒤에 연결돼 있어, 링크 폴더로 들어가면 그쪽이 setDirectory 로
-            # 원본으로 옮긴다(그 이동은 directoryEntered 를 내지 않는다).
-            # 신호의 옛 경로로 판단하면 원본이 큰 폴더일 때 제공자가 걸린 채
-            # 나열되어, 이 장치가 막으려던 멈춤이 그대로 돌아온다.
+            # 신호가 준 경로가 아니라 **지금 서 있는 폴더**를 본다. 링크 추적은
+            # install_hooks 에서 **먼저** 연결되므로, 링크 폴더로 들어가면 그쪽
+            # 슬롯이 setDirectory 로 원본까지 옮긴 뒤에 이 슬롯이 돈다(그 이동은
+            # directoryEntered 를 다시 내지 않는다). 신호의 옛 경로로 판단하면
+            # 원본이 큰 폴더일 때 제공자가 걸린 채 나열되어, 이 장치가 막으려던
+            # 멈춤이 그대로 돌아온다. 지금 폴더를 읽으면 연결 순서에 기대지
+            # 않으므로 순서가 바뀌어도 안전하다.
             here = self.directory().absolutePath()
             wanted = provider if self._places.is_inside(here) else plain
             if self.iconProvider() is not wanted:

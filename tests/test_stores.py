@@ -999,3 +999,53 @@ def test_existing_recent_dir_is_kept_after_rule_change(tmp_path):
     finally:
         configure_favorites(None)
         configure_storage(None)
+
+
+def test_renamed_link_resolves_to_its_own_target(tmp_path):
+    """링크 이름을 바꿔도 **그 링크가 가리키는** 원본으로 풀린다.
+
+    인덱스를 무조건 먼저 믿으면, 이름을 서로 맞바꿨을 때 낡은 매핑이 이겨
+    다른 항목의 원본을 돌려준다 — 저장 모드면 엉뚱한 파일을 덮어쓴다.
+    """
+    first = _touch(tmp_path, "하나.csv")
+    second = _touch(tmp_path, "둘.csv")
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    link_one = store.add("설계", first, name="x.csv")
+    store.add("설계", second, name="z.csv")
+
+    # 우클릭 "이름 변경"이 하는 일 — 링크 파일 이름만 바꾼다
+    renamed = os.path.join(os.path.dirname(link_one), "새이름.csv")
+    os.rename(link_one, renamed)
+
+    assert store.resolve(renamed) == first          # 자기 원본으로 풀린다
+    assert sorted(store.items("설계")) == sorted([first, second])
+
+
+def test_index_survives_interrupted_save(tmp_path, monkeypatch):
+    """저장이 중간에 끊겨도 기존 매핑이 날아가지 않는다.
+
+    제자리에서 잘라 쓰면 깨진 JSON 이 남고, 읽기는 그것을 {} 로 보고, 다음
+    저장이 그 위에 한 항목만 얹어 나머지를 영구히 지웠다.
+    """
+    first = _touch(tmp_path, "하나.csv")
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    store.add("설계", first)
+    index_path = os.path.join(store.base_dir, ".index.json")
+    before = open(index_path, encoding="utf-8").read()
+
+    real_replace = os.replace
+
+    def fail_replace(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    second = _touch(tmp_path, "둘.csv")
+    try:
+        store.add("설계", second)
+    except (OSError, FavoritesError):
+        pass
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    # 인덱스 파일은 예전 내용 그대로다(깨지지 않았다)
+    assert open(index_path, encoding="utf-8").read() == before
+    assert store.resolve(store.link_for("설계", first)) == first

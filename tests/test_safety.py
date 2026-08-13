@@ -2270,3 +2270,56 @@ def test_blocked_paths_always_explain_and_advice_works(qapp, monkeypatch, tmp_pa
     finally:
         safety.clear_cache()
         safety.reset()
+
+
+def test_accept_guard_handles_quotes_and_multiple_paths(qapp, shallow_tree):
+    """따옴표가 든 파일명과 여러 개 선택을 모두 제대로 판정한다.
+
+    따옴표 쪼개기를 모드와 무관하게 적용하면, 리눅스에서 합법인 ``a"b`` 같은
+    이름이 엉뚱한 경로로 바뀌고 ``"`` 로 **끝나는** 입력은 빈 목록이 되어
+    확정 차단이 통째로 새어 나간다. 여러 개 모드에서는 반대로 첫 경로만 보면
+    뒤에 섞인 절대 경로가 그대로 빠져나간다(accept 는 전부 stat 한다).
+    """
+    from qtpy.QtCore import QEvent, Qt
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+
+    def blocked_for(text, mode):
+        dialog = QFileDialog()
+        dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setFileMode(mode)
+        dialog.setDirectory(inner)
+        dialog.show()
+        _spin(qapp, 100)
+        blocker = [h for h in guard_dialog(dialog) if isinstance(h, _AcceptBlocker)][0]
+        dialog.findChild(QLineEdit, "fileNameEdit").setText(text)
+        event = QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+        )
+        result = blocker.eventFilter(
+            dialog.findChild(QLineEdit, "fileNameEdit"), event
+        )
+        dialog.done(0)
+        dialog.deleteLater()
+        _spin(qapp, 50)
+        return result
+
+    single = QFileDialog.FileMode.ExistingFile
+    multi = QFileDialog.FileMode.ExistingFiles
+
+    # 단일 선택: 따옴표는 그냥 이름의 일부다 — 쪼개지 말아야 판정이 맞다
+    assert blocked_for(os.path.join(root, 'a"b'), single) is True
+    assert blocked_for(os.path.join(root, 'my"'), single) is True   # 빈 목록이 되면 샌다
+
+    # 여러 개 선택: 하나라도 막을 자리면 막는다(첫 것만 보면 새어 나간다)
+    good = '"설계도.csv"'
+    bad = '"설계도.csv" "%s"' % os.path.join(root, "someone")
+    assert blocked_for(good, multi) is False
+    assert blocked_for(bad, multi) is True

@@ -86,7 +86,16 @@ class PathHistory:
 
     # --------------------------------------------------------------- API
     def items(self):
-        """최신순 최근 경로 리스트."""
+        """최신순 최근 경로 리스트 (이 인스턴스의 ``max_items`` 만큼)."""
+        return self._stored_items()[: self.max_items]
+
+    def _stored_items(self):
+        """저장소에 **실제로 들어 있는** 목록 — 자르지 않는다.
+
+        같은 이름을 개수가 다른 곳에서 함께 쓸 수 있다(위젯은 30개, 헬퍼는
+        기본값). 자른 목록을 그대로 다시 저장하면 작은 쪽이 한 번 쓰는 순간
+        공유 목록이 영구히 그 크기로 줄어든다.
+        """
         store = self._store()
         if store is None:
             return list(self._memory_items)
@@ -94,18 +103,19 @@ class PathHistory:
         # QSettings 는 항목이 1개면 문자열로 돌려주는 바인딩이 있어 보정한다.
         if isinstance(saved, str):
             saved = [saved]
-        return [str(i) for i in (saved or []) if i][: self.max_items]
+        return [str(i) for i in (saved or []) if i]
 
     def add(self, path):
         """경로를 최근 목록 맨 앞에 추가한다(중복은 위로 끌어올림)."""
         if not path or self.max_items <= 0:
             return
         path = str(path)
-        items = self.items()            # 저장소의 **지금** 상태에서 시작한다
+        items = self._stored_items()    # 저장소의 **지금** 상태에서 시작한다
         if path in items:
             items.remove(path)
         items.insert(0, path)
-        del items[self.max_items :]
+        # 내 몫보다 많이 들어 있으면 그만큼은 남겨 둔다(남의 기록을 자르지 않는다)
+        del items[max(self.max_items, len(items) - 1) :]
         self._write_items(items)
 
     def clear(self):

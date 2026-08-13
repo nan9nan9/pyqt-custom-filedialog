@@ -300,6 +300,7 @@ class FilePathEdit(QWidget):
         <custom_file_dialog.safety.configure>` 쪽을 쓴다(다이얼로그의 파일 이름
         칸 자동완성까지 함께 막힌다).
         """
+        enabled = bool(enabled)         # None · 0 · "" 도 "끄기"로 받아 준다
         if enabled == self.completer_enabled():
             return
         if enabled:

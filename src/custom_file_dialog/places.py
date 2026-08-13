@@ -388,7 +388,7 @@ class PlacesOptions:
     위치에 만들고, 인스턴스를 주면 그대로 쓰고, ``False``/``None`` 이면 안 쓴다.
     """
 
-    _KEYS = ("favorites", "recent", "sidebar_urls", "fixed_urls", "icon")
+    _KEYS = ("favorites", "recent", "recent_max", "sidebar_urls", "fixed_urls", "icon")
 
     def __init__(
         self,
@@ -400,6 +400,7 @@ class PlacesOptions:
         icon=True,
     ):
         self.favorites = as_favorites_store(favorites)
+        self.recent_max = recent_max        # 저장소를 다시 만들 때 쓴다
         self.recent = as_recent_store(recent, recent_max)
         self.sidebar_urls = list(sidebar_urls) if sidebar_urls is not None else None
         self.fixed_urls = list(fixed_urls) if fixed_urls is not None else None
@@ -424,13 +425,16 @@ class PlacesOptions:
 
     def update(self, **changes):
         """설정을 바꾸고 캐시를 버린다 (``recent_max`` 는 ``recent`` 와 함께 준다)."""
-        recent_max = changes.pop("recent_max", None)
         # 하나라도 모르는 이름이면 **아무것도 바꾸지 않는다.** 절반만 반영된 채
         # 예외가 나가면 캐시된 Places 와 설정이 어긋난 채로 남는다.
         unknown = sorted(set(changes) - set(self._KEYS))
         if unknown:
             raise TypeError("모르는 설정입니다: %s" % ", ".join(repr(k) for k in unknown))
 
+        # 개수는 기억해 둔다 — 저장소만 다시 지정할 때(set_recent_files(True))
+        # 그 값을 잃으면 기본 20개짜리가 새로 생겨 21번째부터 즉시 지워진다.
+        recent_max = changes.pop("recent_max", self.recent_max)
+        self.recent_max = recent_max
         if "favorites" in changes:
             changes["favorites"] = as_favorites_store(changes["favorites"])
         if "recent" in changes:

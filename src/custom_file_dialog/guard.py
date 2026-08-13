@@ -226,21 +226,38 @@ class _AcceptBlocker(_Blocker):
         else:
             return ""
 
-        # 상대 경로("..")도 현재 폴더 기준으로 푼다. 여러 개 모드에서 Qt 는
-        # 따옴표로 묶어 채우므로("a.csv" "b.csv") 첫 경로를 대표로 본다 —
-        # 같은 폴더 안이라 판정은 같고, 안내와 진단에 엉뚱한 문자열이 남지 않는다.
-        parts = _split_typed(self._edit.text())
-        return _typed_path(self._dialog, parts[0]) if parts else ""
+        # 상대 경로("..")도 현재 폴더 기준으로 푼다.
+        paths = self._typed_paths()
+        return paths[0] if paths else ""
+
+    def _typed_paths(self):
+        """파일 이름 칸이 가리키는 경로들.
+
+        여러 개 모드에서만 따옴표로 쪼갠다 — 리눅스에서 ``"`` 는 합법적인 파일명
+        문자라, 단일 선택인데 쪼개면 ``/user/a"b`` 가 엉뚱한 경로가 되고
+        ``"`` 로 끝나는 입력은 아예 빈 목록이 되어 **확정 차단이 통째로 새어
+        나간다.**
+        """
+        text = self._edit.text() or ""
+        multi = self._dialog.fileMode() == enum_value("FileMode", "ExistingFiles")
+        parts = _split_typed(text) if multi else [text]
+        return [p for p in (_typed_path(self._dialog, part) for part in parts) if p]
 
     def allowed(self, path):
         # 끝의 구분자는 "이 폴더를 열겠다"는 명시적 표기라 판정에 살려서 넘긴다.
         # 정규화하면 사라지므로 원문에서 다시 본다(기록·안내에는 정규화된 경로만
         # 남겨 진단 값이 두 형태로 섞이지 않게 한다).
-        parts = _split_typed(self._edit.text())
-        raw = (parts[0] if parts else "").strip()
-        if raw.endswith(("/", os.sep)) and not path.endswith(os.sep):
-            path += os.sep
-        return safety.may_open(path)
+        raw = (self._edit.text() or "").strip()
+        explicit = raw.endswith(("/", os.sep))
+
+        # **모든** 경로를 본다. accept() 는 전부 stat 하므로 하나만 검사하면
+        # 뒤에 섞인 절대 경로가 그대로 빠져나간다.
+        for candidate in self._typed_paths():
+            if explicit and not candidate.endswith(os.sep):
+                candidate += os.sep
+            if not safety.may_open(candidate):
+                return False
+        return True
 
     def on_blocked(self, obj, event, path):
         _pressed_button(obj, event)

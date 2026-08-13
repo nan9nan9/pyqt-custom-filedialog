@@ -143,9 +143,9 @@ def ensure_suffix(path, suffix):
     """
     if not path or not suffix:
         return path
-    root, ext = os.path.splitext(path)
-    if ext:
+    # 점으로 끝나면 splitext 가 ext=".", 즉 "확장자가 있다"로 보이지만 실제로는
+    # 이름이 덜 적힌 것이다. 그 점을 떼고 붙여 준다.
+    text = path.rstrip(".") if path.endswith(".") else path
+    if os.path.splitext(text)[1]:
         return path
-    if root.endswith("."):
-        root = root[:-1]
-    return "%s.%s" % (root, suffix.lstrip("."))
+    return "%s.%s" % (text, suffix.lstrip("."))

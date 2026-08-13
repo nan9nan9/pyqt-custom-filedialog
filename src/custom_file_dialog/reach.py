@@ -202,6 +202,7 @@ def call_with_timeout(func, *args, **kwargs):
 _BLOCKED = "blocked"        # 차단 경로 · automount 위 — 만지는 것 자체가 금지
 _LOCAL = "local"            # 곧바로 만져도 되는 곳
 _REMOTE = "remote"          # 서버가 죽으면 멈출 수 있는 곳 — 프로브+타임아웃
+_UNKNOWN = "unknown"        # 마운트 표가 없어 알 수 없는 곳 — 타임아웃만 씌운다
 
 
 def _classify(path):
@@ -226,7 +227,12 @@ def _classify(path):
         return _BLOCKED, None                # 그 자리 자체는 열지 않는다
     mount = mounts.mount_for(path)
     if mount is None:
-        return _LOCAL, None                  # 마운트 표에 없으면 로컬로 본다
+        # 마운트 표를 **읽을 수 있는** 시스템에서 못 찾았으면 진짜 로컬이다.
+        # 표 자체가 없는 곳(윈도우 · macOS · /proc 없는 컨테이너)에서는 알 수
+        # 없으므로 스레드+타임아웃으로 감싼다 — 그러지 않으면 죽은 UNC 경로
+        # 하나로 GUI 가 그대로 멈춘다(문서가 약속한 "다른 OS 에서는 3단계
+        # 타임아웃만 동작한다"가 지켜지지 않았다).
+        return (_LOCAL if mounts.table_available() else _UNKNOWN), None
     if mount[1] in AUTOMOUNT_FSTYPES:
         return _BLOCKED, mount               # 만지는 것 자체가 마운트 시도다
     if mount[1] in REMOTE_FSTYPES:
@@ -254,18 +260,28 @@ def is_reachable(path, timeout=None, use_cache=True):
         return False
     if kind == _LOCAL:
         return True
+    if kind == _UNKNOWN:
+        finished, _value = call_with_timeout(os.stat, path, timeout=timeout)
+        return finished
     return _mount_reachable(mount, timeout, use_cache)
 
 
 def _mount_reachable(mount, timeout=None, use_cache=True):
-    """원격 마운트 하나의 판정 — 캐시를 먼저 보고, 없으면 실제로 확인한다."""
+    """원격 마운트 하나의 판정 — 캐시를 먼저 보고, 없으면 실제로 확인한다.
+
+    캐시 키에 **제한 시간까지** 넣는다. 그러지 않으면 짧게 잡은 자리 하나가
+    느린(살아 있는) 서버를 "죽음"으로 판정했을 때, 그 답이 TTL 동안 프로세스
+    전체에 퍼져 멀쩡한 파일이 "존재하지 않습니다"로 거절된다.
+    """
     mountpoint, fstype, source = mount
+    wait = _settings["timeout"] if timeout is None else float(timeout)
+    key = (mountpoint, round(wait, 3))
     if use_cache:
-        cached = _cached(mountpoint)
+        cached = _cached(key)
         if cached is not None:
             return cached
     result = self_check(mountpoint, source, timeout, fstype=fstype)
-    _remember(mountpoint, result)
+    _remember(key, result)
     return result
 
 
@@ -336,6 +352,10 @@ def safe_call(func, path, default=False, timeout=None):
         return default
     if kind == _LOCAL:
         return func(path)
+    if kind == _UNKNOWN:
+        # 원격인지 알 수 없다 — 프로브할 서버도 모르니 타임아웃만 씌운다
+        finished, value = call_with_timeout(func, path, timeout=timeout)
+        return value if finished else default
 
     if not _mount_reachable(mount, timeout):
         return default

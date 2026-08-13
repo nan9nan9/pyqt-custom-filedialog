@@ -112,7 +112,10 @@ class FavoritesMenus(QObject):
         빠진다. 파일 목록은 저장소가 있을 때만 가로챈다(없으면 우리가 더할
         항목이 없어, 가로채 봐야 Qt 기본 메뉴만 못 쓰게 된다).
         """
-        if not self._places:
+        # 얹을 것이 없어도 사이드바 메뉴는 건다. 기본 보호(사용자 홈)를
+        # 집행하는 곳이 여기라, 걸지 않으면 Qt 기본 "Remove" 가 남아 홈이
+        # 빠지고 그 상태가 사용자 설정에 영구 저장된다.
+        if self._dialog is None:
             return False
 
         self._sidebar = self._dialog.findChild(QListView, "sidebar")
@@ -273,7 +276,13 @@ class FavoritesMenus(QObject):
             # 여부 확인은 stat 이라, 원격/automount 경로를 그대로 만지면 메뉴가
             # 늦게 뜨거나 멈춘다. 안전 확인으로 감싸고, 만질 수 없는 자리는
             # 이름 변경·삭제를 비활성으로 둔다.
-            writable = safety.safe_call(_writable, path, default=False)
+            # POSIX 에서 이름 변경·삭제 권한은 파일 자신이 아니라 **담고 있는
+            # 폴더**의 것이다(Qt 기본 메뉴도 부모로 판정한다). 파일 권한을 보면
+            # 읽기 전용 파일을 지우지 못하고, 읽기 전용 폴더 안의 파일은 지울
+            # 수 있다고 표시된 뒤 실패한다.
+            writable = safety.safe_call(
+                _writable, os.path.dirname(path) or path, default=False
+            )
             for name in QT_ITEM_ACTIONS:
                 if name == "qt_delete_action" and not allow_delete:
                     continue

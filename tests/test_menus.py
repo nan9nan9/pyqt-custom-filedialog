@@ -659,10 +659,11 @@ def test_view_menu_never_stats_automount_paths(qapp, tmp_path, monkeypatch):
         menus._add_default_actions(menu, str(root / "myaccount" / "f.csv"))
         assert not [p for p in touched if p.startswith(str(root))]
 
-        # 로컬 경로는 평소대로 확인한다
+        # 로컬 경로는 평소대로 확인한다. 보는 것은 **담고 있는 폴더**다 —
+        # 이름 변경·삭제 권한은 파일이 아니라 그 폴더의 것이기 때문이다.
         local = _touch(tmp_path, "일반.txt")
         menus._add_default_actions(QMenu(), local)
-        assert local in touched
+        assert os.path.dirname(local) in touched
     finally:
         safety.clear_cache()
     dialog.close()

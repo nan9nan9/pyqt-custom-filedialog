@@ -447,6 +447,12 @@ class FavoritesStore:
         GUI 가 멈춘다. ``readlink`` 는 링크 자신의 내용만 읽어 절대 멈추지
         않는다(우리가 만드는 링크는 절대 경로 한 단계다).
         """
+        # **링크 자신이 먼저다.** 인덱스는 하드링크·정션(윈도우)처럼 링크로는
+        # 원본을 되찾을 수 없는 경우를 위한 보조 수단인데, 우클릭 "이름 변경"
+        # 으로 링크 이름이 바뀌면 낡은 매핑이 그대로 남는다. 그것을 먼저 믿으면
+        # 다른 항목의 원본을 돌려주고, 저장 모드에서는 엉뚱한 파일을 덮어쓴다.
+        if os.path.islink(link):
+            return self._follow_links(link)
         recorded = index.get(os.path.normpath(link))
         if recorded:
             return recorded
@@ -573,19 +579,35 @@ class FavoritesStore:
         return data
 
     def _save_index(self, index):
+        """인덱스를 **통째로 바꿔 끼운다** (임시 파일에 쓰고 이름을 바꾼다).
+
+        제자리에서 잘라 쓰면 저장 도중 끊겼을 때(종료 · 디스크 가득 · 네트워크
+        홈의 순간적 오류) 깨진 JSON 이 남는다. 읽기는 그것을 조용히 ``{}`` 로
+        보고, **다음 저장이 그 위에 한 항목만 얹어** 나머지 매핑을 영구히
+        지운다. 심볼릭 링크는 링크에서 원본을 되찾을 수 있어 티가 안 나지만,
+        하드링크·정션은 복구 수단이 없다.
+        """
+        path = self._index_path()
+        temporary = path + ".tmp"
         try:
-            path = self._index_path()
             os.makedirs(self.base_dir, exist_ok=True)
             with open(
-                path, "w", encoding="utf-8", errors=self._INDEX_ERRORS
+                temporary, "w", encoding="utf-8", errors=self._INDEX_ERRORS
             ) as handle:
                 json.dump(index, handle, ensure_ascii=False, indent=1)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
             stat = os.stat(path)
             self._index_cache = (stat.st_mtime_ns, stat.st_size, dict(index))
         except (OSError, UnicodeError):
             # 인덱스는 보조 수단이라 실패해도 치명적이지 않다. 캐시만 비워서
             # 다음 읽기가 디스크 상태를 그대로 따르게 한다.
             self._index_cache = None
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
 
 
 def _make_junction(target, link_path):

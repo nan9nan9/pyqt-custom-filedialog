@@ -182,6 +182,16 @@ def has_automounts():
     return any(fstype in AUTOMOUNT_FSTYPES for _point, fstype, _src in iter_mounts())
 
 
+def table_available():
+    """마운트 표를 읽을 수 있는 시스템인지.
+
+    ``/proc/self/mountinfo`` 가 없는 곳(윈도우 · macOS · /proc 없는 컨테이너)
+    에서는 어떤 경로가 원격인지 알 수 없다. 그 경우 "로컬이니 그냥 만져도
+    된다"고 볼 수 없다 — 죽은 UNC 경로 하나로 GUI 가 멈춘다.
+    """
+    return bool(iter_mounts())
+
+
 def clear_mounts():
     """캐시해 둔 마운트 표를 버린다(마운트를 고친 뒤 등)."""
     _mounts["list"] = None
