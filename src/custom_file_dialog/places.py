@@ -250,7 +250,11 @@ class Places:
         if self.recent is None:
             return
         try:
-            self.recent.record_all(paths)
+            # 저장소 안의 링크는 **원본으로 풀어서** 기록한다. RecentStore 는
+            # 자기 폴더만 알아서 즐겨찾기 링크를 걸러 내지 못하는데, 그대로
+            # 넣으면 items() 가 원본 대신 링크 창고 경로를 돌려주고 즐겨찾기에서
+            # 항목을 빼는 순간 최근 목록의 그 항목이 끊긴 링크가 된다.
+            self.recent.record_all(self.resolve_all(paths))
         except (OSError, ValueError, FavoritesError):
             pass
 

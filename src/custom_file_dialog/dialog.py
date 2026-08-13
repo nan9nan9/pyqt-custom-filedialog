@@ -478,7 +478,12 @@ class CustomFileDialog(QFileDialog):
         # 그대로 setDirectory 하면 GUI 가 D 상태로 멈춘다.
         if parent_dir and safety.may_enter(parent_dir) and isdir(parent_dir):
             self.setDirectory(parent_dir)
-        self.selectFile(os.path.basename(directory))
+        # 이름을 채우는 것은 **파일 경로를 받았을 때**의 배려다. 우리가 열기를
+        # 거부한 자리(may_enter=False)면 그것은 폴더 이름이라, 채워 두면 파일
+        # 이름 칸에 "user" 가 들어가고 selectedFiles() 가 사용자가 고른 적도
+        # 없는 <cwd>/user 를 돌려준다.
+        if safety.may_enter(directory):
+            self.selectFile(os.path.basename(directory))
 
     def _on_accepted(self):
         paths = self.selectedFiles()

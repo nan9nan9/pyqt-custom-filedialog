@@ -127,7 +127,8 @@ class RecentStore(FavoritesStore):
 
         다만 **즐겨찾기 링크는 걸러 내지 못한다** — 이 클래스는 자기 폴더만
         알기 때문이다. 그대로 주면 :meth:`items` 가 원본 대신 링크 창고
-        경로(``<favorites>/설계/a.csv``)를 돌려준다. 저장소가 여럿인 앱은
+        경로(``<favorites>/설계/a.csv``)를 돌려주고, 즐겨찾기에서 그 항목을
+        빼는 순간 최근 목록의 그 항목이 끊긴 링크가 된다. 저장소가 여럿인 앱은
         :meth:`custom_file_dialog.places.Places.record_recent` 를 써라 —
         거기서 모든 저장소의 링크를 원본으로 풀어서 넘긴다.
         """

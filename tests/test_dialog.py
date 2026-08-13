@@ -762,3 +762,41 @@ def test_start_dir_expands_tilde(qapp, tmp_path, monkeypatch):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_blocked_start_dir_does_not_fill_the_name_field(qapp, tmp_path, monkeypatch):
+    """열기를 거부한 **폴더**를 시작 위치로 주면 이름 칸을 채우지 않는다.
+
+    이름을 채우는 것은 파일 경로를 받았을 때의 배려다. 막은 자리에도 채우면
+    파일 이름 칸에 "user" 가 들어가고, ``selectedFiles()`` 가 사용자가 고른
+    적도 없고 존재하지도 않는 ``<cwd>/user`` 를 돌려준다.
+    """
+    from qtpy.QtWidgets import QLineEdit
+
+    from custom_file_dialog import CustomFileDialog, safety
+
+    root = tmp_path / "user"
+    (root / "alice").mkdir(parents=True)
+    safety.configure(min_depth=safety.path_depth(str(root)) + 1)
+    try:
+        for blocked in (str(root), str(root / "alice")):
+            dialog = CustomFileDialog(None, mode="open_file", directory=blocked)
+            edit = dialog.findChild(QLineEdit, "fileNameEdit")
+            assert edit.text() == "", blocked
+            assert dialog.selectedFiles() != [blocked]
+            dialog.done(0)
+            dialog.deleteLater()
+            _spin(qapp, 30)
+
+        # 파일 경로를 주면 예전대로 이름이 채워진다
+        target = tmp_path / "작업" / "설계도.csv"
+        target.parent.mkdir()
+        target.write_text("x")
+        dialog = CustomFileDialog(None, mode="save_file", directory=str(target))
+        edit = dialog.findChild(QLineEdit, "fileNameEdit")
+        assert edit.text() == "설계도.csv"
+        dialog.done(0)
+        dialog.deleteLater()
+        _spin(qapp, 30)
+    finally:
+        safety.reset()

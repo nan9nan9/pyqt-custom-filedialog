@@ -23,7 +23,7 @@ Qt 가 C++ 에서 연결해 둔 ``activated`` · ``accept()`` 는 파이썬에�
 
 import os
 
-from qtpy.QtCore import QEvent, QMetaObject, QObject, Qt, Signal
+from qtpy.QtCore import QEvent, QMetaObject, QObject, Qt, QTimer, Signal
 from qtpy.QtWidgets import (
     QComboBox,
     QDialogButtonBox,
@@ -171,6 +171,50 @@ class _ItemBlocker(_Blocker):
             self._after()
 
 
+class _SidebarBlocker(_ItemBlocker):
+    """사이드바에서 **열면 안 되는 자리**로 가는 것을 막는다.
+
+    Qt 의 ``QSidebar`` 는 선택이 바뀌는 순간(선택 모델의 ``currentChanged``)
+    그 자리로 이동한다. 그래서 형제 장치들처럼 release 를 삼켜서는 못 막는다 —
+    **press 를 삼켜 선택 자체가 안 바뀌게** 해야 한다. 실측(strace)으로
+    확인했다: release 만 삼키면 ``/user`` 가 통째로 열리고 형제 계정이 전부
+    stat 된다(= 이 라이브러리가 막으려는 마운트 폭주 그 자체).
+
+    오른쪽 버튼은 그대로 둔다 — 그 press 까지 삼키면 우클릭 메뉴가 안 떠서
+    막힌 항목을 사이드바에서 **뺄 수도 없게** 된다.
+
+    방향키 이동도 같은 신호를 타므로 옮겨 갈 칸을 미리 보고 막는다. PageUp/
+    PageDown 처럼 한 번에 몇 칸을 뛰는 키는 뷰 높이에 따라 목적지가 달라져
+    여기서 셈하지 않는다 — 그쪽은 마지막 방어(bounce)가 받는다.
+    """
+
+    _STEPS = {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}
+
+    def __init__(self, view, parent=None):
+        super().__init__(view, (QEvent.Type.MouseButtonPress,), parent=parent)
+
+    def destination(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return ""
+        elif kind == QEvent.Type.KeyPress:
+            index = self._view.currentIndex()
+            step = self._STEPS.get(event.key())
+            if step is not None:
+                target = index.sibling(index.row() + step, index.column())
+            elif event.key() == Qt.Key.Key_Home:
+                target = index.sibling(0, index.column())
+            elif event.key() == Qt.Key.Key_End:
+                model = self._view.model()
+                rows = model.rowCount() if model is not None else 0
+                target = index.sibling(rows - 1, index.column())
+            else:
+                return super().destination(obj, event)
+            return url_path(target.data(PATH_ROLE)) if target.isValid() else ""
+        return super().destination(obj, event)
+
+
 class _ParentBlocker(_Blocker):
     """"상위 폴더(↑)" 로 **열면 안 되는 자리**로 올라가는 것을 막는다.
 
@@ -227,41 +271,51 @@ class _AcceptBlocker(_Blocker):
             return ""
 
         # 상대 경로("..")도 현재 폴더 기준으로 푼다.
-        paths = self._typed_paths()
-        if not paths:
+        entries = self._typed_entries()
+        if not entries:
             return ""
         # **막는 경로**를 돌려준다. 여러 개 모드에서 뒤에 섞인 경로 때문에
         # 막혔는데 첫 경로를 넘기면, 기록(blocked)과 안내 팝업이 멀쩡한 쪽을
         # 가리켜 "끝에 '/' 를 붙이세요" 같은 따라 해도 안 되는 말을 한다.
-        return self._first_blocked(paths) or paths[0]
+        return self._first_blocked(entries) or entries[0][1]
+
+    def _typed_entries(self):
+        """파일 이름 칸이 가리키는 ``(친 원문 조각, 푼 절대 경로)`` 목록."""
+        text = self._edit.text() or ""
+        entries = []
+        for part in _typed_parts(self._dialog, text):
+            path = _typed_path(self._dialog, part)
+            if path:
+                entries.append((part, path))
+        return entries
 
     def _typed_paths(self):
         """파일 이름 칸이 가리키는 경로들."""
-        text = self._edit.text() or ""
-        parts = _typed_parts(self._dialog, text)
-        return [p for p in (_typed_path(self._dialog, part) for part in parts) if p]
+        return [path for _part, path in self._typed_entries()]
 
-    def _first_blocked(self, paths):
+    def _first_blocked(self, entries):
         """확정하면 막힐 **첫 경로** (전부 통과하면 None).
 
         **모든** 경로를 본다. accept() 는 전부 stat 하므로 하나만 검사하면
         뒤에 섞인 절대 경로가 그대로 빠져나간다.
         """
-        # 끝의 구분자는 "이 폴더를 열겠다"는 명시적 표기라 판정에 살려서 넘긴다.
-        # 정규화하면 사라지므로 원문에서 다시 본다(기록·안내에는 정규화된 경로만
-        # 남겨 진단 값이 두 형태로 섞이지 않게 한다).
-        explicit = (self._edit.text() or "").strip().endswith(("/", os.sep))
-        for path in paths:
+        for part, path in entries:
+            # 끝의 구분자는 "이 폴더를 열겠다"는 명시적 표기라 판정에 살려서
+            # 넘긴다(정규화하면 사라지므로 원문에서 다시 본다. 기록·안내에는
+            # 정규화된 경로만 남겨 진단 값이 두 형태로 섞이지 않게 한다).
+            # 판정은 **그 경로의 조각**으로 한다 — 입력창 원문 전체를 보면
+            # 여러 개 모드에서 원문이 따옴표로 끝나 늘 "안 붙였다"가 된다.
             candidate = path
-            if explicit and not candidate.endswith(os.sep):
+            if part.strip().endswith(("/", os.sep)) and not candidate.endswith(os.sep):
                 candidate += os.sep
             if not safety.may_open(candidate):
                 return path
         return None
 
     def allowed(self, path):
-        # destination 이 이미 막는 경로를 골라 넘겼으므로 그 하나만 다시 본다.
-        return self._first_blocked([path]) is None
+        # 인자는 destination 이 고른 **대표** 경로다. 판정은 늘 입력 전체를
+        # 다시 본다 — accept() 도 전부 stat 하기 때문이다.
+        return self._first_blocked(self._typed_entries()) is None
 
     def on_blocked(self, obj, event, path):
         _pressed_button(obj, event)
@@ -585,6 +639,14 @@ class _TypingGuard(QObject):
             button.setEnabled(enabled)
 
 
+def _set_directory(dialog, directory):
+    """미뤄 둔 되돌리기. 그사이 다이얼로그가 닫혔으면 조용히 넘어간다."""
+    try:
+        dialog.setDirectory(directory)
+    except RuntimeError:
+        pass
+
+
 def guard_dialog(dialog, bounce=True):
     """차단 경로를 나열하지도, 만지지도, 들어가지도 못하게 막는다.
 
@@ -592,6 +654,7 @@ def guard_dialog(dialog, bounce=True):
     - 키 입력마다 도는 자동 경로 확인을 위험한 자리에서 끈다 (:class:`_TypingGuard`)
     - 파일 목록에서 더블클릭/Enter 로 여는 것을 막는다
     - "Look in" 드롭다운에서 고르는 것을 막는다
+    - **사이드바**에서 고르는 것을 막는다 (:class:`_SidebarBlocker`)
     - 파일 이름 칸에 치고 Enter / 열기 버튼으로 확정하는 것을 막는다
     - ``bounce`` 가 True 면 그래도 들어가진 경우 직전 폴더로 되돌린다
       (이미 읽은 뒤라 늦지만, 그 자리에 머무르지는 않게 하는 마지막 방어)
@@ -673,6 +736,15 @@ def guard_dialog(dialog, bounce=True):
         up_button.installEventFilter(blocker)
         installed.append(blocker)
 
+    # 4c) 사이드바에서 고르기 차단. 여기가 비어 있으면 마지막 방어(bounce)가
+    #     유일한 방어가 되는데, 그건 **이미 읽은 뒤**라 마운트 폭주를 못 막는다.
+    sidebar = dialog.findChild(QListView, "sidebar")
+    if sidebar is not None:
+        blocker = _SidebarBlocker(sidebar, parent=dialog)
+        sidebar.viewport().installEventFilter(blocker)
+        sidebar.installEventFilter(blocker)
+        installed.append(blocker)
+
     # 5) 파일 이름 칸으로 확정하기 차단 (Enter · 열기 버튼).
     #    guarded 는 물론 min_depth 만 켜도 건다 — Enter 의 확정은 Qt 가 GUI
     #    스레드에서 입력 경로를 stat 하는 일이라, automount 의 얕은 경로에서는
@@ -692,10 +764,15 @@ def guard_dialog(dialog, bounce=True):
         last = {"dir": dialog.directory().absolutePath()}
 
         def on_entered(path):
-            if not safety.may_enter(path):
-                dialog.setDirectory(last["dir"])
-            else:
+            if safety.may_enter(path):
                 last["dir"] = path
+                return
+            # 되돌리기를 **한 틱 미룬다.** directoryEntered 를 처리하는 도중에
+            # setDirectory 를 부르면 Qt6 이 사이드바 이동 한가운데서 재진입해
+            # 세그폴트한다(PyQt6·PySide6 에서 100% 재현. Qt5 는 멀쩡하다).
+            # 미뤄도 되돌리기는 그대로 되고, 그사이 사용자가 볼 수 있는 것은
+            # 한 프레임뿐이다.
+            QTimer.singleShot(0, lambda: _set_directory(dialog, last["dir"]))
 
         dialog.directoryEntered.connect(on_entered)
         installed.append("bounce")

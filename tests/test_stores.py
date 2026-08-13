@@ -1136,7 +1136,10 @@ def test_category_names_never_leak_os_errors(tmp_path):
     # 표시 이름은 예외를 던지지 않고 줄여서 받아 준다(확장자는 살린다)
     link = store.add("설계", str(target), name="가" * 500 + ".csv")
     assert os.path.basename(link).endswith(".csv")
-    assert len(os.path.basename(link).encode("utf-8")) <= 210
+    assert (
+        len(os.path.basename(link).encode("utf-8"))
+        <= favorites_module._LINK_NAME_BYTES
+    )
     assert store.resolve(link) == str(target)
 
     long_source = tmp_path / ("나" * 80 + ".csv")
@@ -1166,3 +1169,54 @@ def test_unverifiable_target_says_so(tmp_path):
         assert "존재하지 않습니다" in str(caught.value)
     finally:
         safety.reset()
+
+
+def test_existing_long_category_stays_readable(tmp_path):
+    """예전 판으로 만들어 둔 **긴 분류 폴더**를 계속 읽을 수 있다.
+
+    ``_safe_name`` 은 만들 때만이 아니라 ``category_dir`` 을 거치는 **모든
+    조회**(사이드바·메뉴·items·contains)가 지나는 길목이다. 파일시스템이
+    받아 주는 이름을 여기서 더 좁게 거절하면, 이미 있는 분류를 조회조차 못
+    하게 되고 우클릭 메뉴 슬롯에서 터져 앱이 죽는다.
+    """
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    target = tmp_path / "설계도.csv"
+    target.write_text("x")
+
+    name = "설계" + "가" * 70                  # 216바이트 — ext4 한도(255) 안
+    assert 200 < len(name.encode("utf-8")) <= 255
+    store.add_category(name)
+    link = store.add(name, str(target))
+
+    assert name in store.categories()
+    assert store.items(name) == [str(target)]
+    assert store.contains(name, str(target))
+    assert store.resolve(link) == str(target)
+    assert len(store.sidebar_urls()) == 1
+
+    # 파일시스템이 못 받는 길이는 여전히 ValueError 로 막는다
+    with pytest.raises(ValueError):
+        store.add_category("가" * 300)
+
+
+def test_record_recent_resolves_links_from_other_stores(tmp_path):
+    """``Places.record_recent`` 이 즐겨찾기 링크를 **원본으로 풀어서** 기록한다.
+
+    풀지 않으면 최근 목록이 링크 창고 경로를 들고 있게 되어, 즐겨찾기에서
+    그 항목을 빼는 순간 최근 목록의 그 항목이 끊긴 링크가 된다.
+    """
+    favorites = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    recent = RecentStore(base_dir=str(tmp_path / "rec"), max_items=10)
+    places = Places(favorites=favorites, recent=recent)
+
+    target = tmp_path / "설계도.csv"
+    target.write_text("x")
+    link = favorites.add("설계", str(target))
+
+    places.record_recent([link])
+    assert recent.items() == [str(target)]
+
+    # 즐겨찾기에서 빼도 최근 항목은 살아 있다
+    favorites.remove("설계", str(target))
+    assert recent.items() == [str(target)]
+    assert os.path.exists(recent.items()[0])

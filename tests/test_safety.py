@@ -1691,6 +1691,11 @@ def test_min_depth_bounces_back_from_shallow_place(qapp, shallow_tree):
 
     dialog.setDirectory(root)                 # 어떻게든 얕은 자리로 갔다면
     dialog.directoryEntered.emit(root)        # 사용자 이동과 같은 신호
+    # 되돌리기는 **한 틱 미룬다.** 신호 처리 도중에 setDirectory 를 부르면
+    # Qt6 이 사이드바 이동 한가운데서 재진입해 세그폴트한다(PyQt6·PySide6
+    # 에서 100% 재현). 그 자리에서 되돌아왔다면 미루기가 사라진 것이다.
+    assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(root)
+    _spin(qapp, 50)
     assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(inner)
     dialog.close()
 
@@ -2491,6 +2496,283 @@ def test_qt6_button_check_respects_quotes_in_names(qapp, tmp_path):
     assert accept.isEnabled()
     guard._update_accept_python('"하나.txt" "없는것.txt"')
     assert not accept.isEnabled()
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_one_dead_share_does_not_lock_the_whole_filesystem(monkeypatch, tmp_path):
+    """마운트 표가 없어도 **한 자리가 멈추면 그 자리만** 잠긴다.
+
+    묶음 키를 파일시스템 뿌리 하나로 잡으면, 그런 시스템(macOS · /proc 없는
+    컨테이너)에서는 모든 경로가 이 갈래로 오므로 죽은 공유 하나를 확인한
+    순간 프로세스의 모든 경로 확인이 실패로 떨어진다 — 멀쩡한 로컬 파일이
+    "존재하지 않습니다"가 되고 다이얼로그가 cwd 에서 열린다.
+    """
+    import threading
+
+    from custom_file_dialog import safety
+
+    monkeypatch.setattr(safety_mounts, "iter_mounts", lambda refresh=False: [])
+    monkeypatch.setattr(safety_mounts, "table_available", lambda: False)
+    safety.clear_cache()
+
+    dead = tmp_path / "공유" / "죽은서버"
+    dead.mkdir(parents=True)
+    alive = tmp_path / "작업"
+    alive.mkdir()
+    (alive / "설계도.csv").write_text("x")
+
+    release = threading.Event()
+
+    def never_returns(path):
+        release.wait(10)
+        return True
+
+    try:
+        # 죽은 자리를 한 번 두드려 그 키를 눌러 둔다
+        assert safety.safe_call(
+            never_returns, str(dead / "a.csv"), timeout=0.05
+        ) is False
+        # 같은 자리는 스레드를 더 만들지 않고 곧바로 실패
+        assert safety.safe_call(
+            never_returns, str(dead / "b.csv"), timeout=0.05
+        ) is False
+        assert safety_reach.pending_checks() == 1
+
+        # **무관한 자리**는 그대로 동작해야 한다
+        assert safety.safe_exists(str(alive / "설계도.csv")) is True
+        assert safety.safe_isdir(str(alive)) is True
+        assert safety.is_reachable(str(alive / "설계도.csv")) is True
+        assert validate_paths(
+            [str(alive / "설계도.csv")], mode=SelectMode.OPEN_FILE, timeout=0.05
+        )[0]
+    finally:
+        release.set()
+        safety.clear_cache()
+
+
+def test_trailing_separator_counts_per_typed_path(qapp, shallow_tree):
+    """끝 구분자 판정을 **그 경로의 조각**으로 한다.
+
+    입력창 원문 전체를 보면 여러 개 모드에서 원문이 따옴표로 끝나므로 늘
+    "구분자를 안 붙였다"가 된다 — 사용자가 시킨 대로 했는데도 막히고,
+    안내는 이미 한 일을 또 하라고 한다.
+    """
+    from qtpy.QtCore import QEvent, Qt
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    root, depth = shallow_tree
+    # 이 깊이에서는 구분자가 판정을 가른다 — 붙이면 열리고 안 붙이면 막힌다
+    target = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+    assert safety.may_open(target) is False
+    assert safety.may_open(target + os.sep) is True
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+    dialog.setDirectory(os.path.join(target, "proj"))
+    dialog.show()
+    _spin(qapp, 100)
+
+    blocker = [h for h in guard_dialog(dialog) if isinstance(h, _AcceptBlocker)][0]
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+
+    def blocked_for(text):
+        edit.setText(text)
+        event = QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+        )
+        result = blocker.eventFilter(edit, event)
+        if blocker.notice is not None:
+            blocker.notice.hide()
+        return result
+
+    # 구분자를 붙였으면 여러 개 모드에서도 열린다 — 원문이 따옴표로 끝나는
+    # 것과 무관하게, 그 **조각**이 구분자로 끝나는지를 봐야 한다
+    assert blocked_for('"%s/"' % target) is False
+    # 안 붙이면 그대로 막힌다
+    assert blocked_for('"%s"' % target) is True
+    # 단일 선택 모드도 예전 그대로
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    assert blocked_for("%s/" % target) is False
+    assert blocked_for(target) is True
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_stuck_check_threads_have_a_hard_ceiling(monkeypatch, tmp_path):
+    """묶음 키가 못 잡은 경우에도 멈춘 스레드 수에 **상한**이 있다.
+
+    묶음 키는 "어디까지가 한 마운트인지" 아는 만큼만 묶어 준다. 서로 다른
+    폴더가 사실은 같은 죽은 마운트였다면 키가 갈리므로, 마지막 방어로 스레드
+    수 자체를 막는다 — 멈춘 스레드는 D 상태라 죽일 수 없다.
+    """
+    import threading
+
+    from custom_file_dialog import safety
+
+    monkeypatch.setattr(safety_mounts, "iter_mounts", lambda refresh=False: [])
+    monkeypatch.setattr(safety_mounts, "table_available", lambda: False)
+    safety.clear_cache()
+
+    release = threading.Event()
+
+    def never_returns(path):
+        release.wait(10)
+        return True
+
+    try:
+        for index in range(safety_reach.MAX_PENDING_CHECKS + 12):
+            folder = tmp_path / ("공유%02d" % index)      # 매번 다른 묶음 키
+            folder.mkdir()
+            safety.safe_call(never_returns, str(folder / "a.csv"), timeout=0.05)
+        assert safety_reach.pending_checks() == safety_reach.MAX_PENDING_CHECKS
+    finally:
+        release.set()
+        safety.clear_cache()
+
+
+def _sidebar_click(qapp, view, row):
+    """사이드바 항목을 **실제로** 클릭한다 (press + release).
+
+    ``clicked.emit`` 이나 ``setCurrentIndex`` 로는 안 된다 — Qt 의 QSidebar 는
+    선택 모델의 currentChanged 로 이동하므로, 막는 쪽도 그 앞 단계(press)를
+    봐야 하고 테스트도 같은 단계를 거쳐야 의미가 있다.
+    """
+    from qtpy.QtCore import QPoint, Qt
+    from qtpy.QtTest import QTest
+
+    index = view.model().index(row, 0)
+    assert index.isValid()
+    point = view.visualRect(index).center()
+    QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    _spin(qapp, 80)
+    return index
+
+
+def test_sidebar_click_cannot_open_a_blocked_place(qapp, shallow_tree):
+    """사이드바 클릭이 **막힌 자리에 들어가지도 못하게** 한다.
+
+    여기가 비어 있으면 마지막 방어(bounce)가 유일한 방어가 되는데, 그건 Qt 가
+    폴더를 **이미 읽은 뒤**라 마운트 폭주를 못 막는다. 실측(strace)으로 확인한
+    구멍이다 — ``/user`` 를 클릭하면 통째로 열리고 형제 계정이 전부 stat 됐다.
+
+    그래서 "결국 어느 폴더에 있나"로는 부족하다(bounce 도 그건 맞춘다).
+    **들어간 적이 있는가**(``directoryEntered``)를 본다 — 그 신호가 났다면
+    Qt 가 이미 그 폴더를 읽은 뒤다.
+    """
+    from qtpy.QtCore import QUrl
+    from qtpy.QtWidgets import QFileDialog, QListView
+
+    from custom_file_dialog import guard_dialog, safety
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(inner)
+    dialog.setSidebarUrls([QUrl.fromLocalFile(root), QUrl.fromLocalFile(inner)])
+    dialog.show()
+    _spin(qapp, 100)
+    guard_dialog(dialog)
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    assert sidebar is not None and sidebar.model().rowCount() == 2
+
+    entered = []
+    dialog.directoryEntered.connect(entered.append)
+
+    _sidebar_click(qapp, sidebar, 0)          # 막힌 자리
+    assert [p for p in entered if os.path.normpath(p) == os.path.normpath(root)] == []
+    assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(inner)
+
+    # 멀쩡한 자리는 그대로 열린다(막느라 다 막아 버린 것이 아님을 못박는다)
+    deeper = os.path.join(inner, "proj")
+    dialog.setSidebarUrls([QUrl.fromLocalFile(root), QUrl.fromLocalFile(deeper)])
+    _spin(qapp, 80)
+    _sidebar_click(qapp, sidebar, 1)
+    assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(deeper)
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_sidebar_keyboard_move_cannot_open_a_blocked_place(qapp, shallow_tree):
+    """방향키로 옮겨 갈 칸이 막힌 자리면 그 키 입력을 삼킨다.
+
+    사이드바 이동은 선택이 바뀌는 순간 일어나므로, 화살표도 **옮겨 갈 칸을
+    미리 보고** 막아야 한다. 진짜 키 입력으로는 확인할 수 없다 — 오프스크린
+    에서는 창이 활성화되지 않아 QListView 가 화살표를 처리하지 않는다(실측:
+    currentIndex 가 -1 에서 안 움직인다). 그래서 판정 자체를 직접 건다.
+    """
+    from qtpy.QtCore import QEvent, QItemSelectionModel, Qt, QUrl
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QListView
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _SidebarBlocker
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    deeper = os.path.join(inner, "proj")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(inner)
+    dialog.setSidebarUrls(
+        [QUrl.fromLocalFile(deeper), QUrl.fromLocalFile(root)]     # 아래가 막힌 자리
+    )
+    dialog.show()
+    _spin(qapp, 100)
+    hooks = guard_dialog(dialog)
+    blocker = [h for h in hooks if isinstance(h, _SidebarBlocker)][0]
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+
+    assert sidebar.model().rowCount() == 2
+
+    def swallows(row, key):
+        # 시그널을 막고 현재 칸을 옮긴다. 그냥 setCurrentIndex 하면 Qt 가 그
+        # 자리로 이동하면서 사이드바 선택을 지워 버려(실측: currentIndex 가
+        # -1) 무엇을 눌렀는지 셈할 기준이 사라진다.
+        selection = sidebar.selectionModel()
+        was_blocked = selection.blockSignals(True)
+        try:
+            selection.setCurrentIndex(
+                sidebar.model().index(row, 0),
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+        finally:
+            selection.blockSignals(was_blocked)
+        assert sidebar.currentIndex().row() == row
+        del blocker.blocked[:]
+        event = QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)
+        return blocker.eventFilter(sidebar, event)
+
+    # 멀쩡한 자리(0) 에서 막힌 자리(1) 로 내려가는 것은 삼킨다
+    assert swallows(0, Qt.Key.Key_Down) is True
+    assert [os.path.normpath(p) for p in blocker.blocked] == [os.path.normpath(root)]
+    # End 로 뛰어도 마찬가지(마지막 칸이 막힌 자리다)
+    assert swallows(0, Qt.Key.Key_End) is True
+    # 반대 방향 · 멀쩡한 자리로 가는 것은 그대로 통과시킨다
+    assert swallows(1, Qt.Key.Key_Up) is False
+    assert swallows(1, Qt.Key.Key_Home) is False
+    # 목록 밖으로 나가는 이동은 볼 것이 없다
+    assert swallows(0, Qt.Key.Key_Up) is False
 
     dialog.done(0)
     dialog.deleteLater()

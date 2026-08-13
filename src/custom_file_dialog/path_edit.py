@@ -613,9 +613,13 @@ class FilePathEdit(QWidget):
 
         "현재 위치"는 열리는 시점에 정해지므로, 지금 열었을 때의 시작 폴더를
         기준으로 계산한다.
+
+        얹을 것이 없으면 **빈 리스트**다(None 이 아니다). 이 값은 보라고 주는
+        것이라 그대로 순회할 수 있어야 한다 — 짝인 :meth:`effective_sidebar_marks`
+        도 빈 dict 를 준다. "지정하지 않았다"는 뜻의 None 은 설정을 돌려주는
+        :meth:`sidebar_urls` 쪽 이야기다.
         """
-        urls = self._places().sidebar_urls(self._current_dir_now())
-        return list(urls) if urls is not None else None
+        return list(self._places().sidebar_urls(self._current_dir_now()) or [])
 
     def effective_sidebar_marks(self):
         """지금 열면 사이드바에서 표시가 바뀔 항목 — ``{경로: (이름, 아이콘)}``.

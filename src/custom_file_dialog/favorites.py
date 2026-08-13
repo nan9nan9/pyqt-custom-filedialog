@@ -43,9 +43,16 @@ _CONFIGURED_STORAGE_DIR = None
 # 그럴 수 없어(하드링크는 원본과 동등한 경로다) 매핑을 따로 남겨 둔다.
 INDEX_FILENAME = ".index.json"
 
-# 파일 이름 하나가 가질 수 있는 최대 바이트 수(리눅스 등 대부분 255). 번호가
-# 붙거나(" (2)") 임시 이름이 될 여유를 두고 조금 낮춰 잡는다.
-_MAX_NAME_BYTES = 200
+# 파일 이름 하나가 가질 수 있는 최대 바이트 수(리눅스 등 대부분 NAME_MAX=255).
+# **이 한도로만 거절한다.** 더 낮춰 잡으면, 예전 판으로 이미 만들어 둔 분류
+# 폴더(200~255바이트)를 **조회조차 못 하게** 된다 — _safe_name 은 만들 때만이
+# 아니라 category_dir 을 거치는 모든 조회(사이드바·메뉴·items)가 지나는
+# 길목이라, 그 자리에서 예외가 나면 우클릭 한 번에 앱이 죽는다.
+_MAX_NAME_BYTES = 255
+
+# 자동으로 따온 표시 이름을 줄일 때 쓰는 한도. 중복이면 " (2)" 가 붙고 저장 중
+# 임시 이름이 될 수도 있어 위 한도보다 여유를 둔다.
+_LINK_NAME_BYTES = 240
 
 
 def _looks_like_path(text):
@@ -68,7 +75,7 @@ def _safe_link_name(name):
     기록은 그 지점에서 **뒤 파일들까지 통째로** 빠진다.
     """
     try:
-        return _safe_name(_shorten(str(name)))
+        return _safe_name(_shorten(str(name), _LINK_NAME_BYTES))
     except ValueError:
         return "항목"
 

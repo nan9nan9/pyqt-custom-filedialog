@@ -586,3 +586,12 @@ def test_drop_rejects_unverifiable_folder_in_file_mode(tmp_path):
         assert acceptable_paths([str(a_file)], mode, isdir, isfile) == [str(a_file)]
         # 로컬 폴더는 예전대로 거부
         assert acceptable_paths([str(tmp_path)], mode, isdir, isfile) == []
+
+
+def test_effective_sidebar_urls_is_always_a_list(qapp):
+    """얹을 것이 없어도 순회할 수 있는 값을 준다(짝인 marks 는 빈 dict)."""
+    edit = FilePathEdit(mode="open_file")
+    urls = edit.effective_sidebar_urls()
+    assert isinstance(urls, list)
+    assert [u.toLocalFile() for u in urls] == []        # README 가 권하는 사용법
+    assert edit.effective_sidebar_marks() == {}

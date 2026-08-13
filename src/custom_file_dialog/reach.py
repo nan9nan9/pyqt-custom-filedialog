@@ -50,6 +50,11 @@ SERVER_PORTS = {
 DEFAULT_TIMEOUT = 1.0       # 한 번의 확인에 기다릴 최대 시간(초)
 DEFAULT_TTL = 30.0          # 판정 결과를 재사용할 시간(초)
 
+# 동시에 멈춰 있어도 되는 확인 스레드 수의 상한. 멈춘 스레드는 D 상태라 죽일
+# 수 없으므로, 늘지 않게 하는 방법은 새로 만들지 않는 것뿐이다. 묶음 키가
+# 잡지 못한 경우의 마지막 방어라 넉넉히 잡는다.
+MAX_PENDING_CHECKS = 8
+
 _lock = threading.Lock()
 _settings = {"timeout": DEFAULT_TIMEOUT, "ttl": DEFAULT_TTL}
 _cache = {}                 # key -> (판정, 시각)
@@ -157,10 +162,14 @@ def call_with_timeout(func, *args, **kwargs):
     key = kwargs.pop("pending_key", None)
     wait = _settings["timeout"] if timeout is None else float(timeout)
 
-    if key is not None:
-        with _lock:
-            if key in _pending_keys:
-                return False, None          # 이미 멈춘 확인이 있다 -> 안 두드린다
+    with _lock:
+        if key is not None and key in _pending_keys:
+            return False, None              # 이미 멈춘 확인이 있다 -> 안 두드린다
+        if len(_pending) >= MAX_PENDING_CHECKS:
+            # 묶음 키가 못 잡은 폭주의 마지막 방어. 키를 아무리 잘 잡아도
+            # "어디까지가 한 마운트인지" 모르는 경우가 있어, 스레드 수 자체에
+            # 상한을 둔다(멈춘 스레드는 죽일 수 없으므로 안 만드는 수밖에 없다).
+            return False, None
 
     box = {}
     done = threading.Event()
@@ -273,15 +282,20 @@ def is_reachable(path, timeout=None, use_cache=True):
 
 
 def _unknown_key(path):
-    """마운트 표가 없을 때 쓸 "멈춘 확인" 묶음 키 — 볼륨 단위.
+    """마운트 표가 없을 때 쓸 "멈춘 확인" 묶음 키 — **담고 있는 폴더**.
 
-    윈도우면 드라이브(``C:``)나 UNC 공유(``\\\\서버\\공유``), 그 밖에는
-    파일시스템 뿌리. 경로마다 키를 따로 주면 묶는 의미가 없어져, 죽은 UNC
-    경로를 입력창에 치는 동안 키 입력마다 멈춘 스레드가 하나씩 쌓인다
-    (이 모듈이 "마운트당 하나"로 약속한 것이 이 갈래에서만 깨졌다).
+    묶음 키는 "한 번 멈추면 여기는 당분간 두드리지 않는다"는 뜻이다. 어디까지가
+    한 마운트인지 모르는 상황이라 경계를 넓게 잡으면 안 된다 — 파일시스템
+    뿌리로 묶으면, 마운트 표가 없는 POSIX(macOS · ``/proc`` 없는 컨테이너)는
+    **모든 경로가 이 갈래로 오므로** 죽은 공유 하나를 확인한 순간 프로세스의
+    모든 경로 확인이 실패로 떨어진다(멀쩡한 로컬 파일이 "존재하지 않습니다"가
+    되고 다이얼로그가 cwd 에서 열린다).
+
+    담고 있는 폴더로 묶으면 막으려던 것은 그대로 막힌다 — 스레드가 쌓이는
+    경우는 입력창에 한 글자씩 치는 상황이고, 그때 만들어지는 경로들은 모두
+    같은 폴더 아래다. 그 밖의 폭주는 :data:`MAX_PENDING_CHECKS` 가 받는다.
     """
-    drive, _rest = os.path.splitdrive(os.path.abspath(path))
-    return drive or os.sep
+    return os.path.dirname(os.path.abspath(path)) or os.sep
 
 
 def _mount_reachable(mount, timeout=None, use_cache=True):
