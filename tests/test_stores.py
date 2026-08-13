@@ -817,3 +817,57 @@ def test_true_means_default_store_everywhere(tmp_path, monkeypatch):
         assert edit._places().is_inside("/tmp/없는경로") is False
     finally:
         configure_storage(None)
+
+
+def test_record_recent_never_escapes_into_slots(tmp_path, monkeypatch):
+    """최근 기록이 실패해도 예외가 밖으로 새지 않는다.
+
+    부르는 쪽은 둘 다 Qt 슬롯이다(다이얼로그 accepted · 위젯 찾아보기).
+    슬롯에서 예외가 새면 PyQt 는 앱을 abort 시킨다 — 링크를 못 만들었다고
+    파일 선택 자체가 무산되면 안 된다.
+    """
+    from custom_file_dialog import Places
+
+    target = _touch(tmp_path, "고른파일.csv")
+    recent = RecentStore(base_dir=str(tmp_path / "recent"))
+    places = Places(recent=recent)
+
+    def deny_link(*args, **kwargs):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "symlink", deny_link)
+    monkeypatch.setattr(os, "link", deny_link)
+
+    places.record_recent([target])                  # 예외 없이 지나간다
+    assert recent.items() == []                     # 기록만 안 될 뿐
+
+    # 저장소 폴더를 아예 못 만드는 경우도 마찬가지
+    monkeypatch.setattr(os, "makedirs", deny_link)
+    places.record_recent([target])
+
+
+def test_places_options_update_is_all_or_nothing(tmp_path):
+    """모르는 이름이 섞이면 아무것도 바꾸지 않는다(캐시도 어긋나지 않는다)."""
+    from custom_file_dialog.places import PlacesOptions
+
+    options = PlacesOptions(icon=True)
+    before = options.places()
+
+    with pytest.raises(TypeError):
+        options.update(icon=False, favorite=None)   # favorites 오타
+
+    assert options.icon is True                     # 절반만 반영되지 않는다
+    assert options.places() is before               # 캐시도 그대로다
+
+    options.update(icon=False)                      # 정상 경로는 그대로 동작
+    assert options.icon is False and options.places() is not before
+
+
+def test_from_options_keeps_old_signature(tmp_path):
+    """예전 이름은 위치 인자로 부르던 코드도 계속 받아 준다."""
+    from custom_file_dialog import Places
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    places = Places.from_options(store)              # 위치 인자
+    assert places.favorites_store() is store
+    assert Places.from_options(favorites=store).favorites_store() is store

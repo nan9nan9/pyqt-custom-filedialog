@@ -15,7 +15,7 @@ import os
 
 from qtpy.QtCore import QDir, QSettings, QUrl
 
-from .favorites import FavoritesStore
+from .favorites import FavoritesError, FavoritesStore
 from .icons import CategoryIconProvider, clock_icon, home_icon, star_icon
 from .recent import RecentStore
 from .util import abspath, to_urls, url_path
@@ -130,13 +130,29 @@ class Places:
         self._category_icons = {}       # id(저장소) -> 아이콘 (처음 쓸 때 그린다)
 
     @classmethod
-    def from_options(cls, **options):
+    def from_options(
+        cls,
+        favorites=None,
+        recent=None,
+        recent_max=None,
+        sidebar_urls=None,
+        fixed_urls=None,
+        icon=True,
+    ):
         """생성자 인자를 그대로 받아 :class:`Places` 를 만든다(예전 이름).
 
         규칙은 :class:`PlacesOptions` 하나에 모여 있다 — 이 이름은 그쪽으로
-        넘겨 주기만 한다.
+        넘겨 주기만 한다. **인자 이름과 순서는 예전 그대로**여서 위치 인자로
+        부르던 코드도 계속 동작한다.
         """
-        return PlacesOptions(**options).places()
+        return PlacesOptions(
+            favorites=favorites,
+            recent=recent,
+            recent_max=recent_max,
+            sidebar_urls=sidebar_urls,
+            fixed_urls=fixed_urls,
+            icon=icon,
+        ).places()
 
     def __bool__(self):
         """사이드바에 얹을 게 하나라도 있는지."""
@@ -204,9 +220,22 @@ class Places:
         return paths
 
     def record_recent(self, paths):
-        """최근 파일에 기록한다(안 쓰면 아무 일도 하지 않는다)."""
-        if self.recent is not None:
+        """최근 파일에 기록한다(안 쓰면 아무 일도 하지 않는다).
+
+        **실패해도 조용히 넘어간다.** 이 함수는 사용자가 파일을 고른 **뒤**
+        따라오는 부수 효과이고, 부르는 쪽은 둘 다 Qt 슬롯이다(다이얼로그의
+        ``accepted`` · 위젯의 찾아보기 버튼). 슬롯에서 예외가 새어 나가면
+        PyQt 는 앱을 abort 시킨다 — 링크를 못 만들었다고 선택 자체가 무산되면
+        안 된다. 실패하는 경우: 심볼릭 링크가 안 되는 자리(윈도우 비개발자
+        모드 · FAT32 · 일부 CIFS)에 저장소가 있고 하드링크 폴백도 볼륨이 달라
+        실패할 때, 홈이 읽기 전용이거나 가득 찼을 때.
+        """
+        if self.recent is None:
+            return
+        try:
             self.recent.record_all(paths)
+        except (OSError, ValueError, FavoritesError):
+            pass
 
     # ------------------------------------------------------------ 사이드바
     def sidebar_urls(self, current=None):
@@ -379,13 +408,17 @@ class PlacesOptions:
     def update(self, **changes):
         """설정을 바꾸고 캐시를 버린다 (``recent_max`` 는 ``recent`` 와 함께 준다)."""
         recent_max = changes.pop("recent_max", None)
+        # 하나라도 모르는 이름이면 **아무것도 바꾸지 않는다.** 절반만 반영된 채
+        # 예외가 나가면 캐시된 Places 와 설정이 어긋난 채로 남는다.
+        unknown = sorted(set(changes) - set(self._KEYS))
+        if unknown:
+            raise TypeError("모르는 설정입니다: %s" % ", ".join(repr(k) for k in unknown))
+
         if "favorites" in changes:
             changes["favorites"] = as_favorites_store(changes["favorites"])
         if "recent" in changes:
             changes["recent"] = as_recent_store(changes["recent"], recent_max)
         for key, value in changes.items():
-            if key not in self._KEYS:
-                raise TypeError("모르는 설정입니다: %r" % key)
             if key in ("sidebar_urls", "fixed_urls") and value is not None:
                 value = list(value)
             setattr(self, key, value)
