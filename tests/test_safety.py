@@ -1657,3 +1657,63 @@ def test_min_depth_bounces_back_from_shallow_place(qapp, shallow_tree):
     dialog.directoryEntered.emit(root)        # 사용자 이동과 같은 신호
     assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(inner)
     dialog.close()
+
+
+def test_min_depth_keeps_normal_browsing(qapp, shallow_tree):
+    """이동 차단이 **평범한 탐색까지 막지는 않는다**.
+
+    얕은 자리만 막아야 한다 — 충분히 깊은 폴더로 들어가기, 그 안의 파일을
+    더블클릭해 고르기, 한 단계 위로 올라가기는 그대로 돼야 한다.
+    """
+    from qtpy.QtCore import QEvent, QPointF, Qt
+    from qtpy.QtGui import QMouseEvent
+    from qtpy.QtWidgets import QFileDialog, QTreeView
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _ItemBlocker
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")          # 깊이 == min_depth
+    with open(os.path.join(inner, "설계도.csv"), "w", encoding="utf-8") as handle:
+        handle.write("x")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(inner)
+    dialog.show()
+    _spin(qapp, 500)
+
+    installed = guard_dialog(dialog)
+    tree = dialog.findChild(QTreeView, "treeView")
+    blocker = [
+        h for h in installed if isinstance(h, _ItemBlocker) and h._view is tree
+    ][0]
+
+    model, root_index = tree.model(), tree.rootIndex()
+    rows = {
+        model.index(r, 0, root_index).data(): model.index(r, 0, root_index)
+        for r in range(model.rowCount(root_index))
+    }
+    assert {"proj", "설계도.csv"} <= set(rows), sorted(rows)
+
+    def double_click(index):
+        tree.scrollTo(index)
+        point = tree.visualRect(index).center()
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            QPointF(point),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        return blocker.eventFilter(tree.viewport(), event)
+
+    # 깊은 자리의 하위 폴더와 파일은 그대로 열린다
+    assert double_click(rows["proj"]) is False
+    assert double_click(rows["설계도.csv"]) is False
+    assert blocker.blocked == []
+
+    # 그 안에서 파일 이름을 쳐서 확정하는 것도 된다(깊이 > min_depth)
+    assert safety.may_open(os.path.join(inner, "설계도.csv"))
+    dialog.close()
