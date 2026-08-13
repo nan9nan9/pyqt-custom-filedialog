@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
     QListView,
     QMenu,
     QMessageBox,
+    QToolButton,
     QTreeView,
 )
 
@@ -298,8 +299,18 @@ class FavoritesMenus(QObject):
 
         for name in QT_COMMON_ACTIONS:
             action = dialog.findChild(QAction, name)
-            if action is not None and action.isVisible():
-                menu.addAction(action)
+            if action is None or not action.isVisible():
+                continue
+            if name == "qt_new_folder_action":
+                # Qt 는 기본 메뉴를 띄울 때마다 이 항목을 "새 폴더" **버튼**의
+                # 상태에 맞춘다. install() 이 기본 메뉴를 통째로 떼어 냈으니 그
+                # 갱신도 우리 몫이다 — 안 하면 ReadOnly 로 연 다이얼로그에서
+                # 우클릭 한 번으로 실제 폴더가 만들어진다.
+                button = dialog.findChild(QToolButton, "newFolderButton")
+                action.setEnabled(
+                    button.isEnabled() if button is not None else not read_only
+                )
+            menu.addAction(action)
 
     def copy_path(self, path):
         """경로를 클립보드에 복사한다. 분류 안의 링크는 **원본 경로**를 복사한다.

@@ -519,3 +519,70 @@ def test_history_is_shared_between_instances(qapp):
         assert second.last_dir() == "/etc"              # 마지막 폴더는 그대로
     finally:
         configure_settings(None, None)
+
+
+def test_drop_never_invents_a_parent_path(tmp_path):
+    """폴더 모드 드롭이 "확인 못 한 경로"를 부모로 바꿔치기하지 않는다.
+
+    ``safe_isdir`` 는 죽은 원격·automount·차단 경로에서 판정을 못 하면 False 를
+    준다. 그것을 "파일이구나"로 읽고 부모를 넣으면, 사용자가 떨어뜨린 적 없는
+    폴더가 조용히 입력창에 들어가고 앱은 거기에 산출물을 쓴다.
+    """
+    from custom_file_dialog.drops import acceptable_paths
+
+    folder = tmp_path / "결과"
+    folder.mkdir()
+    a_file = tmp_path / "a.csv"
+    a_file.write_text("x")
+
+    real_isdir = os.path.isdir
+    real_isfile = os.path.isfile
+    blocked = str(folder)
+
+    def isdir(path):        # 차단된 자리는 "모르겠다" = False
+        return False if path == blocked else real_isdir(path)
+
+    def isfile(path):
+        return False if path == blocked else real_isfile(path)
+
+    # 확인 수단이 있으면 만들어 내지 않는다
+    assert acceptable_paths([blocked], SelectMode.DIRECTORY, isdir, isfile) == []
+    # 진짜 파일은 예전대로 부모 폴더로 받아 준다
+    assert acceptable_paths(
+        [str(a_file)], SelectMode.DIRECTORY, isdir, isfile
+    ) == [str(tmp_path)]
+    # 진짜 폴더는 그대로
+    assert acceptable_paths(
+        [str(folder)], SelectMode.DIRECTORY, real_isdir, real_isfile
+    ) == [str(folder)]
+    # isfile 을 안 주면 예전 동작(폴더가 아니면 파일)
+    assert acceptable_paths([blocked], SelectMode.DIRECTORY, isdir) == [str(tmp_path)]
+
+
+def test_drop_rejects_unverifiable_folder_in_file_mode(tmp_path):
+    """파일 모드 드롭도 "확인 못 한 경로"를 받지 않는다.
+
+    ``isdir`` 만 보면 automount 위·죽은 원격에서 폴더가 False 로 돌아와,
+    폴더가 파일 칸에 그대로 들어갔다(폴더 모드와 기준이 갈리던 자리다).
+    """
+    from custom_file_dialog.drops import acceptable_paths
+
+    folder = tmp_path / "myaccount"
+    folder.mkdir()
+    a_file = tmp_path / "a.csv"
+    a_file.write_text("x")
+
+    real_isdir, real_isfile = os.path.isdir, os.path.isfile
+    blocked = str(folder)
+
+    def isdir(path):        # 차단된 자리는 "모르겠다" = False
+        return False if path == blocked else real_isdir(path)
+
+    def isfile(path):
+        return False if path == blocked else real_isfile(path)
+
+    for mode in (SelectMode.OPEN_FILE, SelectMode.OPEN_FILES, SelectMode.SAVE_FILE):
+        assert acceptable_paths([blocked], mode, isdir, isfile) == [], mode
+        assert acceptable_paths([str(a_file)], mode, isdir, isfile) == [str(a_file)]
+        # 로컬 폴더는 예전대로 거부
+        assert acceptable_paths([str(tmp_path)], mode, isdir, isfile) == []

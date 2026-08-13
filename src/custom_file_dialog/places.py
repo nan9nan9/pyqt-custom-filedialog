@@ -402,6 +402,9 @@ class PlacesOptions:
         self.favorites = as_favorites_store(favorites)
         self.recent_max = recent_max        # 저장소를 다시 만들 때 쓴다
         self.recent = as_recent_store(recent, recent_max)
+        # 앱이 직접 넘긴 저장소는 **개수를 건드리지 않는다.** 남의 목록을
+        # 잘라 버리기 때문이다(update 의 개수 반영이 이 값을 본다).
+        self.recent_is_ours = self.recent is not None and self.recent is not recent
         self.sidebar_urls = list(sidebar_urls) if sidebar_urls is not None else None
         self.fixed_urls = list(fixed_urls) if fixed_urls is not None else None
         self.icon = icon
@@ -444,14 +447,21 @@ class PlacesOptions:
         if "favorites" in changes:
             changes["favorites"] = as_favorites_store(changes["favorites"])
         if "recent" in changes:
-            changes["recent"] = as_recent_store(changes["recent"], recent_max)
+            given = changes["recent"]
+            changes["recent"] = as_recent_store(given, recent_max)
+            # 우리가 만든 것인지 기억해 둔다(아래 개수 반영이 이 값을 본다)
+            self.recent_is_ours = changes["recent"] is not given
         elif (
             recent_max is not None
-            and isinstance(self.recent, RecentStore)
+            and self.recent_is_ours
+            and self.recent is not None
             and self.recent.max_items != recent_max
         ):
-            # 개수만 바꾼 경우 — 쓰고 있는 저장소에 바로 반영한다. 여기서 안
-            # 하면 저장소를 다시 지정할 때까지 조용히 무시된다.
+            # 개수만 바꾼 경우 — **우리가 만든** 저장소에만 반영한다. 앱이 직접
+            # 넘긴 인스턴스에 밀어 넣으면 set_max_items -> _evict 가 링크를
+            # 실제로 지워, 즐겨찾기를 켜는 것만으로 남의 공유 목록이 잘린다.
+            # (recent_max 는 "우리가 만들 때 쓸 개수"다 — 위젯 문서도 저장소를
+            # 직접 넘기면 무시된다고 약속한다.)
             self.recent.set_max_items(recent_max)
         for key, value in changes.items():
             if key in ("sidebar_urls", "fixed_urls") and value is not None:

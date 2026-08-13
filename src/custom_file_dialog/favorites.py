@@ -43,6 +43,10 @@ _CONFIGURED_STORAGE_DIR = None
 # 그럴 수 없어(하드링크는 원본과 동등한 경로다) 매핑을 따로 남겨 둔다.
 INDEX_FILENAME = ".index.json"
 
+# 파일 이름 하나가 가질 수 있는 최대 바이트 수(리눅스 등 대부분 255). 번호가
+# 붙거나(" (2)") 임시 이름이 될 여유를 두고 조금 낮춰 잡는다.
+_MAX_NAME_BYTES = 200
+
 
 def _looks_like_path(text):
     """이름이 아니라 **경로**로 준 것인지 — 구분자가 있거나 ``~`` 로 시작한다."""
@@ -64,9 +68,30 @@ def _safe_link_name(name):
     기록은 그 지점에서 **뒤 파일들까지 통째로** 빠진다.
     """
     try:
-        return _safe_name(name)
+        return _safe_name(_shorten(str(name)))
     except ValueError:
         return "항목"
+
+
+def _shorten(text, limit=None):
+    """이름을 파일시스템이 받는 바이트 수 안으로 줄인다 (확장자는 살린다).
+
+    자르지 않으면 폴더/링크를 만드는 순간 ``OSError(ENAMETOOLONG)`` 가 난다.
+    확장자를 살리는 것은 필터·연결 프로그램이 그것을 보기 때문이다.
+    """
+    if limit is None:
+        limit = _MAX_NAME_BYTES
+    if len(text.encode("utf-8", "surrogateescape")) <= limit:
+        return text
+    stem, ext = os.path.splitext(text)
+    ext_bytes = ext.encode("utf-8", "surrogateescape")
+    if len(ext_bytes) > limit // 2:         # 확장자랄 것이 아니다
+        stem, ext_bytes = text, b""
+        ext = ""
+    room = limit - len(ext_bytes)
+    # 잘린 자리에 걸친 글자는 버린다(반쪽 바이트가 남지 않게)
+    stem = stem.encode("utf-8", "surrogateescape")[:room].decode("utf-8", "ignore")
+    return (stem or "항목") + ext
 
 
 class FavoritesError(RuntimeError):
@@ -169,6 +194,15 @@ def _safe_name(name):
     text = str(name).strip()
     if not text:
         raise ValueError("분류 이름이 비어 있습니다.")
+    # 널 바이트와 지나치게 긴 이름은 여기서 막는다. 그냥 통과시키면 폴더를
+    # 만드는 순간 ValueError("embedded null byte") · OSError(ENAMETOOLONG) 가
+    # 저수준에서 튀어나와, 이 함수가 약속한 "다듬거나 ValueError" 밖의 예외를
+    # 호출자가 받는다.
+    if "\0" in text:
+        raise ValueError("분류 이름에 널 바이트를 쓸 수 없습니다.")
+    if len(text.encode("utf-8", "surrogateescape")) > _MAX_NAME_BYTES:
+        raise ValueError("분류 이름이 너무 깁니다 (%d바이트 이하): %r"
+                         % (_MAX_NAME_BYTES, text[:20] + "…"))
     bad_chars = ["/", "\\", os.sep]
     if os.name == "nt":
         bad_chars += [":", "*", "?", '"', "<", ">", "|"]
@@ -288,6 +322,14 @@ class FavoritesStore:
         # 등록 대상은 사용자가 고른 경로라 죽은 원격 마운트일 수 있다. 평범한
         # exists 는 그런 자리에서 돌아오지 않아 GUI 가 통째로 멈춘다(D 상태).
         if not safety.safe_exists(target):
+            # safe_exists 의 False 는 "없다"가 아니라 **"확인하지 않았다"**
+            # 일 수도 있다(차단 경로 · automount 위 · 죽은 원격). 있는 폴더를
+            # "존재하지 않습니다"라고 하면 사용자는 오타를 찾으러 간다.
+            if not safety.is_reachable(target):
+                raise FavoritesError(
+                    "지금은 확인할 수 없는 자리라 등록하지 않습니다"
+                    " (폴더를 먼저 연 뒤 다시 시도하세요): %s" % path
+                )
             raise FavoritesError("등록할 대상이 존재하지 않습니다: %s" % path)
 
         directory = self.add_category(category)

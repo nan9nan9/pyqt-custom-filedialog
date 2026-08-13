@@ -422,6 +422,15 @@ class FilePathEdit(QWidget):
         """죽은 마운트에서 멈추지 않는 isdir (위젯의 path_timeout 설정을 따른다)."""
         return isdir_check(self._path_timeout)(path)
 
+    def _isfile(self, path):
+        """같은 규칙의 isfile. 드롭에서 "폴더가 아니다"와 "확인 못 했다"를 가른다."""
+        if not path:
+            return False
+        expanded = os.path.expanduser(path)
+        if self._path_timeout is None:
+            return os.path.isfile(expanded)
+        return safety.safe_isfile(expanded, self._path_timeout)
+
     def _remember(self, paths):
         first = paths[0]
         self._history.add(first)
@@ -752,4 +761,6 @@ class FilePathEdit(QWidget):
         mime = event.mimeData()
         if not mime.hasUrls():
             return []
-        return drops.acceptable_paths(mime.urls(), self._mode, self._isdir)
+        return drops.acceptable_paths(
+            mime.urls(), self._mode, self._isdir, self._isfile
+        )

@@ -1073,3 +1073,96 @@ def test_places_options_keeps_recent_max_on_explicit_none(tmp_path):
         assert options.places().recent.max_items == 5
     finally:
         configure_storage(None)
+
+
+def test_recent_max_never_trims_an_app_owned_store(tmp_path):
+    """앱이 직접 넘긴 최근 저장소는 **개수를 건드리지 않는다.**
+
+    ``recent_max`` 는 "우리가 만들 때 쓸 개수"인데 그 값을 남의 인스턴스에도
+    밀어 넣으면 ``set_max_items`` -> ``_evict`` 가 링크를 실제로 지운다.
+    즐겨찾기를 켠 것만으로 공유 목록의 항목이 디스크에서 사라졌다.
+    """
+    from custom_file_dialog import configure_storage
+    from custom_file_dialog.places import PlacesOptions
+
+    configure_storage(str(tmp_path / "저장소"))
+    try:
+        shared = RecentStore(base_dir=str(tmp_path / "공유"), max_items=50)
+        for index in range(12):
+            path = tmp_path / ("f%02d.csv" % index)
+            path.write_text("x")
+            shared.record(str(path))
+        assert len(shared.items()) == 12
+
+        options = PlacesOptions(recent=True, recent_max=3)
+        options.update(recent=shared)               # 공유 목록으로 교체
+        options.update(favorites=True)              # 즐겨찾기만 켠다
+        assert shared.max_items == 50
+        assert len(shared.items()) == 12            # 9개가 사라지지 않는다
+
+        # 우리가 만든 저장소에는 그대로 반영된다
+        options.update(recent=True, recent_max=4)
+        options.update(icon=False)
+        assert options.recent.max_items == 4
+        options.update(recent_max=2)
+        assert options.recent.max_items == 2
+    finally:
+        configure_storage(None)
+
+
+def test_category_names_never_leak_os_errors(tmp_path):
+    """분류·표시 이름 검증이 저수준 예외로 새지 않는다.
+
+    널 바이트는 ``ValueError("embedded null byte")``, 아주 긴 이름은
+    ``OSError(ENAMETOOLONG)`` 로 폴더를 만드는 순간 튀어나왔다 — 이 함수가
+    약속한 "다듬거나 ValueError" 밖의 예외를 호출자가 받는다.
+    """
+    from custom_file_dialog import favorites as favorites_module
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    target = tmp_path / "설계도.csv"
+    target.write_text("x")
+
+    # 판정은 **파일시스템을 만지기 전에** 끝나야 한다 — 저수준 ValueError 나
+    # OSError 가 대신 나면 호출자가 받는 예외 종류가 이름마다 달라진다.
+    for bad in ("널\0바이트", "가" * 500, "a" * 5000):
+        with pytest.raises(ValueError) as caught:
+            favorites_module._safe_name(bad)
+        assert "분류 이름" in str(caught.value), bad
+        with pytest.raises(ValueError):
+            store.add_category(bad)
+    assert store.categories() == []          # 아무것도 만들어지지 않았다
+
+    # 표시 이름은 예외를 던지지 않고 줄여서 받아 준다(확장자는 살린다)
+    link = store.add("설계", str(target), name="가" * 500 + ".csv")
+    assert os.path.basename(link).endswith(".csv")
+    assert len(os.path.basename(link).encode("utf-8")) <= 210
+    assert store.resolve(link) == str(target)
+
+    long_source = tmp_path / ("나" * 80 + ".csv")
+    long_source.write_text("y")
+    link = store.add("설계", str(long_source))         # 이름을 자동으로 따온다
+    assert store.resolve(link) == str(long_source)
+
+
+def test_unverifiable_target_says_so(tmp_path):
+    """확인할 수 없는 자리를 등록하면 "존재하지 않습니다"라고 하지 않는다."""
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    (root / "myaccount" / "proj").mkdir(parents=True)
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+
+    safety.configure(guarded_roots=[str(root)], min_depth=0)
+    try:
+        with pytest.raises(FavoritesError) as caught:
+            store.add("설계", str(root))
+        assert "존재하지 않습니다" not in str(caught.value)
+        assert "확인할 수 없는" in str(caught.value)
+
+        # 진짜 없는 경로는 예전 문구 그대로
+        with pytest.raises(FavoritesError) as caught:
+            store.add("설계", str(tmp_path / "없는파일.csv"))
+        assert "존재하지 않습니다" in str(caught.value)
+    finally:
+        safety.reset()

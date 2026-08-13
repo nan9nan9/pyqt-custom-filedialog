@@ -820,3 +820,44 @@ def test_menus_reject_missing_places(qapp):
     assert FavoritesMenus(dialog, None).install() is False
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_read_only_dialog_cannot_make_folders(qapp, tmp_path):
+    """ReadOnly 로 연 다이얼로그에서 우클릭으로 폴더가 만들어지지 않는다.
+
+    install() 이 Qt 기본 컨텍스트 메뉴를 통째로 떼어 내므로, Qt 가 메뉴를 띄울
+    때마다 하던 "새 폴더" 항목 활성 갱신도 함께 사라졌다.
+    """
+    from qtpy.QtWidgets import QFileDialog, QMenu, QToolButton
+
+    from custom_file_dialog import FavoritesMenus, Places
+
+    try:
+        from qtpy.QtGui import QAction
+    except ImportError:
+        from qtpy.QtWidgets import QAction
+
+    dialog = QFileDialog()
+    dialog.setOptions(
+        QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly
+    )
+    dialog.setDirectory(str(tmp_path))
+    dialog.show()
+    _spin(qapp, 100)
+
+    menus = FavoritesMenus(dialog, Places())
+    assert menus.install()
+
+    menu = QMenu(dialog)
+    menus._add_default_actions(menu, None)
+    new_folder = dialog.findChild(QAction, "qt_new_folder_action")
+    button = dialog.findChild(QToolButton, "newFolderButton")
+    assert new_folder is not None and button is not None
+    assert not button.isEnabled()            # Qt 자신의 기준
+    assert not new_folder.isEnabled()        # 우리 메뉴도 같아야 한다
+    # (비활성이면 메뉴에서 누를 수 없다. QAction.trigger() 는 활성 여부를 보지
+    #  않으므로 실제 클릭을 흉내 내지 못해 여기서 확인하지 않는다.)
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)

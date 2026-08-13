@@ -123,8 +123,13 @@ class RecentStore(FavoritesStore):
 
         - 파일만 기록한다(폴더는 무시).
         - 이미 있으면 지웠다 다시 만들어 맨 앞으로 올린다.
-        - 최근 파일/즐겨찾기 폴더 안의 링크 자체는 기록하지 않는다
-          (원본 경로로 바꿔서 넘겨야 한다).
+        - **이 저장소 안**의 링크는 기록하지 않는다.
+
+        다만 **즐겨찾기 링크는 걸러 내지 못한다** — 이 클래스는 자기 폴더만
+        알기 때문이다. 그대로 주면 :meth:`items` 가 원본 대신 링크 창고
+        경로(``<favorites>/설계/a.csv``)를 돌려준다. 저장소가 여럿인 앱은
+        :meth:`custom_file_dialog.places.Places.record_recent` 를 써라 —
+        거기서 모든 저장소의 링크를 원본으로 풀어서 넘긴다.
         """
         if self.max_items <= 0 or not path:
             return None
