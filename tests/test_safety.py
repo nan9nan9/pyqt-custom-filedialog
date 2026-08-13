@@ -2110,3 +2110,83 @@ def test_automount_point_block_is_explained(qapp, monkeypatch, tmp_path):
     finally:
         safety.clear_cache()
         safety.reset()
+
+
+# automount 는 마운트 표가 여러 형태를 취한다. 이 계열 버그가 반복된 이유가
+# 그중 일부만 보고 판단했기 때문이라, 형태별 기대를 표로 못 박는다.
+_AUTOMOUNT_SHAPES = [
+    # (이름, 마운트 표, 지점, 이미 붙은 하위 이름 또는 None)
+    (
+        "아직 안 붙음",
+        [("/user", "autofs", "auto.user")],
+        "/user",
+        None,
+    ),
+    (
+        "지점 자체가 붙음",
+        [("/user", "autofs", "auto.user"), ("/user", "nfs4", "srv:/export")],
+        "/user",
+        None,
+    ),
+    (
+        "하위가 붙음(실제 홈 패턴)",
+        [("/user", "autofs", "auto.user"), ("/user/me", "nfs4", "srv:/home/me")],
+        "/user",
+        "me",
+    ),
+    (
+        "중첩 automount",
+        [("/net", "autofs", "-hosts"), ("/net/box", "nfs4", "box:/")],
+        "/net",
+        "box",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,table,point,mounted", _AUTOMOUNT_SHAPES, ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_automount_shapes(label, table, point, mounted, monkeypatch):
+    """마운트 표의 형태마다 판정이 제 값을 내는지 표로 확인한다."""
+    from custom_file_dialog import safety
+
+    safety.reset()
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety_mounts, "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1")] + table,
+    )
+    try:
+        point_is_live = any(
+            p == point and fstype not in safety.AUTOMOUNT_FSTYPES
+            for p, fstype, _src in table
+        )
+
+        unknown = point + "/whoever"        # 아직 붙지 않은(있을지도 모르는) 이름
+
+        if point_is_live:
+            # 지점 위에 실제 파일시스템이 겹쳐 올라왔다 = 이미 붙었다.
+            # 그 자리도 그 아래도 평소대로 쓴다.
+            assert safety.may_enter(point), label
+            assert safety.may_open(point + "/"), label
+            assert safety.may_stat(unknown), label
+        else:
+            # 지점 자체는 열 수 없다 — 여는 것이 곧 "아래를 전부 마운트해 보라"다
+            assert not safety.may_enter(point), label
+            assert not safety.may_open(point + "/"), label
+            # 안 붙은 이름은 자동으로 만지지 않는다. 열려면 끝에 구분자를 붙여
+            # "이 폴더를 열겠다"고 밝혀야 한다(그때 하나만 마운트된다).
+            assert not safety.may_stat(unknown), label
+            assert not safety.may_open(unknown), label
+            assert safety.may_open(unknown + "/"), label
+
+        if mounted:
+            # 이미 붙은 하위는 자유롭게 쓴다(그 자리는 autofs 가 아니다)
+            live = "%s/%s" % (point, mounted)
+            assert safety.may_enter(live), label
+            assert safety.may_open(live + "/"), label
+            assert safety.may_open(live + "/a.csv"), label      # 그 안의 파일도
+            assert safety.may_stat(live + "/a.csv"), label      # 자동 확인까지
+    finally:
+        safety.clear_cache()
+        safety.reset()
