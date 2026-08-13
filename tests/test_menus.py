@@ -26,6 +26,8 @@ from custom_file_dialog import (
     to_urls,
     validate_paths,
 )
+from custom_file_dialog import mounts as safety_mounts
+from custom_file_dialog import reach as safety_reach
 from custom_file_dialog import dialog as dialog_module
 from custom_file_dialog import history as history_module
 from custom_file_dialog import hooks as hooks_module
@@ -628,6 +630,7 @@ def test_view_menu_never_stats_automount_paths(qapp, tmp_path, monkeypatch):
 
     from custom_file_dialog import safety
 
+
     store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
     dialog, menus = _menu_dialog(store, str(tmp_path))
 
@@ -635,7 +638,7 @@ def test_view_menu_never_stats_automount_paths(qapp, tmp_path, monkeypatch):
     root.mkdir()
     safety.clear_cache()
     monkeypatch.setattr(
-        safety,
+        safety_mounts,
         "iter_mounts",
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),

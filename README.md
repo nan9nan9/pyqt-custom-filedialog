@@ -1340,6 +1340,12 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | 함수 | 설명 |
 | --- | --- |
 | `safety.configure(timeout, ttl, guarded_roots, min_depth, allow_listing)` | 제한 시간 · 캐시 · 차단 경로 · 자동완성 최소 깊이 · 나열 허용 |
+
+> `safety` 는 세 층(`mounts` → `policy` → `reach`)을 묶은 겉면입니다. 앱은
+> `safety` 만 쓰면 되고, 층을 나눈 기준은 **파일시스템을 언제 만지는가**입니다
+> — `mounts`(마운트 표)와 `policy`(정책 판정)는 문자열만 보므로 절대 멈추지
+> 않고, 실제로 만지는 것은 `reach` 뿐입니다.
+
 | `safety.is_guarded(path)` / `guarded_roots()` | 그 자리 자체를 막았는지 / 막은 목록 |
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |

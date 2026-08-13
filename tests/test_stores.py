@@ -26,6 +26,8 @@ from custom_file_dialog import (
     to_urls,
     validate_paths,
 )
+from custom_file_dialog import mounts as safety_mounts
+from custom_file_dialog import reach as safety_reach
 from custom_file_dialog import dialog as dialog_module
 from custom_file_dialog import history as history_module
 from custom_file_dialog import hooks as hooks_module
@@ -613,13 +615,14 @@ def _hang_stats_on(monkeypatch, prefix, seconds=3.0):
 def _fake_remote_mount(monkeypatch, mountpoint):
     from custom_file_dialog import safety
 
+
     safety.clear_cache()
     monkeypatch.setattr(
-        safety, "iter_mounts",
+        safety_mounts, "iter_mounts",
         lambda refresh=False: [("/", "ext4", "/dev/sda1"),
                                (mountpoint, "nfs4", "srv:/export")],
     )
-    monkeypatch.setattr(safety, "probe_host", lambda *a, **k: True)
+    monkeypatch.setattr(safety_reach, "probe_host", lambda *a, **k: True)
     safety.configure(timeout=0.2)
 
 

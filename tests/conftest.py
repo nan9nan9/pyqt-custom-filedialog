@@ -29,7 +29,10 @@ from qtpy.QtWidgets import QApplication  # noqa: E402
 
 from custom_file_dialog import FavoritesStore, RecentStore  # noqa: E402
 from custom_file_dialog import dialog as dialog_module  # noqa: E402
-from custom_file_dialog import safety  # noqa: E402
+from custom_file_dialog import safety
+from custom_file_dialog import mounts as safety_mounts
+from custom_file_dialog import reach as safety_reach
+  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +69,7 @@ def dead_nfs(monkeypatch, tmp_path):
 
     safety.clear_cache()
     monkeypatch.setattr(
-        safety,
+        safety_mounts,
         "iter_mounts",
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),
@@ -90,7 +93,7 @@ def dead_nfs(monkeypatch, tmp_path):
                 time.sleep(1.0)         # 제한 시간(0.2초)보다 훨씬 길게
         return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(safety, "probe_host", fake_probe)
+    monkeypatch.setattr(safety_reach, "probe_host", fake_probe)
     monkeypatch.setattr(os, "stat", fake_stat)
 
     yield {"mount": mountpoint, "state": state, "safety": safety}

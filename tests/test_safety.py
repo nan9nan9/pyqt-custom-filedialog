@@ -27,6 +27,8 @@ from custom_file_dialog import (
     to_urls,
     validate_paths,
 )
+from custom_file_dialog import mounts as safety_mounts
+from custom_file_dialog import reach as safety_reach
 from custom_file_dialog import dialog as dialog_module
 from custom_file_dialog import history as history_module
 from custom_file_dialog import hooks as hooks_module
@@ -119,6 +121,7 @@ def test_safety_local_paths_are_fast(dead_nfs):
 def test_guarded_root_blocks_itself_only(guarded_root):
     """그 자리 자체만 막고, 하위 경로는 평소대로 쓴다."""
     from custom_file_dialog import safety
+
 
     assert safety.guarded_roots() == [os.path.normpath(guarded_root)]
 
@@ -459,7 +462,7 @@ def test_min_depth_off_installs_nothing(qapp, monkeypatch):
 
     safety.reset()
     # autofs 가 있는 시스템에서는 설정 없이도 걸리므로, "없는 시스템"을 고정한다
-    monkeypatch.setattr(safety, "has_automounts", lambda: False)
+    monkeypatch.setattr(safety_mounts, "has_automounts", lambda: False)
     dialog = QFileDialog()
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     assert hooks_module.guard_dialog(dialog) == []
@@ -493,7 +496,7 @@ def test_guard_dialog_noop_without_guarded_roots(qapp, tmp_path, monkeypatch):
     from custom_file_dialog import guard_dialog, safety
 
     safety.configure(guarded_roots=[])
-    monkeypatch.setattr(safety, "has_automounts", lambda: False)
+    monkeypatch.setattr(safety_mounts, "has_automounts", lambda: False)
     dialog = QFileDialog()
     dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
     dialog.setDirectory(str(tmp_path))
@@ -729,7 +732,7 @@ def test_widget_path_timeout_is_on_by_default(qapp, monkeypatch):
     spawned = []
     real = safety.call_with_timeout
     monkeypatch.setattr(
-        safety,
+        safety_reach,
         "call_with_timeout",
         lambda *a, **k: (spawned.append(a), real(*a, **k))[1],
     )
@@ -784,7 +787,7 @@ def test_mountinfo_unescapes_special_characters(monkeypatch, tmp_path):
         "37 25 0:33 / /mnt/plain rw - nfs4 server:/export rw\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(safety, "MOUNTINFO", str(fake))
+    monkeypatch.setattr(safety_mounts, "MOUNTINFO", str(fake))
     safety.clear_cache()
     try:
         mount = safety.mount_for("/mnt/my share/a.csv")
@@ -837,12 +840,12 @@ def test_probe_port_follows_fstype(monkeypatch, tmp_path):
 
     probed = []
     monkeypatch.setattr(
-        safety, "probe_host", lambda host, port, timeout=None: (
+        safety_reach, "probe_host", lambda host, port, timeout=None: (
             probed.append((host, port)), True)[1]
     )
     stats = []
     monkeypatch.setattr(
-        safety, "call_with_timeout", lambda func, *a, **k: (stats.append(a), (True, None))[1]
+        safety_reach, "call_with_timeout", lambda func, *a, **k: (stats.append(a), (True, None))[1]
     )
 
     assert safety.self_check("/mnt/win", "//winsrv/share", 0.1, fstype="cifs")
@@ -867,7 +870,7 @@ def test_is_reachable_passes_fstype(monkeypatch, tmp_path):
     mountpoint = str(tmp_path / "win")
     os.mkdir(mountpoint)
     monkeypatch.setattr(
-        safety, "iter_mounts",
+        safety_mounts, "iter_mounts",
         lambda refresh=False: [(mountpoint, "cifs", "//winsrv/share")],
     )
     seen = {}
@@ -876,7 +879,7 @@ def test_is_reachable_passes_fstype(monkeypatch, tmp_path):
         seen.update(fstype=fstype, source=source)
         return True
 
-    monkeypatch.setattr(safety, "self_check", fake_self_check)
+    monkeypatch.setattr(safety_reach, "self_check", fake_self_check)
     safety.clear_cache()
     try:
         assert safety.is_reachable(os.path.join(mountpoint, "a.txt"), use_cache=False)
@@ -904,7 +907,7 @@ def test_mountinfo_parser_survives_malformed_lines(monkeypatch, tmp_path):
         "37 25 0:33 / /mnt/short rw - nfs4\n",         # 구분자 뒤가 짧다
         encoding="utf-8",
     )
-    monkeypatch.setattr(safety, "MOUNTINFO", str(fake))
+    monkeypatch.setattr(safety_mounts, "MOUNTINFO", str(fake))
     safety.clear_cache()
     try:
         mounts = safety.iter_mounts(refresh=True)
@@ -957,7 +960,7 @@ def test_automount_autodetected(monkeypatch, tmp_path):
     safety.reset()
     safety.clear_cache()
     monkeypatch.setattr(
-        safety,
+        safety_mounts,
         "iter_mounts",
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),
@@ -998,7 +1001,7 @@ def test_safe_call_never_touches_autofs(monkeypatch, tmp_path):
 
     safety.clear_cache()
     monkeypatch.setattr(
-        safety,
+        safety_mounts,
         "iter_mounts",
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),
@@ -1040,14 +1043,14 @@ def test_hung_mount_spawns_only_one_thread(monkeypatch, tmp_path):
 
     safety.clear_cache()
     monkeypatch.setattr(
-        safety,
+        safety_mounts,
         "iter_mounts",
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),
             (mountpoint, "nfs4", "srv:/export"),
         ],
     )
-    monkeypatch.setattr(safety, "probe_host", lambda *a, **k: True)
+    monkeypatch.setattr(safety_reach, "probe_host", lambda *a, **k: True)
 
     stat_calls = []
     real_stat = os.stat
@@ -1265,7 +1268,7 @@ def test_dialog_start_at_avoids_automount_parent(qapp, monkeypatch, tmp_path):
 
     safety.clear_cache()
     monkeypatch.setattr(
-        safety,
+        safety_mounts,
         "iter_mounts",
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),
@@ -1581,7 +1584,7 @@ def test_safety_forces_qt_dialog_over_native(qapp, guarded_root, monkeypatch):
     # 아무 설정도 없고 autofs 도 없으면 예전처럼 네이티브를 쓴다
     used.clear()
     safety.reset()
-    monkeypatch.setattr(safety, "has_automounts", lambda: False)
+    monkeypatch.setattr(safety_mounts, "has_automounts", lambda: False)
     exec_file_dialog(mode="open_file", native=True)
     assert used == ["native"], used
 
@@ -1733,7 +1736,7 @@ def test_mountinfo_survives_non_utf8_paths(monkeypatch, tmp_path):
         b"36 25 0:32 / /mnt/\xc7\xd1\xb1\xdb rw - cifs //srv/\xc7\xd1\xb1\xdb rw\n"
         b"37 25 0:33 / /mnt/ok rw - nfs4 srv:/e rw\n"
     )
-    monkeypatch.setattr(safety, "MOUNTINFO", str(fake))
+    monkeypatch.setattr(safety_mounts, "MOUNTINFO", str(fake))
     safety.clear_cache()
     try:
         mounts = safety.iter_mounts(refresh=True)
