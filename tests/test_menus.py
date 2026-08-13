@@ -653,7 +653,7 @@ def test_view_menu_never_stats_automount_paths(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(os, "access", counting_access)
     try:
         menu = QMenu()
-        menus._add_default_actions(menu, str(root / "jekai" / "f.csv"))
+        menus._add_default_actions(menu, str(root / "myaccount" / "f.csv"))
         assert not [p for p in touched if p.startswith(str(root))]
 
         # 로컬 경로는 평소대로 확인한다

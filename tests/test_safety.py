@@ -124,14 +124,14 @@ def test_guarded_root_blocks_itself_only(guarded_root):
 
     assert safety.is_guarded(guarded_root)
     assert safety.is_guarded(guarded_root + os.sep)          # 끝의 / 는 무시
-    assert not safety.is_guarded(os.path.join(guarded_root, "jekai"))
+    assert not safety.is_guarded(os.path.join(guarded_root, "myaccount"))
     assert not safety.is_guarded(guarded_root + "s")         # 이름만 비슷한 건 아님
 
     # 접근 판정과 os.path 대체 함수에도 그대로 반영된다
     assert not safety.is_reachable(guarded_root)
-    assert safety.is_reachable(os.path.join(guarded_root, "jekai"))
+    assert safety.is_reachable(os.path.join(guarded_root, "myaccount"))
     assert safety.safe_isdir(guarded_root) is False          # 실제로는 폴더지만 안 만진다
-    assert safety.safe_isdir(os.path.join(guarded_root, "jekai")) is True
+    assert safety.safe_isdir(os.path.join(guarded_root, "myaccount")) is True
 
 
 def test_guarded_root_in_validation(qapp, guarded_root):
@@ -141,7 +141,7 @@ def test_guarded_root_in_validation(qapp, guarded_root):
     edit.set_path(guarded_root)
     assert not edit.is_valid()
 
-    edit.set_path(os.path.join(guarded_root, "jekai"))
+    edit.set_path(os.path.join(guarded_root, "myaccount"))
     assert edit.is_valid()
 
 
@@ -173,7 +173,7 @@ def test_guarded_root_not_listed_by_completer(qapp, guarded_root):
     assert len(os.listdir(guarded_root)) == 3
     assert rows(guarded_root) == 0                   # 3개가 있어도 읽지 않는다
 
-    inner = os.path.join(guarded_root, "jekai")
+    inner = os.path.join(guarded_root, "myaccount")
     assert rows(inner) == len(os.listdir(inner))     # 하위는 정상
 
 
@@ -195,7 +195,7 @@ def test_guarded_model_blocks_listing(qapp, guarded_root):
     assert len(os.listdir(guarded_root)) == 3
     assert rows(guarded_root) == 0                   # 3개가 있어도 읽지 않는다
 
-    inner = os.path.join(guarded_root, "jekai")
+    inner = os.path.join(guarded_root, "myaccount")
     assert rows(inner) == len(os.listdir(inner))     # 하위는 정상
 
     # 판정은 safety 설정을 그대로 따르므로, 해제하면 다시 읽는다
@@ -211,11 +211,11 @@ def test_path_depth(qapp):
     assert safety.path_depth("/") == 0
     assert safety.path_depth("/user") == 1
     assert safety.path_depth("/user/") == 1                  # 끝의 / 는 무시
-    assert safety.path_depth("/user/jekai") == 2
-    assert safety.path_depth("/user/jekai/proj") == 3
+    assert safety.path_depth("/user/myaccount") == 2
+    assert safety.path_depth("/user/myaccount/proj") == 3
     assert safety.path_depth("") == 0
     # 상대 경로는 절대 경로로 편 뒤에 센다
-    assert safety.path_depth("jekai") == safety.path_depth(os.getcwd()) + 1
+    assert safety.path_depth("myaccount") == safety.path_depth(os.getcwd()) + 1
 
 
 def test_min_depth_default_off(qapp):
@@ -238,7 +238,7 @@ def test_min_depth_marks_shallow_paths(shallow_tree):
     assert safety.min_depth() == depth + 1
     assert safety.is_too_shallow(root)                       # 딱 한 단계 모자란다
     assert safety.is_too_shallow(os.path.dirname(root))      # 그 위는 더 얕다
-    assert not safety.is_too_shallow(os.path.join(root, "jekai"))
+    assert not safety.is_too_shallow(os.path.join(root, "myaccount"))
 
     # 나열만 막는 설정이라 경로 자체의 접근 판정은 건드리지 않는다
     assert safety.is_reachable(root)
@@ -246,7 +246,7 @@ def test_min_depth_marks_shallow_paths(shallow_tree):
 
 
 def test_min_depth_blocks_completer_listing(qapp, shallow_tree):
-    """`/user/j` 처럼 쳐도 그 폴더를 읽지 않는다(한 단계 아래는 정상)."""
+    """`/user/my` 처럼 쳐도 그 폴더를 읽지 않는다(한 단계 아래는 정상)."""
     from custom_file_dialog import safety
 
     root, depth = shallow_tree
@@ -266,7 +266,7 @@ def test_min_depth_blocks_completer_listing(qapp, shallow_tree):
     assert len(os.listdir(root)) == 3
     assert rows(root) == 0                                   # 3개가 있어도 읽지 않는다
 
-    inner = os.path.join(root, "jekai")
+    inner = os.path.join(root, "myaccount")
     assert rows(inner) == len(os.listdir(inner))             # 한 단계 아래는 정상
 
 
@@ -289,12 +289,12 @@ def test_min_depth_completion_candidates(qapp, shallow_tree):
         )
 
     safety.reset()
-    assert candidates(os.path.join(root, "j")) == ["jane", "jekai", "joe"]
+    assert candidates(os.path.join(root, "my")) == ["myaccount"]
 
     safety.configure(min_depth=depth + 1)
-    assert candidates(os.path.join(root, "j")) == []
+    assert candidates(os.path.join(root, "my")) == []
     # 한 단계 아래에서는 그대로 완성된다
-    assert candidates(os.path.join(root, "jekai", "p")) == ["proj"]
+    assert candidates(os.path.join(root, "myaccount", "p")) == ["proj"]
 
 
 def test_allow_listing_off_blocks_every_depth(qapp, tmp_path):
@@ -566,7 +566,7 @@ def test_combo_blocker_swallows_guarded_entry(qapp, guarded_root):
 
     from custom_file_dialog.guard import _ItemBlocker
 
-    inner = os.path.join(guarded_root, "jekai")
+    inner = os.path.join(guarded_root, "myaccount")
     dialog, installed = _guarded_dialog_in(qapp, inner)
     combo = dialog.findChild(QComboBox, "lookInCombo")
     blocker = [
@@ -580,7 +580,7 @@ def test_combo_blocker_swallows_guarded_entry(qapp, guarded_root):
     entries = {combo.itemText(i): combo.model().index(i, 0) for i in range(combo.count())}
     combo.hidePopup()
 
-    # 현재 폴더가 /user/jekai 이므로 경로 체인에 /user 가 들어 있다
+    # 현재 폴더가 /user/myaccount 이므로 경로 체인에 /user 가 들어 있다
     guarded = [t for t in entries if os.path.normpath(t) == os.path.normpath(guarded_root)]
     assert guarded, sorted(entries)
 
@@ -619,7 +619,7 @@ def test_accept_blocker_swallows_guarded_path(qapp, guarded_root):
 
     from custom_file_dialog.guard import _AcceptBlocker
 
-    inner = os.path.join(guarded_root, "jekai")
+    inner = os.path.join(guarded_root, "myaccount")
     dialog, installed = _guarded_dialog_in(qapp, inner)
     blocker = [h for h in installed if isinstance(h, _AcceptBlocker)][0]
 
@@ -669,7 +669,7 @@ def test_blockers_survive_deleted_widgets(qapp, guarded_root):
 
     from custom_file_dialog.guard import _AcceptBlocker, _ItemBlocker
 
-    inner = os.path.join(guarded_root, "jekai")
+    inner = os.path.join(guarded_root, "myaccount")
     dialog, installed = _guarded_dialog_in(qapp, inner)
     blockers = [h for h in installed if isinstance(h, (_ItemBlocker, _AcceptBlocker))]
     assert blockers
@@ -922,7 +922,7 @@ def test_may_stat_guarded_parent(guarded_root):
 
     assert not safety.may_stat(os.path.join(guarded_root, "j"))
     # 한 단계 아래(실제로 쓰는 홈)는 평소대로
-    assert safety.may_stat(os.path.join(guarded_root, "jekai", "f.csv"))
+    assert safety.may_stat(os.path.join(guarded_root, "myaccount", "f.csv"))
     # 차단 경로 "자체"의 stat 은 마운트를 부르지 않는다(나열과 다르다)
     assert safety.may_stat(guarded_root)
 
@@ -930,8 +930,8 @@ def test_may_stat_guarded_parent(guarded_root):
 def test_may_stat_min_depth(shallow_tree):
     """깊이가 min_depth 보다 **작거나 같으면** 자동 stat 을 아예 하지 않는다.
 
-    min_depth=2 기준으로 ``/user`` (1) 도 ``/user/je`` (2) 도 디스크를 만지지
-    않고, ``/user/jekai/x`` (3) 부터 평소대로 확인한다.
+    min_depth=2 기준으로 ``/user`` (1) 도 ``/user/my`` (2) 도 디스크를 만지지
+    않고, ``/user/myaccount/x`` (3) 부터 평소대로 확인한다.
     """
     from custom_file_dialog import safety
 
@@ -940,7 +940,7 @@ def test_may_stat_min_depth(shallow_tree):
     assert not safety.may_stat(root)                             # 깊이 < limit
     assert not safety.may_stat(os.path.join(root, "j"))          # 깊이 == limit
     assert not safety.may_stat(os.path.join(root, "je"))         # 깊이 == limit
-    assert safety.may_stat(os.path.join(root, "jekai", "proj"))  # 깊이 > limit
+    assert safety.may_stat(os.path.join(root, "myaccount", "proj"))  # 깊이 > limit
 
 
 def test_automount_autodetected(monkeypatch, tmp_path):
@@ -948,8 +948,8 @@ def test_automount_autodetected(monkeypatch, tmp_path):
     from custom_file_dialog import safety
 
     root = tmp_path / "user"
-    (root / "jekai").mkdir(parents=True)
-    mounted = str(root / "jekai")
+    (root / "myaccount").mkdir(parents=True)
+    mounted = str(root / "myaccount")
 
     safety.reset()
     safety.clear_cache()
@@ -959,7 +959,7 @@ def test_automount_autodetected(monkeypatch, tmp_path):
         lambda refresh=False: [
             ("/", "ext4", "/dev/sda1"),
             (str(root), "autofs", "auto.user"),
-            (mounted, "nfs4", "srv:/export/jekai"),   # 이미 붙은 하위 마운트
+            (mounted, "nfs4", "srv:/export/myaccount"),   # 이미 붙은 하위 마운트
         ],
     )
     try:
@@ -976,7 +976,7 @@ def test_automount_autodetected(monkeypatch, tmp_path):
 
         # 만지는 판정과 safe_* 도 같은 규칙 — 디스크 접근 없이 즉시 False
         assert not safety.is_reachable(str(root / "j"))
-        assert safety.safe_isdir(str(root / "jekai")) is False
+        assert safety.safe_isdir(str(root / "myaccount")) is False
     finally:
         safety.clear_cache()
 
@@ -1099,7 +1099,7 @@ def test_validate_skips_untouchable_paths(monkeypatch, guarded_root):
     assert not [p for p in touched if p.startswith(dangerous)]
 
     # 한 단계 아래는 평소대로 실제 확인한다
-    deep = os.path.join(guarded_root, "jekai", "proj")
+    deep = os.path.join(guarded_root, "myaccount", "proj")
     valid, _reason = validate_paths([deep], mode="directory", must_exist=True)
     assert valid
     assert [p for p in touched if p.startswith(deep)]
@@ -1186,7 +1186,7 @@ from custom_file_dialog import CustomFileDialog, safety
 app = QApplication([])
 root = tempfile.mkdtemp(prefix="cfd-syscall-")
 guard = os.path.join(root, "user")
-os.makedirs(os.path.join(guard, "jekai"))
+os.makedirs(os.path.join(guard, "myaccount"))
 work = os.path.join(root, "work")
 os.makedirs(work)
 
@@ -1251,7 +1251,7 @@ def test_typing_touches_no_guarded_child_at_syscall_level(tmp_path):
 def test_dialog_start_at_avoids_automount_parent(qapp, monkeypatch, tmp_path):
     """안 붙은 automount 하위를 시작 위치로 줘도 automount 뿌리를 열지 않는다.
 
-    ``directory="/user/jekai/f.csv"`` 인데 jekai 가 아직 안 붙어 있으면
+    ``directory="/user/myaccount/f.csv"`` 인데 myaccount 가 아직 안 붙어 있으면
     safe_isdir 가 False 라 부모로 올라가는데, 그 부모(``/user``)를 열면
     나열 = 전부 마운트다. 그때는 시작 위치를 잡지 않는 편이 안전하다.
     """
@@ -1271,7 +1271,7 @@ def test_dialog_start_at_avoids_automount_parent(qapp, monkeypatch, tmp_path):
     )
     try:
         dialog = CustomFileDialog(
-            None, mode="save_file", directory=str(root / "jekai" / "f.csv")
+            None, mode="save_file", directory=str(root / "myaccount" / "f.csv")
         )
         opened = os.path.normpath(dialog.directory().absolutePath())
         assert opened != os.path.normpath(str(root))       # automount 뿌리가 아니다
@@ -1289,21 +1289,21 @@ def test_may_open_blocks_shallow_paths(shallow_tree):
     safety.configure(min_depth=depth + 1)
     assert not safety.may_open(root)                              # 깊이 < limit
     assert not safety.may_open(os.path.join(root, "j"))           # 깊이 == limit
-    assert not safety.may_open(os.path.join(root, "jekai"))       # 이름이 맞아도
-    assert safety.may_open(os.path.join(root, "jekai", "proj"))   # 깊이 > limit
+    assert not safety.may_open(os.path.join(root, "myaccount"))       # 이름이 맞아도
+    assert safety.may_open(os.path.join(root, "myaccount", "proj"))   # 깊이 > limit
 
 
 def test_may_open_trailing_separator_is_explicit(shallow_tree):
     """끝의 구분자('/')는 "이 폴더를 열겠다"는 명시적 표기 — limit 깊이부터 허용.
 
-    "/user/jekai/" 는 열리고 "/user/jekai" 는 막힌다. 더 얕은 "/user/" 는
+    "/user/myaccount/" 는 열리고 "/user/myaccount" 는 막힌다. 더 얕은 "/user/" 는
     구분자를 붙여도 막힌다.
     """
     from custom_file_dialog import safety
 
     root, depth = shallow_tree
     safety.configure(min_depth=depth + 1)
-    assert safety.may_open(os.path.join(root, "jekai") + os.sep)  # 깊이 == limit + '/'
+    assert safety.may_open(os.path.join(root, "myaccount") + os.sep)  # 깊이 == limit + '/'
     assert safety.may_open(os.path.join(root, "j") + os.sep)      # 오타여도 명시면 허용
     assert not safety.may_open(root + os.sep)                     # 깊이 < limit 는 불가
     # 차단 경로는 구분자를 붙여도 막힌다
@@ -1316,14 +1316,14 @@ def test_may_open_blocks_guarded_roots(guarded_root):
     from custom_file_dialog import safety
 
     assert not safety.may_open(guarded_root)
-    assert safety.may_open(os.path.join(guarded_root, "jekai"))
+    assert safety.may_open(os.path.join(guarded_root, "myaccount"))
 
 
 def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):
     """min_depth 만 켜도 얕은 경로는 Enter/열기 버튼으로 확정할 수 없다.
 
     타이핑 자동 확인을 다 막아도, Enter 의 확정은 Qt 가 GUI 스레드에서 입력
-    경로를 stat 한다 — automount 에서는 그 한 번으로 멈춘다("/user/j" Enter).
+    경로를 stat 한다 — automount 에서는 그 한 번으로 멈춘다("/user/my" Enter).
     """
     from qtpy.QtCore import QEvent, Qt
     from qtpy.QtGui import QKeyEvent
@@ -1353,7 +1353,7 @@ def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):
 
     edit.setText(os.path.join(root, "j"))            # 깊이 == min_depth
     assert press_enter() is True
-    edit.setText(os.path.join(root, "jekai"))        # 이름이 맞아도 같은 깊이
+    edit.setText(os.path.join(root, "myaccount"))        # 이름이 맞아도 같은 깊이
     assert press_enter() is True
 
     # 막히면 왜 막혔는지 안내한다 (비모달 — 테스트가 갇히지 않는다)
@@ -1362,10 +1362,10 @@ def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):
     assert os.sep in blocker.notice.text()
 
     # 끝에 구분자를 붙인 명시적 폴더 표기는 같은 깊이라도 열린다
-    edit.setText(os.path.join(root, "jekai") + os.sep)
+    edit.setText(os.path.join(root, "myaccount") + os.sep)
     assert press_enter() is False
 
-    edit.setText(os.path.join(root, "jekai", "proj"))    # 더 깊으면 확정 가능
+    edit.setText(os.path.join(root, "myaccount", "proj"))    # 더 깊으면 확정 가능
     assert press_enter() is False
 
     assert blocker.blocked

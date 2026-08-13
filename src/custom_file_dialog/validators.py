@@ -94,7 +94,7 @@ def _validate_one(path, mode, must_exist, timeout=None):
 
     # 만져 보는 것만으로 automount 가 붙는 자리(부모가 guarded/얕음/autofs)는
     # 존재 확인을 하지 않는다. 키 입력마다 불리는 함수라, 여기서 stat 하면
-    # "/user/j" 처럼 미완성 경로 한 글자마다 마운트 시도가 일어난다. 판정을
+    # "/user/my" 처럼 미완성 경로 한 글자마다 마운트 시도가 일어난다. 판정을
     # 보류하고 유효로 둔다 — 확정 시점의 확인은 다이얼로그/앱 몫이다.
     if not safety.may_stat(expanded):
         return True, ""

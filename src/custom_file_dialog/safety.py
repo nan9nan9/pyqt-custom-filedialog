@@ -20,17 +20,17 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
 마운트되면서 시스템이 주저앉는다. 막는 방법이 두 가지다.
 
 - :func:`configure` 의 ``guarded_roots`` — 위험한 자리를 **이름으로 지목**한다.
-  ``/user`` 는 열지 않고 ``/user/jekai`` 처럼 한 단계라도 아래면 평소대로 쓴다.
+  ``/user`` 는 열지 않고 ``/user/myaccount`` 처럼 한 단계라도 아래면 평소대로 쓴다.
 - :func:`configure` 의 ``min_depth`` — 자동완성이 **얕은 자리는 아예 나열하지
-  않게** 한다. ``2`` 를 주면 ``/user`` (1단계)를 나열하지 않으므로 ``/user/j`` 까지
-  쳐도 조용하고, ``/user/jekai`` (2단계)부터 완성이 살아난다. 위험한 자리를 미리
+  않게** 한다. ``2`` 를 주면 ``/user`` (1단계)를 나열하지 않으므로 ``/user/my`` 까지
+  쳐도 조용하고, ``/user/myaccount`` (2단계)부터 완성이 살아난다. 위험한 자리를 미리
   다 적어 두기 어려울 때 쓰는 그물이다.
 - :func:`configure` 의 ``allow_listing`` — ``False`` 면 **깊이와 무관하게 어떤
   폴더도 읽지 않는다.** 파일이 수만 개인 폴더처럼 깊이로는 가릴 수 없는 자리까지
   막아야 할 때 쓰는 마지막 스위치다.
 
 나열만이 아니라 **한 경로를 만져 보는 것(stat)** 도 automount 아래에서는
-마운트를 부른다. ``/user/j`` 를 stat 하면 automounter 가 ``j`` 라는 이름을
+마운트를 부른다. ``/user/my`` 를 stat 하면 automounter 가 ``j`` 라는 이름을
 마운트하려고 시도한다 — 경로를 한 글자씩 칠 때마다 이 일이 일어나면 그것만으로
 시스템이 주저앉는다. 그래서 "입력 중인 경로를 **자동으로** 만져 봐도 되는가"를
 :func:`may_stat` 하나로 판정한다. 부모 폴더가 ``guarded_roots`` 이거나, 깊이가
@@ -141,14 +141,14 @@ def configure(
         guarded_roots: **그 폴더 자체는 열지 않을** 경로 목록.
             ``/user`` 처럼 아래에 마운트가 잔뜩 달린 자리를 그대로 나열하면
             전부 마운트되면서 시스템이 주저앉는다. 여기에 ``["/user"]`` 를 넣으면
-            ``/user`` 는 "접근 불가"로 보고, ``/user/jekai`` 처럼 **한 단계라도 아래**
+            ``/user`` 는 "접근 불가"로 보고, ``/user/myaccount`` 처럼 **한 단계라도 아래**
             경로는 평소대로 쓴다.
         min_depth: **자동완성이 폴더를 나열할 최소 깊이.** 이보다 얕은 자리는
             나열하지 않아 완성 후보가 뜨지 않는다. 0(기본)이면 제한 없음.
 
             ``/user`` 처럼 아래에 마운트가 잔뜩 달린 자리는 이름을 미리 다 알기
-            어렵다. ``min_depth=2`` 로 두면 ``/user/j`` 까지 쳐도 ``/user`` 를
-            나열하지 않으므로 멈추지 않고, ``/user/jekai/`` 부터 완성이 살아난다.
+            어렵다. ``min_depth=2`` 로 두면 ``/user/my`` 까지 쳐도 ``/user`` 를
+            나열하지 않으므로 멈추지 않고, ``/user/myaccount/`` 부터 완성이 살아난다.
             그 대신 ``/ho`` → ``/home`` 처럼 **얕은 자리의 완성도 함께 없어진다**.
 
             깊이가 이 값보다 **작거나 같은** 경로는 어떤 자동 접근도 하지
@@ -158,9 +158,9 @@ def configure(
             아래에서는 마운트 시도라 그 한 번으로 멈추기 때문이다.
 
             예외 하나 — **끝에 구분자를 붙인 폴더 표기는 명시적 의사**로 보고
-            이 깊이부터 허용한다. ``min_depth=2`` 기준: ``/user/je`` 와
-            ``/user/jekai`` 는 Enter 로 안 열리고(안내 팝업이 뜬다),
-            ``/user/jekai/`` 와 ``/user/jekai/a.csv`` 는 열린다. 다이얼로그에서
+            이 깊이부터 허용한다. ``min_depth=2`` 기준: ``/user/my`` 와
+            ``/user/myaccount`` 는 Enter 로 안 열리고(안내 팝업이 뜬다),
+            ``/user/myaccount/`` 와 ``/user/myaccount/a.csv`` 는 열린다. 다이얼로그에서
             폴더를 **눌러** 들어가는 것은 막지 않는다 — 그쪽까지 막으려면
             ``guarded_roots`` 를 함께 쓴다.
         allow_listing: **자동완성이 폴더 목록을 읽어도 되는지.** ``False`` 면
@@ -216,7 +216,7 @@ def guarded_roots():
 def is_guarded(path):
     """그 경로 **자체**가 열지 말아야 할 자리인지.
 
-    ``guarded_roots`` 에 ``/user`` 를 넣었다면 ``/user`` 는 True, ``/user/jekai``
+    ``guarded_roots`` 에 ``/user`` 를 넣었다면 ``/user`` 는 True, ``/user/myaccount``
     같은 하위 경로는 False 다(하위는 평소대로 쓴다).
     """
     if not path:
@@ -236,7 +236,7 @@ def min_depth():
 def path_depth(path):
     """루트에서부터 센 경로 단계 수.
 
-    ``/`` 는 0, ``/user`` 는 1, ``/user/jekai`` 는 2. 상대 경로와 ``~`` 는 먼저
+    ``/`` 는 0, ``/user`` 는 1, ``/user/myaccount`` 는 2. 상대 경로와 ``~`` 는 먼저
     절대 경로로 편 뒤에 센다. 문자열만 보므로 파일시스템을 건드리지 않는다.
     """
     if not path:
@@ -297,17 +297,17 @@ def may_stat(path):
     """입력 중인 경로를 **자동으로** 만져(stat) 봐도 되는지.
 
     타이핑 도중의 미완성 경로를 키 입력마다 stat 하면, automount 아래에서는
-    글자마다 마운트 시도가 일어난다(``/user/j`` → ``j`` 마운트 시도). 다음이면
+    글자마다 마운트 시도가 일어난다(``/user/my`` → ``j`` 마운트 시도). 다음이면
     False — **디스크를 아예 만지지 않는다** (스레드+타임아웃 확인조차 안 한다).
 
     - 부모 폴더가 ``guarded_roots`` 로 지목된 자리
-    - 깊이가 ``min_depth`` 보다 **작거나 같음** (``min_depth=2`` 면 ``/user/je``
-      까지 금지, ``/user/jekai/x`` 부터 허용)
+    - 깊이가 ``min_depth`` 보다 **작거나 같음** (``min_depth=2`` 면 ``/user/my``
+      까지 금지, ``/user/myaccount/x`` 부터 허용)
     - autofs 마운트 위 (지점 자체든 아직 안 붙은 그 아래든 — 설정 없이 자동)
 
     자동 확인(자동완성 · 키 입력마다의 유효성 표시)에만 쓰는 판정이다. 사용자가
     Enter 나 버튼으로 **확정**하는 쪽은 :func:`may_open` 이 따로 판정한다 —
-    깊은 경로의 의도한 마운트(``/user/jekai/a.csv``)는 확정의 stat 한 번으로
+    깊은 경로의 의도한 마운트(``/user/myaccount/a.csv``)는 확정의 stat 한 번으로
     일어나면 된다.
     """
     if not path:
@@ -325,15 +325,15 @@ def may_open(path):
     """그 경로를 **확정**(Enter · 열기 버튼)해도 되는지.
 
     확정은 Qt 가 GUI 스레드에서 그 경로를 곧바로 stat 하는 일이라, automount
-    아래의 얕은 미완성 경로(``/user/j``)에 Enter 를 치면 자동 확인을 다 막아도
+    아래의 얕은 미완성 경로(``/user/my``)에 Enter 를 치면 자동 확인을 다 막아도
     그 한 번으로 멈춘다. 규칙:
 
     - ``guarded_roots`` 로 지목한 자리 → 항상 False (구분자 여부와 무관)
-    - 깊이가 ``min_depth`` 보다 깊음 → True (``/user/jekai/a.csv``)
+    - 깊이가 ``min_depth`` 보다 깊음 → True (``/user/myaccount/a.csv``)
     - 깊이가 ``min_depth`` **이상**이고 끝에 구분자를 붙인 폴더 표기 → True
-      — ``/user/jekai/`` 는 "이 폴더를 열겠다"는 **명시적 의사**로 본다.
+      — ``/user/myaccount/`` 는 "이 폴더를 열겠다"는 **명시적 의사**로 본다.
       의도한 마운트는 이 확정의 stat 한 번으로 일어난다.
-    - 그 외(구분자 없는 얕은 경로) → False — ``/user/jekai`` 도 ``/user/jeka``
+    - 그 외(구분자 없는 얕은 경로) → False — ``/user/myaccount`` 도 ``/user/myacc``
       도 Enter 로는 안 열린다. 폴더로 가려면 끝에 구분자를 붙인다.
     """
     if not path:

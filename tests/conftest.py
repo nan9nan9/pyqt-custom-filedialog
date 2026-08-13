@@ -104,9 +104,9 @@ def guarded_root(tmp_path):
 
     root = tmp_path / "user"
     root.mkdir()
-    for name in ("jekai", "alice", "bob"):
+    for name in ("myaccount", "alice", "bob"):
         (root / name).mkdir()
-    (root / "jekai" / "proj").mkdir()
+    (root / "myaccount" / "proj").mkdir()
 
     safety.configure(guarded_roots=[str(root)])
     yield str(root)
@@ -125,9 +125,9 @@ def shallow_tree(tmp_path):
 
     root = tmp_path / "user"
     root.mkdir()
-    for name in ("jekai", "jane", "joe"):
+    for name in ("myaccount", "jane", "joe"):
         (root / name).mkdir()
-    (root / "jekai" / "proj").mkdir()
+    (root / "myaccount" / "proj").mkdir()
 
     yield str(root), safety.path_depth(str(root))
     safety.reset()

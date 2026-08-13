@@ -407,7 +407,7 @@ class CustomFileDialog(QFileDialog):
         parent_dir = os.path.dirname(directory)
         # 부모가 차단 경로나 automount 뿌리면 열지 않는다 — 다이얼로그가 그
         # 자리를 나열하는 순간 아래 마운트가 전부 붙는다. (아직 안 붙은
-        # ``/user/jekai/f.csv`` 를 주면 safe_isdir 가 False 라 여기로 온다.)
+        # ``/user/myaccount/f.csv`` 를 주면 safe_isdir 가 False 라 여기로 온다.)
         if parent_dir and not safety.is_guarded(parent_dir) and not safety.on_automount(parent_dir):
             self.setDirectory(parent_dir)
         self.selectFile(os.path.basename(directory))

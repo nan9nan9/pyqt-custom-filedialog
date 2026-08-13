@@ -37,7 +37,7 @@ from custom_file_dialog.history import PathHistory
 
 
 def _guarded_dialog_in(qapp, directory):
-    """차단 경로 안(``/user/jekai``)에서 연 다이얼로그와 설치된 장치들."""
+    """차단 경로 안(``/user/myaccount``)에서 연 다이얼로그와 설치된 장치들."""
     from qtpy.QtWidgets import QFileDialog
 
     from custom_file_dialog import guard_dialog

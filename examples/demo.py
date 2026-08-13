@@ -113,7 +113,7 @@ def build_playground():
 
     # 나열하는 것만으로 주저앉는 자리 흉내 (하위 경로는 멀쩡하다)
     danger = os.path.join(root, "user")
-    for name in ("jekai", "alice", "bob"):
+    for name in ("myaccount", "alice", "bob"):
         os.makedirs(os.path.join(danger, name))
 
     favorites = FavoritesStore(base_dir=os.path.join(root, ".favorites"))
@@ -270,10 +270,10 @@ def build_window(tree, append):
 
 def main():
     app = QApplication(sys.argv)
-    app.setOrganizationName("jekai")
+    app.setOrganizationName("myaccount")
     app.setApplicationName("custom-file-dialog-demo")
     # settings_key 를 쓰는 자리들이 공유할 QSettings 정보
-    configure_settings("jekai", "custom-file-dialog-demo")
+    configure_settings("myaccount", "custom-file-dialog-demo")
 
     tree = build_playground()
 
@@ -304,7 +304,7 @@ def main():
     refresh()
     log.appendPlainText("데모 폴더: %s" % tree["root"])
     log.appendPlainText(
-        "차단 경로 흉내: %s (하위 jekai/alice/bob 은 정상)" % tree["danger"]
+        "차단 경로 흉내: %s (하위 myaccount/alice/bob 은 정상)" % tree["danger"]
     )
     log.appendPlainText("버튼을 눌러 다이얼로그를 열어 보세요.")
 

@@ -5,7 +5,7 @@
 
 - 자동완성 모델을 :class:`GuardedFileSystemModel` 로 갈아 끼운다
 - 파일 이름 칸의 **키 입력마다 도는 자동 경로 확인**을 위험한 자리에서 끈다
-  (:class:`_TypingGuard` — ``/user/j`` 를 치는 순간의 stat 이 곧 마운트 시도다)
+  (:class:`_TypingGuard` — ``/user/my`` 를 치는 순간의 stat 이 곧 마운트 시도다)
 - 파일 목록에서 더블클릭/Enter 로 여는 것을 막는다
 - "Look in" 드롭다운에서 고르는 것을 막는다
 - 파일 이름 칸에 치고 확정하는 것을 막는다
@@ -58,7 +58,7 @@ class GuardedFileSystemModel(QFileSystemModel):
     자식이 없다고 답해서 Qt 가 그 폴더를 읽지 않게 한다. 세 가지를 막는다
     (:func:`~custom_file_dialog.safety.may_list` 가 셋을 한 번에 판정한다).
 
-    - ``guarded_roots`` 로 지목한 자리 (``/user``). 하위 경로(``/user/jekai``)는
+    - ``guarded_roots`` 로 지목한 자리 (``/user``). 하위 경로(``/user/myaccount``)는
       평소대로 동작한다.
     - ``min_depth`` 보다 얕은 자리. 위험한 자리를 미리 다 적어 두기 어려울 때,
       ``/user`` 같은 얕은 곳을 통째로 나열하지 않게 하는 그물이다.
@@ -131,7 +131,7 @@ class _AcceptBlocker(QObject):
 
     ``QDialog.accept()`` 는 Qt 가 C++ 에서 부르므로 가로챌 수 없다. 그 앞 단계인
     **Enter 키와 열기 버튼 클릭**을 삼킨다. accept 는 GUI 스레드에서 입력 경로를
-    곧바로 stat 하므로, automount 아래의 얕은 경로(``/user/j``)는 확정 한 번으로
+    곧바로 stat 하므로, automount 아래의 얕은 경로(``/user/my``)는 확정 한 번으로
     멈춘다 — 무엇을 막을지는 :func:`~custom_file_dialog.safety.may_open`
     (``guarded_roots`` + 깊이 ≤ ``min_depth``)이 정한다.
     """
@@ -232,7 +232,7 @@ class _TypingGuard(QObject):
     Qt 는 글자를 칠 때마다(``textChanged``) 입력된 경로를 만져 본다 —
     ``_q_autoCompleteFileName`` 은 목록에서 맞는 항목을 고르려고,
     ``_q_updateOkButton`` 은 버튼 활성을 정하려고 ``access()``/``stat()`` 을
-    부른다. automount 아래에서는 ``/user/j`` 같은 **미완성 경로를 만지는 것이
+    부른다. automount 아래에서는 ``/user/my`` 같은 **미완성 경로를 만지는 것이
     곧 마운트 시도**라, 한 글자마다 시스템이 주저앉는다. ``guarded_roots`` ·
     ``min_depth`` 는 "나열"만 막으므로 이 통로는 잡지 못한다.
 

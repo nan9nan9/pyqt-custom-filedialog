@@ -295,7 +295,7 @@ def test_safety_config_after_dialog_is_too_late(qapp, tmp_path):
 
     root = tmp_path / "user"
     root.mkdir()
-    (root / "jekai").mkdir()
+    (root / "myaccount").mkdir()
 
     safety.reset()
     try:
