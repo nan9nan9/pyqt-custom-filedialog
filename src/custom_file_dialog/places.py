@@ -16,7 +16,7 @@ import os
 from qtpy.QtCore import QDir, QSettings, QUrl
 
 from .favorites import FavoritesStore
-from .icons import CategoryIconProvider, clock_icon, home_icon
+from .icons import CategoryIconProvider, clock_icon, home_icon, star_icon
 from .recent import RecentStore
 from .util import abspath, to_urls, url_path
 
@@ -124,6 +124,7 @@ class Places:
         }
         self._provider = None
         self._home_icon = None
+        self._category_icons = {}       # id(저장소) -> 아이콘 (처음 쓸 때 그린다)
 
     @classmethod
     def from_options(
@@ -279,7 +280,37 @@ class Places:
             path = abspath(current)
             if path and path != home:
                 marks[path] = (CURRENT_LABEL, None)
+
+        # 분류(★ 즐겨찾기 · 🕘 최근 파일)도 여기서 씌운다. 아이콘 제공자에
+        # 맡기면 QUrlModel 이 파일시스템 통지를 받을 때마다 경로에서 아이콘을
+        # 다시 읽어 폴더 아이콘으로 되돌아간다(모듈 설명 참고).
+        for store in self.stores():
+            icon = self.category_icon(store)
+            if icon is None:
+                continue
+            for url in store.sidebar_urls():
+                path = abspath(url_path(url))
+                if path:
+                    marks[path] = (None, icon)
         return marks
+
+    def category_icon(self, store):
+        """그 저장소의 분류에 씌울 아이콘 (``icon=False`` 면 None).
+
+        즐겨찾기는 별표(또는 ``icon`` 으로 준 QIcon), 최근 파일은 시계.
+        ``QPixmap`` 을 그려야 하므로 처음 쓸 때 만들어 저장소별로 캐시한다.
+        """
+        if not self.icon or store is None:
+            return None
+        key = id(store)
+        if key not in self._category_icons:
+            if store is self.recent:
+                self._category_icons[key] = clock_icon()
+            elif self.icon is not True:
+                self._category_icons[key] = self.icon    # 직접 준 QIcon
+            else:
+                self._category_icons[key] = star_icon()
+        return self._category_icons[key]
 
     # -------------------------------------------------------------- 아이콘
     def home_icon(self):

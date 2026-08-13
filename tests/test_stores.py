@@ -741,14 +741,24 @@ def test_icon_provider_only_inside_stores(qapp, tmp_path):
     dialog.directoryEntered.emit(str(tmp_path))
     assert not isinstance(dialog.iconProvider(), CategoryIconProvider)
 
-    # 사이드바의 분류 아이콘은 폴더를 옮겨도 남는다(등록 시점에 복사되므로)
+    # 사이드바의 분류 아이콘은 제공자와 **무관하게** 유지된다 — 델리게이트가
+    # 그리기 직전에 씌우기 때문이다(제공자에 맡기면 QUrlModel 이 파일시스템
+    # 통지를 받을 때마다 경로에서 다시 읽어 폴더 아이콘으로 되돌아간다)
+    from qtpy.QtWidgets import QStyleOptionViewItem
+
     sidebar = dialog.findChild(QListView, "sidebar")
+    delegate = sidebar.itemDelegate()
     model = sidebar.model()
-    icons = {
-        model.index(r, 0).data(): model.index(r, 0).data(Qt.ItemDataRole.DecorationRole)
-        for r in range(model.rowCount())
-    }
-    assert icons.get("설계") is not None
+    drawn = {}
+    for row in range(model.rowCount()):
+        option = QStyleOptionViewItem()
+        delegate.initStyleOption(option, model.index(row, 0))
+        drawn[option.text] = option.icon
+    star = store.category_dir("설계")
+    assert drawn.get("설계") is not None
+    assert drawn["설계"].availableSizes() == (
+        places_module.Places(favorites=store).category_icon(store).availableSizes()
+    ), star
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)

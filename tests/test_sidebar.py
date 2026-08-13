@@ -335,8 +335,11 @@ def test_sidebar_marks_home_and_current(qapp, tmp_path):
     places = Places(favorites=favorites)
 
     here = str(tmp_path)
+    category = favorites.category_dir("설계")
     marks = places.sidebar_marks(here)
-    assert set(marks) == {QDir.homePath(), here}
+    # 홈 · 현재 위치 · 분류(별표) 세 자리를 손댄다
+    assert set(marks) == {QDir.homePath(), here, category}
+    assert marks[category] == (None, places.category_icon(favorites))
 
     home_label, home_mark = marks[QDir.homePath()]
     assert home_label is None                    # 이름은 Qt 가 붙인 그대로 둔다
@@ -353,8 +356,9 @@ def test_sidebar_marks_skip_home_when_current(qapp, tmp_path):
     design, _report, _output = _make_tree(tmp_path)
     favorites.add("설계", design)
 
-    marks = Places(favorites=favorites).sidebar_marks(QDir.homePath())
-    assert set(marks) == {QDir.homePath()}
+    places = Places(favorites=favorites)
+    marks = places.sidebar_marks(QDir.homePath())
+    assert set(marks) == {QDir.homePath(), favorites.category_dir("설계")}
     assert marks[QDir.homePath()][0] is None     # "현재 위치"로 부르지 않는다
 
 
@@ -365,11 +369,13 @@ def test_sidebar_marks_respect_options(qapp, tmp_path):
     favorites.add("설계", design)
     here = str(tmp_path)
 
+    category = favorites.category_dir("설계")
+
     # 기준 목록을 직접 준 경우엔 "현재 위치" 항목을 붙이지 않았으므로 이름도 없다
     given = Places(favorites=favorites, sidebar_urls=["~", here])
-    assert set(given.sidebar_marks(here)) == {QDir.homePath()}
+    assert set(given.sidebar_marks(here)) == {QDir.homePath(), category}
 
-    # icon=False 면 홈도 Qt 기본 폴더 아이콘 그대로
+    # icon=False 면 홈도 분류도 Qt 기본 폴더 아이콘 그대로
     plain = Places(favorites=favorites, icon=False)
     assert set(plain.sidebar_marks(here)) == {here}
 
@@ -479,3 +485,65 @@ def test_clock_icon(qapp):
     )
     assert image.pixelColor(0, 0).alpha() == 0
 
+
+
+def test_sidebar_category_icons_survive_provider_swap(qapp, tmp_path):
+    """분류(★·🕘) 아이콘이 **처음부터** 보이고, 아이콘 제공자를 바꿔도 유지된다.
+
+    제공자에 맡기면 QUrlModel 이 파일시스템 통지를 받을 때마다 경로에서
+    아이콘을 다시 읽어 **폴더 아이콘으로 되돌아간다**. 실제로 다이얼로그를
+    열면 최근 파일·북마크가 폴더 아이콘이었다가, 그 폴더를 클릭해 제공자가
+    걸리는 순간 별표·시계로 바뀌는 것이 보였다.
+    """
+    from qtpy.QtWidgets import QListView, QStyleOptionViewItem
+
+    from custom_file_dialog import CustomFileDialog, FavoritesStore, RecentStore
+
+    work = tmp_path / "작업"
+    work.mkdir()
+    design = work / "도면.csv"
+    design.write_text("x")
+    favorites = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    favorites.add("설계", str(design))
+    recent = RecentStore(base_dir=str(tmp_path / "rec"))
+    recent.record(str(design))
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(work),
+        favorites=favorites, recent=recent,
+    )
+    dialog.show()
+    _spin(qapp, 400)
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    delegate = sidebar.itemDelegate()
+    model = sidebar.model()
+
+    def drawn_sizes():
+        result = {}
+        for row in range(model.rowCount()):
+            option = QStyleOptionViewItem()
+            delegate.initStyleOption(option, model.index(row, 0))
+            result[option.text] = (
+                option.icon.availableSizes() if option.icon else []
+            )
+        return result
+
+    places = dialog.places()
+    star = places.category_icon(places.favorites_store()).availableSizes()
+    clock = places.category_icon(places.recent).availableSizes()
+
+    first = drawn_sizes()
+    assert first.get("설계") == star, first          # 열자마자 별표
+    assert first.get("최근 파일") == clock, first     # 열자마자 시계
+
+    # 저장소 폴더로 들어가 제공자가 바뀌어도 그대로다
+    category = favorites.category_dir("설계")
+    dialog.setDirectory(category)
+    dialog.directoryEntered.emit(category)
+    _spin(qapp, 200)
+    assert drawn_sizes().get("설계") == star
+    assert drawn_sizes().get("최근 파일") == clock
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
