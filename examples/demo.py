@@ -79,9 +79,14 @@ from custom_file_dialog import (  # noqa: E402
     FavoritesStore,
     RecentStore,
     configure_settings,
+    configure_storage,
     last_dir,
     safety,
 )
+
+# 즐겨찾기·최근 파일이 들어갈 뿌리 — 실제 앱처럼 ~/.config 아래를 쓴다.
+# 데모 데이터는 임시 폴더를 가리키므로 닫을 때 뿌리째 지운다.
+DEMO_STORAGE = os.path.expanduser("~/.config/custom-file-dialog-demo")
 
 # 버튼 하나 = 모드 하나. settings_key 를 따로 주어 각자 시작 위치를 기억한다.
 MODES = [
@@ -116,8 +121,12 @@ def build_playground():
     for name in ("myaccount", "alice", "bob"):
         os.makedirs(os.path.join(danger, name))
 
-    favorites = FavoritesStore(base_dir=os.path.join(root, ".favorites"))
-    recent = RecentStore(base_dir=os.path.join(root, ".recent"), max_items=10)
+    # 지난 실행이 비정상 종료로 남긴 데모 저장소가 있으면 비우고 시작한다
+    # (데모 항목은 그 실행의 임시 폴더를 가리키므로 남겨 둘 값어치가 없다)
+    shutil.rmtree(DEMO_STORAGE, ignore_errors=True)
+    configure_storage(DEMO_STORAGE)
+    favorites = FavoritesStore()            # -> <DEMO_STORAGE>/favorites
+    recent = RecentStore(max_items=10)      # -> <DEMO_STORAGE>/recent
 
     # 처음부터 뭔가 들어 있어야 사이드바를 바로 확인할 수 있다
     favorites.add("설계", os.path.join(work, "설계", "도면.csv"))
@@ -303,6 +312,7 @@ def main():
     apply_safety()
     refresh()
     log.appendPlainText("데모 폴더: %s" % tree["root"])
+    log.appendPlainText("즐겨찾기·최근 파일 저장소: %s" % DEMO_STORAGE)
     log.appendPlainText(
         "차단 경로 흉내: %s (하위 myaccount/alice/bob 은 정상)" % tree["danger"]
     )
@@ -311,6 +321,9 @@ def main():
     def cleanup():
         safety.reset()
         shutil.rmtree(tree["root"], ignore_errors=True)
+        # 데모 항목은 지워진 임시 폴더를 가리키므로 저장소도 함께 지운다
+        shutil.rmtree(DEMO_STORAGE, ignore_errors=True)
+        configure_storage(None)
 
     app.aboutToQuit.connect(cleanup)
 
