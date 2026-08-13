@@ -964,3 +964,34 @@ def test_record_all_keeps_going_after_a_bad_name(tmp_path):
     links = recent.record_all([first, str(odd), last])
     assert len(links) == 3, links
     assert set(recent.items()) == {first, str(odd), last}
+
+
+def test_existing_recent_dir_is_kept_after_rule_change(tmp_path):
+    """규칙이 바뀌어도 **이미 쌓인** 최근 목록은 계속 쓴다.
+
+    configure_favorites 만 쓰던 앱은 그동안 "즐겨찾기 폴더의 부모/recent" 를
+    써 왔다. 새 규칙(저장소 뿌리 아래)만 보면 그 목록이 하루아침에 빈 것처럼
+    보이고, 옛 폴더는 고아가 된다.
+    """
+    from custom_file_dialog import configure_favorites, configure_storage
+    from custom_file_dialog.recent import default_recent_dir, legacy_recent_dir
+
+    favorites_dir = tmp_path / "앱데이터" / "favorites"
+    favorites_dir.mkdir(parents=True)
+    try:
+        configure_storage(str(tmp_path / "뿌리"))
+        configure_favorites(str(favorites_dir))
+
+        # 옛 자리에 목록이 없으면 새 규칙대로
+        assert default_recent_dir() == os.path.join(
+            os.path.normpath(str(tmp_path / "뿌리")), "recent"
+        )
+
+        # 옛 자리에 이미 쌓여 있으면 그것을 계속 쓴다
+        old_dir = legacy_recent_dir()
+        os.makedirs(old_dir)
+        assert default_recent_dir() == old_dir
+        assert RecentStore().base_dir == os.path.normpath(old_dir)
+    finally:
+        configure_favorites(None)
+        configure_storage(None)

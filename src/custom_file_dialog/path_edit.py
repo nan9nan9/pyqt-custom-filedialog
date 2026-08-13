@@ -586,13 +586,25 @@ class FilePathEdit(QWidget):
         urls = self._options.sidebar_urls
         return list(urls) if urls is not None else None
 
+    def _current_dir_now(self):
+        """지금 열면 다이얼로그가 실제로 **서 있을 폴더**.
+
+        저장 모드에서는 시작 위치로 파일 경로가 나온다(다이얼로그가 그 이름을
+        미리 채우도록). 사이드바의 "현재 위치"는 폴더라야 하므로 그 경우
+        상위 폴더로 바꾼다 — 다이얼로그가 실제로 하는 것과 같다.
+        """
+        start = self._start_dir_now()
+        if start and not self._isdir(start):
+            return os.path.dirname(start) or start
+        return start
+
     def effective_sidebar_urls(self):
         """지금 열면 사이드바에 실제로 들어갈 목록(홈 · 현재 위치 · 최근 · 북마크).
 
         "현재 위치"는 열리는 시점에 정해지므로, 지금 열었을 때의 시작 폴더를
         기준으로 계산한다.
         """
-        urls = self._places().sidebar_urls(self._start_dir_now())
+        urls = self._places().sidebar_urls(self._current_dir_now())
         return list(urls) if urls is not None else None
 
     def effective_sidebar_marks(self):
@@ -603,7 +615,7 @@ class FilePathEdit(QWidget):
         계산하므로 두 결과는 늘 짝이 맞는다
         (:meth:`~custom_file_dialog.places.Places.sidebar_marks` 참고).
         """
-        return self._places().sidebar_marks(self._start_dir_now())
+        return self._places().sidebar_marks(self._current_dir_now())
 
     def _start_dir_now(self):
         """지금 browse() 하면 다이얼로그가 열릴 폴더."""

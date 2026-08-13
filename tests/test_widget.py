@@ -426,3 +426,29 @@ def test_set_mode_trims_paths_when_leaving_multi(qapp):
     edit.set_mode("open_file")
     assert edit.paths() == ["/tmp/a.txt"]
     assert edit.path() == "/tmp/a.txt"
+
+
+def test_effective_sidebar_shows_a_folder_in_save_mode(qapp, tmp_path):
+    """저장 모드에서도 "현재 위치" 는 **폴더**다(파일이 아니라).
+
+    저장 모드의 시작 위치는 파일 경로다(다이얼로그가 이름을 미리 채우도록).
+    그것을 그대로 사이드바 조회에 넘겨, 파일이 항목으로 나오고 "현재 위치"
+    라는 이름까지 붙었다 — 실제 다이얼로그는 부모 폴더를 쓴다.
+    """
+    from custom_file_dialog import FavoritesStore
+
+    target = tmp_path / "결과.csv"
+    target.write_text("x")
+    # 사이드바를 손대는 구성이라야 표시 목록이 나온다(저장소가 없으면 그대로 둔다)
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    store.add("설계", str(target))
+
+    edit = FilePathEdit(mode="save_file", favorites=store)
+    edit.set_path(str(target))
+
+    marks = edit.effective_sidebar_marks()
+    assert os.path.normpath(str(tmp_path)) in marks         # 폴더가 "현재 위치"
+    assert os.path.normpath(str(target)) not in marks       # 파일은 아니다
+
+    urls = [u.toLocalFile() for u in edit.effective_sidebar_urls()]
+    assert os.path.normpath(str(target)) not in [os.path.normpath(u) for u in urls]
