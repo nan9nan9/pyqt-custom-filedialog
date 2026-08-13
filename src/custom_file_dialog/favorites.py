@@ -255,6 +255,11 @@ class FavoritesStore:
         돌려준다. 이름만 겹치고 대상이 다르면 ``이름 (2)`` 처럼 번호를 붙인다.
         """
         target = abspath(path)
+        # 저장소 안(분류 폴더 · 그 안의 링크 · 뿌리)은 등록하지 않는다. 링크
+        # 창고를 가리키는 링크가 생겨, 들어가면 원본이 아니라 창고를 헤매게
+        # 된다(분류 안의 분류처럼 순환도 만들어진다).
+        if self._is_inside(target):
+            raise FavoritesError("즐겨찾기 폴더 안의 항목은 등록할 수 없습니다: %s" % path)
         # 등록 대상은 사용자가 고른 경로라 죽은 원격 마운트일 수 있다. 평범한
         # exists 는 그런 자리에서 돌아오지 않아 GUI 가 통째로 멈춘다(D 상태).
         if not safety.safe_exists(target):

@@ -663,3 +663,32 @@ def test_view_menu_never_stats_automount_paths(qapp, tmp_path, monkeypatch):
     finally:
         safety.clear_cache()
     dialog.close()
+
+
+def test_view_menu_hides_add_inside_stores(qapp, tmp_path):
+    """저장소 안(분류 폴더 · 최근 파일)에서는 "즐겨찾기에 추가" 를 띄우지 않는다."""
+    from qtpy.QtWidgets import QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"))
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+    recent.record(design)
+
+    # 저장소 뿌리에서 분류 폴더를 우클릭한 상황
+    dialog, menus = _menu_dialog([store, recent], store.base_dir)
+    dialog.show()
+    _spin(qapp, 400)
+
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+    rows = {model.index(r, 0, root).data(): model.index(r, 0, root)
+            for r in range(model.rowCount(root))}
+    assert "설계" in rows, sorted(rows)
+
+    _path, menu = _view_menu(menus, tree, rows["설계"])
+    assert _submenu_of(menu) is None                  # 추가 메뉴가 없다
+    # 코드에서 직접 불러도 막힌다
+    assert not menus.add_to_favorites(store.category_dir("설계"), "보고서")
+    assert store.categories() == ["설계"]
+    dialog.close()

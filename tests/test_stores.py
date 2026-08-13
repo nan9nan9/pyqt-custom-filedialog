@@ -688,3 +688,20 @@ def test_resolve_never_follows_dead_target(tmp_path, monkeypatch):
         inner_target, "안쪽", "a.csv"
     )
     assert time.time() - start < 2.5
+
+
+def test_favorites_reject_store_internal_paths(tmp_path):
+    """저장소 안 항목은 즐겨찾기에 등록되지 않는다(링크 창고 순환 방지).
+
+    저장소 자신·분류 폴더·분류 안의 링크를 등록하면 "링크를 가리키는 링크"가
+    생겨, 들어가도 원본이 아니라 창고를 헤매게 된다.
+    """
+    design = _touch(tmp_path, "설계도.csv")
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    link = store.add("설계", design)                 # 정상 등록은 그대로 된다
+    category = store.category_dir("설계")
+
+    for inside in (store.base_dir, category, link):
+        with pytest.raises(FavoritesError):
+            store.add("보고서", inside)
+    assert store.categories() == ["설계"]            # 분류가 새로 생기지도 않는다

@@ -211,8 +211,14 @@ class FavoritesMenus(QObject):
                 )
             )
             menu.addSeparator()
-        elif path and self._places.favorites_store() is not None:
-            # 1b) 그 밖의 파일·폴더 -> 즐겨찾기에 추가
+        elif (
+            path
+            and self._places.favorites_store() is not None
+            and not self._places.is_inside(path)
+        ):
+            # 1b) 그 밖의 파일·폴더 -> 즐겨찾기에 추가.
+            #     저장소 안(분류 폴더 · 최근 파일 폴더)은 뺀다 — 링크 창고를
+            #     가리키는 링크가 생겨 봐야 원본으로 못 간다.
             self._add_favorite_submenu(menu, path)
             menu.addSeparator()
 
@@ -293,9 +299,13 @@ class FavoritesMenus(QObject):
         return target
 
     def add_to_favorites(self, path, category=None):
-        """경로를 즐겨찾기에 등록한다. ``category`` 가 None 이면 새 분류를 묻는다."""
+        """경로를 즐겨찾기에 등록한다. ``category`` 가 None 이면 새 분류를 묻는다.
+
+        저장소 안(분류 폴더 · 최근 파일 폴더)의 경로는 등록하지 않는다 —
+        메뉴에 항목을 띄우지 않지만, 코드에서 직접 부를 때도 막는다.
+        """
         store = self._places.favorites_store()
-        if store is None or not path:
+        if store is None or not path or self._places.is_inside(path):
             return False
 
         if category is None:
