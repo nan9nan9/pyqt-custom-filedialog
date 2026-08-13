@@ -44,6 +44,16 @@ _CONFIGURED_STORAGE_DIR = None
 INDEX_FILENAME = ".index.json"
 
 
+def _looks_like_path(text):
+    """이름이 아니라 **경로**로 준 것인지 — 구분자가 있거나 ``~`` 로 시작한다."""
+    return (
+        os.sep in text
+        or "/" in text
+        or text.startswith("~")
+        or os.path.isabs(text)
+    )
+
+
 class FavoritesError(RuntimeError):
     """즐겨찾기 링크를 만들지 못했을 때 발생한다."""
 
@@ -301,7 +311,10 @@ class FavoritesStore:
         # 지울 수 있다. 이름으로 찾지 못했을 때만 경로로 해석한다(add 는 상대
         # 경로를 받아 주므로 remove 도 받아야 대칭이다).
         matched = [link for name, link in entries if name == text]
-        if not matched:
+        if not matched and _looks_like_path(text):
+            # **경로처럼 생겼을 때만** 편다. 그냥 이름을 폈다가는 현재 작업
+            # 디렉터리 기준으로 해석되어, 이름이 안 맞는데 우연히 그곳을
+            # 가리키는 다른 항목이 지워진다(링크 이름에는 구분자가 못 들어간다).
             wanted = abspath(text)
             matched = [
                 link

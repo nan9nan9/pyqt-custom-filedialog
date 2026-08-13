@@ -1984,10 +1984,10 @@ def test_every_guard_uses_a_shared_decision():
     for raw in ("guarded_roots()", "path_depth(", "is_too_shallow("):
         assert raw not in source, "guard 가 설정을 직접 본다: %s" % raw
 
-    # min_depth() 는 딱 한 군데, **안내 문구에 단계 수를 적을 때만** 쓴다
-    assert source.count("min_depth()") == 1, "min_depth 를 판단에 쓰고 있다"
+    # min_depth() 는 **안내 문구를 고를 때만** 쓴다 — 무엇을 막을지 판단하는
+    # 데 쓰면 규칙이 갈라진다. 그래서 _explain 안에만 있어야 한다.
     notice = inspect.getsource(guard._AcceptBlocker._explain)
-    assert "min_depth()" in notice
+    assert source.count("min_depth()") == notice.count("min_depth()") > 0
 
     # listing_allowed() 도 한 군데뿐이다 — 자동완성 모델의 **뿌리**(경로가 없어
     # may_list 로 물을 수 없는 자리)를 처리할 때만 쓴다.
@@ -2187,6 +2187,75 @@ def test_automount_shapes(label, table, point, mounted, monkeypatch):
             assert safety.may_open(live + "/"), label
             assert safety.may_open(live + "/a.csv"), label      # 그 안의 파일도
             assert safety.may_stat(live + "/a.csv"), label      # 자동 확인까지
+    finally:
+        safety.clear_cache()
+        safety.reset()
+
+
+def test_blocked_paths_always_explain_and_advice_works(qapp, monkeypatch, tmp_path):
+    """막을 때는 **언제나** 이유를 알려 주고, 알려 준 대로 하면 실제로 열린다.
+
+    예전에는 (1) autofs 만 있고 설정이 없으면 안내가 통째로 빠져 Enter 가
+    먹지 않는 것처럼 보였고, (2) 안내의 예시가 문자열 조립 실수로 열 수 없는
+    경로를 알려 주기도 했다. 열기 버튼은 활성 상태라 사용자는 이유를 못 듣고
+    눌러도 아무 일이 없었다.
+    """
+    from qtpy.QtCore import QEvent, Qt
+    from qtpy.QtGui import QKeyEvent
+    from qtpy.QtWidgets import QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker
+
+    root = tmp_path / "user"
+    (root / "me").mkdir(parents=True)
+    work = tmp_path / "작업"
+    work.mkdir()
+
+    safety.reset()                      # 설정 없음 = min_depth 0 (그 조합이 문제였다)
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety_mounts, "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (str(root), "autofs", "auto.user")],
+    )
+    try:
+        dialog = QFileDialog()
+        dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+        dialog.setDirectory(str(work))
+        dialog.show()
+        _spin(qapp, 200)
+        blocker = [h for h in guard_dialog(dialog) if isinstance(h, _AcceptBlocker)][0]
+        edit = dialog.findChild(QLineEdit, "fileNameEdit")
+
+        def press(text):
+            edit.setText(text)
+            event = QKeyEvent(
+                QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+            )
+            swallowed = blocker.eventFilter(edit, event)
+            _spin(qapp, 50)
+            return swallowed, (blocker.notice.text() if blocker.notice else "")
+
+        # 막히는 네 자리 모두 안내가 뜬다
+        for text in (str(root), str(root) + os.sep,
+                     os.path.join(str(root), "me"),
+                     os.path.join(str(root), "me", "a.csv")):
+            swallowed, body = press(text)
+            assert swallowed is True, text
+            assert blocker.notice.isVisible(), text
+            assert body.strip(), text
+
+            # 안내에 예시가 있으면 **그대로 하면 실제로 열려야** 한다
+            for line in body.split("\n"):
+                for token in line.replace("(예:", "예)").split("예)")[1:]:
+                    example = token.strip().rstrip(").").strip()
+                    if example and "이름" not in example:
+                        assert safety.may_open(example), (text, example)
+
+        dialog.done(0)
+        dialog.deleteLater()
+        _spin(qapp, 50)
     finally:
         safety.clear_cache()
         safety.reset()

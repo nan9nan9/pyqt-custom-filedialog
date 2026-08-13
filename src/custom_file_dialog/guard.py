@@ -243,40 +243,65 @@ class _AcceptBlocker(_Blocker):
         self._explain(path)
 
     def _explain(self, path):
-        """왜 안 열리는지 안내한다 — min_depth 규칙에 걸렸을 때만.
+        """왜 안 열리는지 안내한다 — **막은 이유마다 다른 말로.**
 
-        지목해서 막은 자리(``guarded_roots``)는 기존처럼 조용히 삼킨다.
+        지목해서 막은 자리(``guarded_roots``)는 조용히 삼킨다. 앱이 의도적으로
+        가린 자리라 사용자에게 설명할 것이 없다.
+
         모달 exec 는 쓰지 않는다 — Enter 를 연타해도 확인 버튼에 갇히지 않게
-        비모달로 띄우고, 이미 떠 있으면 내용만 갱신한다.
+        비모달로 띄우고, 이미 떠 있으면 내용과 제목만 갈아 끼운다.
         """
         if safety.is_guarded(path):
             return
 
+        opener = path + os.sep
         if safety.is_automount_point(path):
-            # 그 자리를 여는 것은 "아래 이름을 전부 마운트해 보라"는 뜻이다.
-            # 여기서는 구분자를 붙여도 열 수 없으므로 다른 안내가 필요하다.
+            # 그 자리를 여는 것은 "아래 이름을 전부 마운트해 보라"는 뜻이라,
+            # 구분자를 붙여도 열 수 없다. 한 단계 아래를 지정하게 안내한다.
+            title = "자동 마운트 지점입니다"
             lines = [
                 "이 자리는 자동 마운트 지점이라 통째로 열지 않습니다.",
                 "그 아래의 폴더를 지정해 주세요 (예: %s)."
-                % os.path.join(path, "이름") + os.sep,
+                % (os.path.join(path, "이름") + os.sep),
+            ]
+        elif safety.on_automount(path):
+            # 자동 마운트 **아래**라 이름만으로는 열지 않는다. 먼저 열어야 할
+            # 폴더(마운트 지점 바로 아래 한 단계)를 짚어 준다 — 그 폴더를 열면
+            # 그것 하나만 붙고, 그 뒤로는 평소대로 쓸 수 있다.
+            title = "먼저 폴더를 열어 주세요"
+            lines = [
+                "자동 마운트 아래라 경로만으로는 열지 않습니다.",
+                "폴더를 먼저 열면(끝에 '%s') 그 안은 평소대로 쓸 수 있습니다."
+                % os.sep,
+            ]
+            step = _first_step_under_automount(path)
+            if step and safety.may_open(step):
+                lines.append("예) %s" % step)
+        elif safety.may_open(opener):
+            # 깊이 때문에 막혔지만 끝에 구분자만 붙이면 열린다
+            title = "폴더를 열려면 끝에 '%s' 를 붙이세요" % os.sep
+            limit = safety.min_depth()
+            lines = [
+                "%d단계 이상의 경로여야 자동으로 열립니다." % limit,
+                "예) %s" % opener,
             ]
         else:
+            # 구분자를 붙여도 안 되는 자리 — 더 깊은 경로가 필요하다
             limit = safety.min_depth()
             if limit <= 0:
-                return
+                return          # 막을 이유가 없는데 불렸다면 조용히 넘어간다
+            title = "경로가 너무 얕습니다"
             lines = [
                 "이 깊이의 경로는 자동으로 열지 않습니다 (automount 보호).",
                 "%d단계 이상의 경로를 입력하고, 폴더를 열려면 끝에 '%s' 를 붙이세요."
                 % (limit, os.sep),
             ]
-            example = path + os.sep
-            if safety.may_open(example):
-                lines.append("예) %s" % example)
+
         if self.notice is None:
             self.notice = QMessageBox(self._dialog)
             self.notice.setIcon(QMessageBox.Icon.Warning)
-            self.notice.setWindowTitle("경로가 너무 얕습니다")
             self.notice.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self.notice.setWindowTitle(title)
         self.notice.setText("\n".join(lines))
         self.notice.show()
         self.notice.raise_()
@@ -298,6 +323,26 @@ def _split_typed(text):
         return [text]
     parts = text.split('"')
     return [p for index, p in enumerate(parts) if index % 2 == 1 and p.strip()]
+
+
+def _first_step_under_automount(path):
+    """automount 지점 **바로 아래 한 단계**를 끝에 구분자를 붙여 돌려준다.
+
+    ``/user`` 가 autofs 일 때 ``/user/me/a.csv`` 를 주면 ``/user/me/`` 를
+    돌려준다 — 그 폴더를 열면 하나만 마운트되고, 그 뒤로는 평소대로 쓸 수 있다.
+    자리를 못 찾으면 None.
+    """
+    mount = safety.mount_for(path)
+    if not mount:
+        return None
+    point = os.path.normpath(mount[0])
+    absolute = abspath(path) or ""
+    if not absolute.startswith(point.rstrip(os.sep) + os.sep):
+        return None
+    first = os.path.relpath(absolute, point).split(os.sep)[0]
+    if not first or first == "..":
+        return None
+    return os.path.join(point, first) + os.sep
 
 
 class _TypingGuard(QObject):
