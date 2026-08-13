@@ -103,8 +103,10 @@ def split_patterns(filter_entry):
 def suffix_of(filter_entry):
     """필터 항목의 대표 확장자를 반환한다 (``"이미지 (*.png ...)"`` -> ``"png"``).
 
-    ``*`` 처럼 확장자를 특정할 수 없으면 None 을 반환한다.
-    저장 모드에서 사용자가 확장자를 빼고 입력했을 때 붙여 줄 값이다.
+    **확장자 패턴(**\ ``*.ext``\ **)일 때만** 값을 준다. ``*`` 는 물론
+    ``*lib``/``*_corner`` (접미사) · ``lib_*`` (접두사) 같은 패턴도 None 이다 —
+    저장 모드에서 붙여 줄 "확장자"가 아니어서, 붙이면 ``foo._corner`` 처럼
+    필터에도 안 걸리는 이름이 되기 때문이다.
     """
     for pattern in split_patterns(filter_entry):
         suffix = suffix_of_pattern(pattern)
@@ -114,9 +116,15 @@ def suffix_of(filter_entry):
 
 
 def suffix_of_pattern(pattern):
-    """``"*.tar.gz"`` -> ``"tar.gz"``, ``"*"`` -> None."""
-    text = pattern.strip().lstrip("*")
-    text = text.lstrip(".")
+    """``"*.tar.gz"`` -> ``"tar.gz"``. 확장자 패턴이 아니면 None.
+
+    ``"*"`` · ``"*lib"`` · ``"lib_*"`` · ``"*.c*"`` 전부 None — 점(.) 뒤에
+    와일드카드 없는 이름이 오는 ``"*.ext"`` 꼴만 확장자로 본다.
+    """
+    text = pattern.strip()
+    if not text.startswith("*."):
+        return None
+    text = text[2:]
     if not text or "*" in text or "?" in text:
         return None
     return text

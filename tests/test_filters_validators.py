@@ -74,10 +74,34 @@ def test_build_filter():
 
 def test_suffix_and_ensure():
     assert suffix_of("이미지 (*.png *.jpg)") == "png"
+    assert suffix_of("압축 (*.tar.gz)") == "tar.gz"
     assert suffix_of("모든 파일 (*)") is None       # 확장자를 특정할 수 없음
     assert ensure_suffix("/tmp/out", "csv") == "/tmp/out.csv"
     assert ensure_suffix("/tmp/out.json", "csv") == "/tmp/out.json"  # 이미 있으면 유지
     assert ensure_suffix("", "csv") == ""
+
+
+def test_suffix_ignores_non_extension_patterns():
+    """접미사/접두사 패턴은 "붙여 줄 확장자"가 아니다.
+
+    ``*lib`` 에서 "lib" 을 확장자로 오인하면 저장 모드에서 "foo" 가
+    "foo.lib" 이, ``*_corner`` 에서는 "foo._corner" 가 된다 — 고른 필터에도
+    안 걸리는 이름이다. 확장자 패턴(``*.ext``)일 때만 붙인다.
+    """
+    assert suffix_of("라이브러리 (*lib)") is None
+    assert suffix_of("코너 (*_corner)") is None
+    assert suffix_of("접두 (lib_*)") is None
+    assert suffix_of("혼합 (*.c*)") is None                  # 와일드카드가 남은 확장자
+    # 확장자 패턴이 함께 있으면 그것을 쓴다
+    assert suffix_of("라이브러리 (*lib *.so)") == "so"
+
+
+def test_build_filter_keeps_affix_patterns():
+    """접미사/접두사 패턴이 조립 과정에서 확장자로 변형되지 않는다."""
+    assert build_filter(
+        [("라이브러리", ["*lib"]), ("코너", ["*_corner"]), ("접두", ["lib_*"])],
+        add_all_files=False,
+    ) == "라이브러리 (*lib);;코너 (*_corner);;접두 (lib_*)"
 
 
 def test_validate_paths(tmp_path):
@@ -103,3 +127,67 @@ def test_validate_paths(tmp_path):
     assert validate_paths([], required=False)[0]
     assert not validate_paths([], required=True)[0]
 
+
+
+def test_dialog_lists_affix_patterns(qapp, tmp_path):
+    """다이얼로그 목록이 접미사/접두사 패턴(*lib · *_corner · lib_*)을 거른다.
+
+    확장자(*.txt)만 되는 게 아니라 임의 위치의 와일드카드가 끝까지(조립 →
+    Qt 필터 문자열 → 파일 목록) 살아 있는지 통째로 잠근다.
+    """
+    from qtpy.QtWidgets import QListView
+
+    from custom_file_dialog import CustomFileDialog
+
+    for name in ("foolib", "toplib", "mylib.so", "abc_corner", "corner_abc",
+                 "lib_first", "readme.txt"):
+        (tmp_path / name).write_text("x")
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(tmp_path),
+        filters=[("라이브러리", ["*lib"]), ("코너", ["*_corner"]),
+                 ("접두", ["lib_*"]), ("텍스트", ["txt"])],
+    )
+    dialog.show()
+
+    view = dialog.findChild(QListView, "listView")
+
+    def visible():
+        _spin(qapp, 700)
+        model, root = view.model(), view.rootIndex()
+        return sorted(
+            model.index(r, 0, root).data() for r in range(model.rowCount(root))
+        )
+
+    expected = {
+        "라이브러리 (*lib)": ["foolib", "toplib"],
+        "코너 (*_corner)": ["abc_corner"],
+        "접두 (lib_*)": ["lib_first"],
+        "텍스트 (*.txt)": ["readme.txt"],
+    }
+    assert sorted(dialog.nameFilters()) == sorted(expected)
+    for name_filter, files in expected.items():
+        dialog.selectNameFilter(name_filter)
+        assert visible() == files, name_filter
+    dialog.done(0)
+
+
+def test_save_mode_keeps_affix_pattern_names(qapp, tmp_path):
+    """저장 모드가 접미사 패턴 필터에서 엉뚱한 "확장자"를 붙이지 않는다.
+
+    "*_corner" 필터로 "ss" 를 저장하면 예전에는 "ss._corner" 가 됐다 — 고른
+    필터에도 안 걸리는 이름이다. 확장자 패턴(*.csv)만 붙인다.
+    """
+    from custom_file_dialog import CustomFileDialog
+
+    dialog = CustomFileDialog(
+        None, mode="save_file", directory=str(tmp_path),
+        filters=[("코너", ["*_corner"]), ("CSV", ["csv"])],
+    )
+    dialog.selectNameFilter("코너 (*_corner)")
+    dialog.selectFile("ss")
+    assert dialog.selectedFiles() == [os.path.join(str(tmp_path), "ss")]
+
+    dialog.selectNameFilter("CSV (*.csv)")
+    assert dialog.selectedFiles() == [os.path.join(str(tmp_path), "ss.csv")]
+    dialog.done(0)
