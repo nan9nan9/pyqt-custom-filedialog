@@ -12,6 +12,7 @@ Qt 가 C++ 에서 연결해 둔 슬롯은 파이썬에서 끊을 수 없다. 그
 """
 
 import os
+import weakref
 
 from qtpy.QtCore import QTimer
 from qtpy.QtWidgets import QComboBox, QToolButton
@@ -66,6 +67,13 @@ def follow_link_on_parent(dialog, places):
 
     state = {"target": None, "goto": None}
 
+    # 다이얼로그를 약한 참조로 잡는다. 이 훅만 **자식 위젯**(상위 폴더 버튼)의
+    # 시그널에 연결하는데, 클로저가 다이얼로그를 직접 들고 있으면
+    # 다이얼로그 -> 버튼 -> 연결 -> 클로저 -> 다이얼로그 순환이 생기고, 그
+    # 고리에 C++ 객체가 끼어 파이썬 gc 가 풀지 못한다(다이얼로그를 반복해서
+    # 여는 앱에서 그대로 쌓인다 — 실측으로 확인).
+    dialog_ref = weakref.ref(dialog)
+
     def on_current_changed(path):
         state["target"] = places.link_target(path)
 
@@ -76,9 +84,10 @@ def follow_link_on_parent(dialog, places):
         # 누른 그 순간의 상황으로 목적지를 정한다(누른 뒤에는 이미 옮겨진 뒤다)
         state["goto"] = None
         target = state["target"]
-        if not target:
+        owner = dialog_ref()
+        if not target or owner is None:
             return
-        if not places.is_inside(dialog.directory().absolutePath()):
+        if not places.is_inside(owner.directory().absolutePath()):
             return                       # 분류 폴더 안에서 고른 링크일 때만
         state["goto"] = os.path.dirname(abspath(target) or "")
         # 진짜 클릭이면 이동과 directoryEntered 가 이 이벤트 처리 안에서 동기로
@@ -89,7 +98,8 @@ def follow_link_on_parent(dialog, places):
 
     def on_entered(_path):
         destination, state["goto"], state["target"] = state["goto"], None, None
-        if not destination:
+        owner = dialog_ref()
+        if not destination or owner is None:
             return
         # 형제 함수(follow_link_directories)와 같은 기준을 쓴다. safe_isdir 만
         # 보면 min_depth 로 막아 둔 얕은 자리로 옮겨 갈 수 있다 — setDirectory 는
@@ -98,7 +108,7 @@ def follow_link_on_parent(dialog, places):
             return
         # 원본이 죽은 마운트에 있으면 그냥 둔다(GUI 를 멈추느니 제자리가 낫다)
         if safety.safe_isdir(destination):
-            dialog.setDirectory(destination)
+            owner.setDirectory(destination)
 
     dialog.currentChanged.connect(on_current_changed)
     button.pressed.connect(on_pressed)

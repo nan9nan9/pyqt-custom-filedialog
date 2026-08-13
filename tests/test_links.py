@@ -413,3 +413,64 @@ def test_follow_link_on_parent_respects_may_enter(qapp, tmp_path):
     finally:
         safety.reset()
     dialog.deleteLater()
+
+
+def test_dialog_is_collected_after_close(qapp, tmp_path):
+    """다이얼로그를 닫으면 실제로 수거된다 — 반복해서 열어도 쌓이지 않는다.
+
+    "상위 폴더" 훅만 **자식 위젯**(버튼)의 시그널에 연결하는데, 클로저가
+    다이얼로그를 직접 들고 있어 다이얼로그 -> 버튼 -> 연결 -> 클로저 ->
+    다이얼로그 순환이 생겼다. 그 고리에 C++ 객체가 끼어 파이썬 gc 가 풀지
+    못해, 다이얼로그를 여닫을 때마다 통째로 남았다(실측: 10회에 10개).
+    """
+    import gc
+    import weakref
+
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import CustomFileDialog
+
+    # 바인딩마다 위젯 수명 관리가 다르다. PySide 는 show() 한 위젯의 파이썬
+    # 래퍼를 오래 들고 있어 **순정 QFileDialog 도** 수거되지 않는다. 그런
+    # 바인딩에서는 "우리가 더 붙잡는가"를 이 방법으로 물을 수 없다.
+    plain = QFileDialog()
+    plain.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    plain.show()
+    _spin(qapp, 100)
+    baseline = weakref.ref(plain)
+    plain.done(0)
+    plain.deleteLater()
+    del plain
+    _spin(qapp, 300)
+    gc.collect()
+    if baseline() is not None:
+        pytest.skip("이 바인딩은 순정 다이얼로그도 수거하지 않는다(바인딩 특성)")
+
+    design, _report, _output = _make_tree(tmp_path)
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    favorites.add("설계", design)
+    recent = RecentStore(base_dir=str(tmp_path / "recent"))
+    recent.record(design)
+
+    def once():
+        dialog = CustomFileDialog(
+            None, mode="open_file", directory=os.path.dirname(design),
+            favorites=favorites, recent=recent,
+        )
+        dialog.show()
+        _spin(qapp, 100)
+        ref = weakref.ref(dialog)
+        dialog.done(0)
+        dialog.deleteLater()
+        del dialog
+        _spin(qapp, 300)
+        gc.collect()
+        _spin(qapp, 50)
+        return ref
+
+    assert once()() is None                     # 한 번 열고 닫으면 사라진다
+
+    # 여러 번 여닫아도 남지 않는다
+    refs = [once() for _ in range(3)]
+    gc.collect()
+    assert [r() for r in refs] == [None, None, None]
