@@ -592,3 +592,99 @@ def test_default_storage_is_under_user_config():
     assert default_base_dir() == os.path.join(
         expected_root, "custom_file_dialog", "favorites"
     )
+
+
+def _hang_stats_on(monkeypatch, prefix, seconds=3.0):
+    """``prefix`` 아래 경로의 stat 이 돌아오지 않는 상황을 만든다(죽은 마운트)."""
+    real_stat, real_lstat = os.stat, os.lstat
+
+    def hang(func):
+        def wrapper(path, *args, **kwargs):
+            if str(path).startswith(prefix):
+                time.sleep(seconds)
+            return func(path, *args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(os, "stat", hang(real_stat))
+    monkeypatch.setattr(os, "lstat", hang(real_lstat))
+
+
+def _fake_remote_mount(monkeypatch, mountpoint):
+    from custom_file_dialog import safety
+
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety, "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (mountpoint, "nfs4", "srv:/export")],
+    )
+    monkeypatch.setattr(safety, "probe_host", lambda *a, **k: True)
+    safety.configure(timeout=0.2)
+
+
+def test_bookkeeping_survives_dead_mount(tmp_path, monkeypatch):
+    """확정 뒤 뒷정리(최근 기록 · 즐겨찾기 등록 · 마지막 폴더)가 죽은 마운트에서
+    GUI 를 멈추지 않는다.
+
+    이 함수들은 **사용자가 고른 경로**를 그대로 만진다. 평범한 os.path.isfile /
+    exists / isdir 로 확인하면 죽은 NFS 에서 영영 돌아오지 않아, 파일을 고르고
+    확인을 누른 순간 앱이 통째로 멎는다.
+    """
+    from custom_file_dialog import history, safety
+
+    dead = str(tmp_path / "nfs")
+    os.makedirs(dead)
+    victim = os.path.join(dead, "보고서.csv")
+    with open(victim, "w", encoding="utf-8") as handle:
+        handle.write("x")
+
+    _fake_remote_mount(monkeypatch, dead)
+    _hang_stats_on(monkeypatch, dead)
+    try:
+        store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+        recent = RecentStore(base_dir=str(tmp_path / "rec"))
+
+        start = time.time()
+        assert recent.record(victim) is None          # 기록은 건너뛰고
+        with pytest.raises(FavoritesError):           # 등록은 실패로 알린다
+            store.add("설계", victim)
+        assert history.remember_dir("키", victim, settings=QSettings()) == dead
+        assert time.time() - start < 2.5              # 3초짜리 stat 을 안 기다렸다
+    finally:
+        safety.clear_cache()
+        safety.reset()
+
+
+def test_resolve_never_follows_dead_target(tmp_path, monkeypatch):
+    """링크 복원이 **대상을 stat 하지 않는다** — 원본이 죽은 마운트여도 즉시.
+
+    os.path.realpath 는 대상을 따라가며 stat 하므로, 목록을 그리거나 고른
+    경로를 복원하는 것만으로 멈췄다.
+    """
+    dead = str(tmp_path / "nfs")
+    os.makedirs(dead)
+    target = os.path.join(dead, "설계도.csv")
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write("x")
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    link = store.add("설계", target)                  # 아직 살아 있을 때 등록
+    inner_target = os.path.join(dead, "산출물")
+    os.makedirs(inner_target)
+    folder_link = store.add("설계", inner_target)
+
+    # 인덱스를 지워 링크만 보고 풀어야 하는 상황으로 만든다(옛 저장소 등)
+    index_path = os.path.join(store.base_dir, ".index.json")
+    os.remove(index_path)
+    store._index_cache = None
+
+    _hang_stats_on(monkeypatch, dead)
+    start = time.time()
+    assert store.resolve(link) == target
+    assert store.resolve(folder_link) == inner_target
+    # 링크 폴더 **안쪽** 경로도 대상을 만지지 않고 풀린다
+    assert store.resolve(os.path.join(folder_link, "안쪽", "a.csv")) == os.path.join(
+        inner_target, "안쪽", "a.csv"
+    )
+    assert time.time() - start < 2.5

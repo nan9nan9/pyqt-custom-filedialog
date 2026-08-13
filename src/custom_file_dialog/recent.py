@@ -12,6 +12,7 @@
 
 import os
 
+from . import safety
 from .favorites import FavoritesStore, _safe_name, default_base_dir
 from .util import abspath
 
@@ -81,7 +82,9 @@ class RecentStore(FavoritesStore):
             return None
 
         target = abspath(path)
-        if not os.path.isfile(target) or self.is_inside(target):
+        # 고른 파일이 죽은 원격 마운트일 수 있다. 평범한 isfile 은 그런 자리에서
+        # 돌아오지 않아, 확정 직후의 기록만으로 GUI 가 멈춘다(D 상태).
+        if not safety.safe_isfile(target) or self.is_inside(target):
             return None
 
         # 있으면 지우고 다시 만들어 최신으로 끌어올린다. 없을 때의 remove 는

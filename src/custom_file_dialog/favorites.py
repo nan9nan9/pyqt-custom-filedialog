@@ -23,6 +23,7 @@ import subprocess
 
 from qtpy.QtCore import QStandardPaths
 
+from . import safety
 from .util import abspath, to_urls
 
 # 분류 폴더들이 들어갈 기본 위치의 하위 폴더 이름
@@ -254,7 +255,9 @@ class FavoritesStore:
         돌려준다. 이름만 겹치고 대상이 다르면 ``이름 (2)`` 처럼 번호를 붙인다.
         """
         target = abspath(path)
-        if not os.path.exists(target):
+        # 등록 대상은 사용자가 고른 경로라 죽은 원격 마운트일 수 있다. 평범한
+        # exists 는 그런 자리에서 돌아오지 않아 GUI 가 통째로 멈춘다(D 상태).
+        if not safety.safe_exists(target):
             raise FavoritesError("등록할 대상이 존재하지 않습니다: %s" % path)
 
         directory = self.add_category(category)
@@ -386,11 +389,45 @@ class FavoritesStore:
 
     # ------------------------------------------------------------- 내부
     def _target_of(self, link, index):
-        """링크가 가리키는 원본 경로. 인덱스 -> realpath 순으로 찾는다."""
+        """링크가 가리키는 원본 경로. 인덱스 -> 링크 내용 순으로 찾는다.
+
+        ``os.path.realpath`` 를 쓰지 않는다 — 그 함수는 **대상을 따라가며
+        stat** 하므로, 원본이 죽은 원격 마운트에 있으면 목록을 그리는 것만으로
+        GUI 가 멈춘다. ``readlink`` 는 링크 자신의 내용만 읽어 절대 멈추지
+        않는다(우리가 만드는 링크는 절대 경로 한 단계다).
+        """
         recorded = index.get(os.path.normpath(link))
         if recorded:
             return recorded
-        return os.path.realpath(link)
+        return self._follow_links(link)
+
+    def _follow_links(self, path):
+        """저장소 안 경로에서 **링크만** 풀어 원본 경로를 만든다.
+
+        분류 폴더의 링크 자체(``<분류>/산출물``)뿐 아니라 그 **안쪽**
+        (``<분류>/산출물/안쪽``)도 풀어야 한다. 그래서 조상을 거슬러 올라가며
+        심볼릭 링크인 자리를 찾아 그 내용으로 갈아 끼우고, 나머지는 문자열로
+        이어 붙인다. 읽는 것은 링크 자신뿐이라(``islink`` · ``readlink``)
+        원본이 죽은 마운트에 있어도 멈추지 않는다.
+        """
+        absolute = os.path.normpath(path)
+        base = os.path.normpath(self.base_dir)
+        current, rest = absolute, []
+        while current.startswith(base):
+            try:
+                if os.path.islink(current):
+                    target = os.readlink(current)
+                    if not os.path.isabs(target):
+                        target = os.path.join(os.path.dirname(current), target)
+                    return os.path.normpath(os.path.join(target, *rest))
+            except OSError:
+                break
+            parent = os.path.dirname(current)
+            if parent == current or current == base:
+                break               # 저장소 뿌리까지 왔는데 링크가 없다
+            rest.insert(0, os.path.basename(current))
+            current = parent
+        return absolute             # 링크가 아니면(하드링크·정션) 그 자체가 대상
 
     def _available_link_path(self, directory, link_name):
         """이름이 겹치면 ``이름 (2)`` 처럼 번호를 붙여 빈 경로를 찾는다."""
@@ -405,7 +442,7 @@ class FavoritesStore:
         raise FavoritesError("이름이 너무 많이 겹칩니다: %s" % link_name)
 
     def _make_link(self, target, link_path):
-        is_dir = os.path.isdir(target)
+        is_dir = safety.safe_isdir(target)
         try:
             os.symlink(target, link_path, target_is_directory=is_dir)
             return

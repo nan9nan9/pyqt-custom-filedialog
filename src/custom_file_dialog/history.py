@@ -19,6 +19,7 @@ import os
 
 from qtpy.QtCore import QSettings
 
+from . import safety
 from .constants import DEFAULT_HISTORY_SIZE
 
 # configure_settings() 로 지정하는 기본 QSettings 정보
@@ -162,7 +163,8 @@ def remember_dir(settings_key, path, settings=None):
     if not settings_key or not path:
         return None
     path = str(path)
-    directory = path if os.path.isdir(path) else os.path.dirname(path)
+    # 고른 경로가 죽은 원격 마운트일 수 있다 — 평범한 isdir 은 안 돌아온다
+    directory = path if safety.safe_isdir(path) else os.path.dirname(path)
     if not directory:
         return None
     PathHistory(key=settings_key, settings=settings).set_last_dir(directory)
