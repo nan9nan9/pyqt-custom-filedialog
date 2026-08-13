@@ -36,9 +36,13 @@ def build_filter(filters, add_all_files=False):
         entries = []
     elif isinstance(filters, str):
         # 이미 Qt 필터 문자열. add_all_files 만 처리한다.
+        if not filters.strip():
+            # 빈 문자열에 덧붙이면 ";;모든 파일 (*)" 이 되어 필터 콤보 맨 앞에
+            # 빈 항목이 생긴다(filters=값 or "" 관용구에서 걸린다).
+            return _entry_to_string(ALL_FILES_FILTER) if add_all_files else None
         if add_all_files and "(*)" not in filters:
             return "%s;;%s" % (filters, _entry_to_string(ALL_FILES_FILTER))
-        return filters or None
+        return filters
     elif isinstance(filters, dict):
         entries = list(filters.items())
     else:

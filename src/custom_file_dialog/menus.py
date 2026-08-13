@@ -45,7 +45,7 @@ except ImportError:                     # pragma: no cover
 
 from . import safety
 from .constants import PATH_ROLE
-from .util import exec_menu, url_path
+from .util import abspath, exec_menu, url_path
 
 
 def _writable(path):
@@ -356,9 +356,14 @@ class FavoritesMenus(QObject):
         delegate = sidebar.itemDelegate() if sidebar is not None else None
         marks = getattr(delegate, "marks", None)
         if marks is not None:
-            marks.update(self._places.sidebar_marks(
-                self._dialog.directory().absolutePath()
-            ))
+            # **새 분류 몫만** 더한다. sidebar_marks 를 통째로 합치면 지금 보고
+            # 있는 폴더가 "현재 위치"로 또 표시되어, 사이드바에 같은 이름이
+            # 둘 생긴다(끌어다 놓은 폴더에 들어가 즐겨찾기를 추가할 때).
+            fresh = self._places.sidebar_marks()
+            for url in added:
+                path = abspath(url_path(url))
+                if path and path in fresh:
+                    marks[path] = fresh[path]
 
     # --------------------------------------------------- 사이드바 우클릭 메뉴
     def store_at(self, index):

@@ -547,3 +547,22 @@ def test_sidebar_category_icons_survive_provider_swap(qapp, tmp_path):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_fixed_urls_ignore_pathless_entries(qapp, tmp_path):
+    """경로가 없는 사이드바 항목("Computer")은 보호 목록에 들어가지 않는다.
+
+    예전에는 그 QUrl 을 문자열로 만들어 현재 폴더 기준으로 펴 버려, 엉뚱한
+    자리가 보호되고 정작 그 항목은 보호되지 않았다.
+    """
+    from qtpy.QtCore import QUrl
+
+    from custom_file_dialog import Places
+
+    home = QDir.homePath()
+    places = Places(fixed_urls=[QUrl("file:"), QUrl.fromLocalFile(home), str(tmp_path)])
+    fixed = places.fixed_urls()
+
+    assert os.path.normpath(home) in fixed
+    assert os.path.normpath(str(tmp_path)) in fixed
+    assert not [p for p in fixed if "QUrl" in p], fixed      # 문자열화된 것이 없다

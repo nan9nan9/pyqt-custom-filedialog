@@ -130,8 +130,12 @@ def fit_sidebar(dialog, width=None):
         # 이미 충분히 넓으면 그대로 둔다(좁히지 않는다)
         width = max(sizes[0], floor)
 
-    # 넓히더라도 파일 목록 자리는 남겨 둔다
-    width = max(0, min(int(width), max(0, total - MIN_FILE_LIST_WIDTH)))
-    if width and width != sizes[0]:
-        splitter.setSizes([width, total - width])
+    # 넓히더라도 파일 목록 자리는 남겨 둔다. 다만 그 상한이 최소 폭을 먹지
+    # 않게 한다 — 창이 좁아도 사이드바는 MIN_SIDEBAR_WIDTH 를 지킨다(문서한 값).
+    room = max(0, total - MIN_FILE_LIST_WIDTH)
+    width = max(0, min(int(width), max(room, MIN_SIDEBAR_WIDTH)))
+    if not width:
+        return None                     # 손대지 못했다 — 다음 show 때 다시 본다
+    if width != sizes[0]:
+        splitter.setSizes([width, max(0, total - width)])
     return width

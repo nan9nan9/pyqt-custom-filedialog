@@ -121,11 +121,17 @@ class Places:
         self.sidebar_base = sidebar_urls
         self.icon = icon
         self._fixed_given = fixed_urls is not None
-        self._fixed = {
-            abspath(url_path(u) or u)
-            for u in (DEFAULT_FIXED if fixed_urls is None else fixed_urls)
-            if u
-        }
+        # 경로가 없는 항목("Computer" 처럼 스킴만 있는 QUrl)은 보호할 대상이
+        # 없다. 예전에는 그것을 문자열로 만들어(=QUrl(...) 의 repr) 현재 폴더
+        # 기준 경로로 펴 버려, 엉뚱한 자리가 보호 목록에 들어갔다.
+        self._fixed = set()
+        for item in (DEFAULT_FIXED if fixed_urls is None else fixed_urls):
+            if not item:
+                continue
+            local = url_path(item) if hasattr(item, "toLocalFile") else str(item)
+            resolved = abspath(local) if local else None
+            if resolved:
+                self._fixed.add(resolved)
         self._provider = None
         self._home_icon = None
         self._category_icons = {}       # id(저장소) -> 아이콘 (처음 쓸 때 그린다)

@@ -213,3 +213,29 @@ def test_directory_mode_rejects_existing_file(tmp_path):
         [str(tmp_path / "새폴더")], mode=SelectMode.DIRECTORY, must_exist=False
     )
     assert ok
+
+
+def test_whitespace_separator_round_trips(qapp, tmp_path):
+    """공백류 구분자(탭 등)로도 여러 경로가 온전히 오간다.
+
+    구분자 주변 공백을 흘려보내려던 strip 이 **구분자 자체가** 공백류일 때
+    빈 문자열을 만들어 ";" 로 바뀌었고, join 은 원래 구분자를 써서 두 경로가
+    한 덩어리로 붙었다(문서가 권하는 사용법이 바로 이것이다).
+    """
+    a = str(tmp_path / "a.txt")
+    b = str(tmp_path / "b.txt")
+    for path in (a, b):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+
+    edit = FilePathEdit(mode="open_files", separator="\t")
+    edit.set_paths([a, b])
+    assert edit.paths() == [a, b]
+    assert edit.is_valid(), edit.invalid_reason()
+
+
+def test_empty_filter_string_makes_no_blank_entry():
+    """빈 필터 문자열에 "모든 파일" 을 붙여도 앞에 빈 항목이 생기지 않는다."""
+    assert build_filter("", add_all_files=True) == "모든 파일 (*)"
+    assert build_filter("", add_all_files=False) is None
+    assert build_filter("   ", add_all_files=True) == "모든 파일 (*)"

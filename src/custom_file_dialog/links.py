@@ -90,25 +90,30 @@ def follow_link_on_parent(dialog, places):
         if not places.is_inside(owner.directory().absolutePath()):
             return                       # 분류 폴더 안에서 고른 링크일 때만
         state["goto"] = os.path.dirname(abspath(target) or "")
+        state["from"] = owner.directory().absolutePath()     # 못 가면 여기로 되돌린다
         # 진짜 클릭이면 이동과 directoryEntered 가 이 이벤트 처리 안에서 동기로
         # 끝난다(타이머는 그 뒤에 돈다). 눌렀다가 끌어서 밖에서 놓으면 이동이
         # 없는데, 장전만 된 채 남으면 **다음 평범한 이동을 가로채** 엉뚱한 곳으로
         # 보내 버린다. 이벤트 루프로 돌아오면 무장을 푼다.
         QTimer.singleShot(0, disarm)
 
-    def on_entered(_path):
+    def on_entered(entered_path):
         destination, state["goto"], state["target"] = state["goto"], None, None
+        came_from = state.pop("from", None)
         owner = dialog_ref()
         if not destination or owner is None:
             return
         # 형제 함수(follow_link_directories)와 같은 기준을 쓴다. safe_isdir 만
         # 보면 min_depth 로 막아 둔 얕은 자리로 옮겨 갈 수 있다 — setDirectory 는
         # directoryEntered 를 내지 않아 마지막 방어도 안 걸린다.
-        if not safety.may_enter(destination):
-            return
-        # 원본이 죽은 마운트에 있으면 그냥 둔다(GUI 를 멈추느니 제자리가 낫다)
-        if safety.safe_isdir(destination):
+        # 원본이 죽은 마운트에 있어도 그냥 둔다(GUI 를 멈추느니 제자리가 낫다).
+        if safety.may_enter(destination) and safety.safe_isdir(destination):
             owner.setDirectory(destination)
+        elif came_from and safety.may_enter(came_from):
+            # 못 가면 **원래 있던 분류 폴더로 되돌린다.** 그냥 두면 Qt 가 이미
+            # 올라가 놓은 저장소 뿌리(분류 폴더만 늘어선 창고)에 남는데,
+            # 이 훅이 피하려던 자리가 바로 거기다.
+            owner.setDirectory(came_from)
 
     dialog.currentChanged.connect(on_current_changed)
     button.pressed.connect(on_pressed)

@@ -43,7 +43,13 @@ def split_paths(text, separator="; "):
     """
     if not text:
         return []
-    sep = (separator or "; ").strip() or ";"
+    sep = separator or "; "
+    # 구분자 주변 공백만 흘려보내려고 strip 한 것이지만, 구분자 **자체가**
+    # 공백류면(탭 등) 빈 문자열이 되어 엉뚱하게 ";" 로 바뀌었다. 그러면
+    # join_paths 가 쓴 진짜 구분자로 나눌 수 없어 두 경로가 하나로 붙는다.
+    trimmed = sep.strip()
+    if trimmed:
+        sep = trimmed
     return [part.strip() for part in text.split(sep) if part.strip()]
 
 

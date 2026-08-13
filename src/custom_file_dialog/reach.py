@@ -190,7 +190,9 @@ def call_with_timeout(func, *args, **kwargs):
                     _pending_keys.add(key)
         return False, None                  # 멈췄다 -> 스레드는 두고 나온다
     if "error" in box:
-        return True, None
+        # 예외도 "끝내지 못한 것"으로 본다. True 로 돌려주면 호출자가 그 값을
+        # 결과로 믿어(None) 문서에 적힌 default 대신 None 이 흘러나간다.
+        return False, None
     return True, box.get("value")
 
 
@@ -275,12 +277,20 @@ def self_check(mountpoint, source, timeout=None, fstype=None):
     """
     wait = _settings["timeout"] if timeout is None else float(timeout)
 
-    # 1) 마운트한 서버부터 — 종류에 맞는 포트로만
+    # 1) 마운트한 서버부터 — 종류에 맞는 포트로만.
+    #    socket 의 timeout 은 **연결에만** 걸리고 이름 조회(getaddrinfo)에는
+    #    걸리지 않는다. VPN 이 끊겨 DNS 가 죽으면 리졸버 기본 대기(수 초)만큼
+    #    GUI 가 그대로 멈춘다 — "절대 멈추지 않는다"는 이 단계의 약속이 깨진다.
+    #    그래서 프로브도 스레드+타임아웃 안에서 돌린다.
     port = SERVER_PORTS.get(fstype)
     if port is not None:
         host = server_of(source, fstype)
-        if host and not probe_host(host, port, wait):
-            return False
+        if host:
+            finished, reachable = call_with_timeout(
+                probe_host, host, port, wait, timeout=wait, pending_key=mountpoint
+            )
+            if not finished or not reachable:
+                return False
 
     # 2) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈추고,
     #    같은 마운트에서 멈춘 확인이 있으면 스레드를 더 만들지 않는다)

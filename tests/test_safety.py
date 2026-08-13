@@ -851,9 +851,20 @@ def test_probe_port_follows_fstype(monkeypatch, tmp_path):
             probed.append((host, port)), True)[1]
     )
     stats = []
-    monkeypatch.setattr(
-        safety_reach, "call_with_timeout", lambda func, *a, **k: (stats.append(a), (True, None))[1]
-    )
+
+    def fake_call(func, *args, **kwargs):
+        """프로브는 실제로 부르고, stat 은 부른 사실만 남긴다.
+
+        프로브도 스레드+타임아웃 안에서 돈다(이름 조회가 타임아웃 밖이라
+        GUI 가 멈추던 것을 막기 위해). 그래서 이 가짜도 함수를 통과시켜야
+        어느 포트를 두드렸는지 볼 수 있다.
+        """
+        if func is safety_reach.probe_host:
+            return True, func(*args)
+        stats.append(args)
+        return True, None
+
+    monkeypatch.setattr(safety_reach, "call_with_timeout", fake_call)
 
     assert safety.self_check("/mnt/win", "//winsrv/share", 0.1, fstype="cifs")
     assert probed == [("winsrv", 445)]                   # 2049 가 아니라 445

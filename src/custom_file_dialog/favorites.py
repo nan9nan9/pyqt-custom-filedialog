@@ -54,6 +54,21 @@ def _looks_like_path(text):
     )
 
 
+def _safe_link_name(name):
+    """표시 이름을 링크 파일 이름으로 쓸 수 있게 다듬는다.
+
+    :func:`_safe_name` 과 같은 손질을 하되 **예외를 던지지 않는다.** 분류
+    이름은 사용자가 직접 짓는 것이라 잘못되면 알려 줘야 하지만, 표시 이름은
+    고른 파일에서 자동으로 따오기도 한다 — 리눅스에서 합법인 이름(공백뿐인
+    이름 등)에 예외가 나면 "즐겨찾기에 추가"가 엉뚱한 경고를 띄우고, 최근
+    기록은 그 지점에서 **뒤 파일들까지 통째로** 빠진다.
+    """
+    try:
+        return _safe_name(name)
+    except ValueError:
+        return "항목"
+
+
 class FavoritesError(RuntimeError):
     """즐겨찾기 링크를 만들지 못했을 때 발생한다."""
 
@@ -285,7 +300,7 @@ class FavoritesStore:
         # 표시 이름도 분류 이름과 같은 손질을 거친다. 그러지 않으면
         # name="../../x" 같은 값이 그대로 경로가 되어 **저장소 밖에** 링크가
         # 생긴다(그렇게 만들어진 것은 복원도 제거도 되지 않는다).
-        link_name = _safe_name(name or os.path.basename(target.rstrip(os.sep)) or "항목")
+        link_name = _safe_link_name(name or os.path.basename(target.rstrip(os.sep)))
         link_path = self._available_link_path(directory, link_name)
         self._make_link(target, link_path)
 

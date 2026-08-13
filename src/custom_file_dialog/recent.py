@@ -13,7 +13,12 @@
 import os
 
 from . import safety
-from .favorites import FavoritesStore, _safe_name, default_storage_dir
+from .favorites import (
+    FavoritesError,
+    FavoritesStore,
+    _safe_name,
+    default_storage_dir,
+)
 from .util import abspath
 
 # 사이드바에 표시될 이름(= 분류 폴더 이름)
@@ -102,8 +107,20 @@ class RecentStore(FavoritesStore):
         return link
 
     def record_all(self, paths):
-        """여러 경로를 순서대로 기록한다(뒤에 준 것이 더 최근이 된다)."""
-        return [link for link in (self.record(p) for p in (paths or [])) if link]
+        """여러 경로를 순서대로 기록한다(뒤에 준 것이 더 최근이 된다).
+
+        하나가 실패해도 **나머지는 계속 기록한다.** 여러 개를 고르는 자리에서
+        중간의 한 파일 때문에 뒤엣것들이 통째로 빠지면 안 된다.
+        """
+        links = []
+        for path in paths or []:
+            try:
+                link = self.record(path)
+            except (OSError, ValueError, FavoritesError):
+                continue
+            if link:
+                links.append(link)
+        return links
 
     def set_max_items(self, max_items):
         self.max_items = max(0, int(max_items))

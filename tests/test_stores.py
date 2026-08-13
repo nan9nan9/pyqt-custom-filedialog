@@ -947,3 +947,20 @@ def test_recent_dir_stays_under_storage_root(tmp_path):
     finally:
         configure_favorites(None)
         configure_storage(None)
+
+
+def test_record_all_keeps_going_after_a_bad_name(tmp_path):
+    """중간에 이름이 이상한 파일이 있어도 나머지는 기록된다.
+
+    표시 이름 손질이 예외를 던지면서, 그 지점 뒤의 파일들이 통째로 빠졌다
+    (게다가 record 는 remove 를 먼저 하므로 예전 항목까지 사라졌다).
+    """
+    first = _touch(tmp_path, "a.csv")
+    odd = tmp_path / "   "                       # 공백뿐인 이름 — 리눅스에서 합법
+    odd.write_text("x")
+    last = _touch(tmp_path, "b.csv")
+
+    recent = RecentStore(base_dir=str(tmp_path / "recent"))
+    links = recent.record_all([first, str(odd), last])
+    assert len(links) == 3, links
+    assert set(recent.items()) == {first, str(odd), last}

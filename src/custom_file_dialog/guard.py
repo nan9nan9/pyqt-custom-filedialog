@@ -283,11 +283,12 @@ class _AcceptBlocker(_Blocker):
             # min_depth 가 0 인데 "0단계 이상" 이라고 하면 말이 안 된다.
             title = "폴더를 열려면 끝에 '%s' 를 붙이세요" % os.sep
             limit = safety.min_depth()
-            reason = (
-                "%d단계 이상의 경로여야 자동으로 열립니다." % limit
-                if limit > 0
-                else "이 자리는 이름만으로는 열지 않습니다 (자동 마운트 보호)."
-            )
+            if limit > 0:
+                reason = "%d단계 이상의 경로여야 자동으로 열립니다." % limit
+            elif safety.is_guarded(os.path.dirname(path)):
+                reason = "이 폴더 아래는 이름만으로는 열지 않습니다."
+            else:
+                reason = "이 자리는 이름만으로는 열지 않습니다 (자동 마운트 보호)."
             lines = [reason, "예) %s" % opener]
         else:
             # 구분자를 붙여도 안 되는 자리 — 더 깊은 경로가 필요하다

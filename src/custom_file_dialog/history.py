@@ -67,11 +67,16 @@ class PathHistory:
 
     # ------------------------------------------------------------- 저장소
     def _store(self):
+        """쓸 QSettings. **직접 준 것이 없으면 그때그때 만든다.**
+
+        한 번 만들어 붙들고 있으면, 위젯을 만든 **뒤에**
+        :func:`configure_settings` 를 부른 앱에서 그 위젯만 옛 저장소를 계속
+        써서 "같은 이름이면 같은 기억을 공유한다"는 약속이 조용히 깨진다.
+        QSettings 만들기는 값싸다.
+        """
         if not self.key:
             return None
-        if self._settings is None:
-            self._settings = default_settings()
-        return self._settings
+        return self._settings if self._settings is not None else default_settings()
 
     def _load(self):
         store = self._store()
