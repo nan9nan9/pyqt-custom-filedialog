@@ -50,6 +50,14 @@ def default_settings():
 class PathHistory:
     """최근 경로 목록과 마지막 폴더를 관리한다.
 
+    ``key`` 를 주면 값을 **인스턴스에 담아 두지 않고 그때그때 QSettings 에서
+    읽고 쓴다.** 담아 두면 같은 이름을 쓰는 다른 위젯이나 :func:`remember_dir`
+    헬퍼가 그 사이에 바꾼 것을 못 보고, 다음 저장이 남의 기록을 통째로
+    덮어쓴다 — "같은 이름이면 같은 기억을 공유한다"는 약속이 깨진다. 앱이
+    나중에 :func:`configure_settings` 를 불러 저장소를 바꿔도 자연히 따라간다.
+
+    ``key`` 가 없으면 저장할 곳이 없으므로 메모리에만 담는다.
+
     Args:
         key: QSettings 에 저장할 키 접두사. None 이면 메모리에만 유지.
         max_items: 기억할 최근 경로 개수.
@@ -60,91 +68,79 @@ class PathHistory:
         self.key = key
         self.max_items = max(0, int(max_items))
         self._settings = settings
-        self._items = []
-        self._last_dir = None
-        self._loaded_from = None        # 지금 들고 있는 값을 어느 저장소에서 읽었나
-        if self.key:
-            self._store()               # 읽기까지 여기서 한다
+        self._memory_items = []         # key 가 없을 때만 쓴다
+        self._memory_last_dir = None
 
     # ------------------------------------------------------------- 저장소
     def _store(self):
-        """쓸 QSettings. **직접 준 것이 없으면 그때그때 만든다.**
-
-        한 번 만들어 붙들고 있으면, 위젯을 만든 **뒤에**
-        :func:`configure_settings` 를 부른 앱에서 그 위젯만 옛 저장소를 계속
-        써서 "같은 이름이면 같은 기억을 공유한다"는 약속이 조용히 깨진다.
-
-        저장소가 **바뀌었으면 값도 다시 읽는다.** 새 저장소를 쓰면서 옛 목록을
-        들고 있으면, 다음 저장이 그쪽에 이미 쌓여 있던 기록을 통째로 덮어쓴다.
-        """
+        """쓸 QSettings (키가 없으면 None — 메모리에만 담는다)."""
         if not self.key:
             return None
-        store = self._settings if self._settings is not None else default_settings()
-        where = store.fileName()
-        if where != self._loaded_from:
-            self._loaded_from = where
-            self._load(store)
-        return store
+        return self._settings if self._settings is not None else default_settings()
 
-    def _load(self, store):
-        items = store.value("custom_file_dialog/%s/recent" % self.key, [])
-        # QSettings 는 항목이 1개면 문자열로 돌려주는 바인딩이 있어 보정한다.
-        if isinstance(items, str):
-            items = [items]
-        self._items = [str(i) for i in (items or []) if i][: self.max_items]
-        last = store.value("custom_file_dialog/%s/last_dir" % self.key, None)
-        self._last_dir = str(last) if last else None
+    def _items_key(self):
+        return "custom_file_dialog/%s/recent" % self.key
 
-    def _save_items(self):
-        store = self._store()
-        if store is not None:
-            store.setValue("custom_file_dialog/%s/recent" % self.key, list(self._items))
-
-    def _save_last_dir(self):
-        store = self._store()
-        if store is not None:
-            store.setValue(
-                "custom_file_dialog/%s/last_dir" % self.key, self._last_dir or ""
-            )
+    def _last_dir_key(self):
+        return "custom_file_dialog/%s/last_dir" % self.key
 
     # --------------------------------------------------------------- API
     def items(self):
         """최신순 최근 경로 리스트."""
-        return list(self._items)
+        store = self._store()
+        if store is None:
+            return list(self._memory_items)
+        saved = store.value(self._items_key(), [])
+        # QSettings 는 항목이 1개면 문자열로 돌려주는 바인딩이 있어 보정한다.
+        if isinstance(saved, str):
+            saved = [saved]
+        return [str(i) for i in (saved or []) if i][: self.max_items]
 
     def add(self, path):
         """경로를 최근 목록 맨 앞에 추가한다(중복은 위로 끌어올림)."""
         if not path or self.max_items <= 0:
             return
-        # **먼저** 저장소를 확인한다. 목록을 고친 뒤에 확인하면, 그 안에서
-        # 일어나는 "저장소가 바뀌었으니 다시 읽기"가 방금 넣은 값을 지운다.
-        self._store()
         path = str(path)
-        if path in self._items:
-            self._items.remove(path)
-        self._items.insert(0, path)
-        del self._items[self.max_items :]
-        self._save_items()
+        items = self.items()            # 저장소의 **지금** 상태에서 시작한다
+        if path in items:
+            items.remove(path)
+        items.insert(0, path)
+        del items[self.max_items :]
+        self._write_items(items)
 
     def clear(self):
-        self._items = []
-        self._save_items()
+        """최근 경로 목록을 비운다(마지막 폴더는 그대로)."""
+        self._write_items([])
 
     def last_dir(self):
         """직전에 다이얼로그를 닫았던 폴더."""
-        return self._last_dir
+        store = self._store()
+        if store is None:
+            return self._memory_last_dir
+        saved = store.value(self._last_dir_key(), None)
+        return str(saved) if saved else None
 
-    def set_last_dir(self, directory):  # noqa: D401 (아래 docstring 참고)
+    def set_last_dir(self, directory):
         """마지막 폴더만 기록한다.
 
         최근 경로 목록은 **건드리지 않는다.** 같은 키를 max_items 가 다른 곳에서
         함께 쓸 수 있는데(위젯은 history=30, :func:`remember_dir` 헬퍼는 기본값),
         여기서 목록까지 다시 쓰면 작은 쪽 기준으로 잘려 나간다.
         """
-        if directory:
-            self._store()               # add() 와 같은 이유로 먼저 확인한다
-            self._last_dir = str(directory)
-            self._save_last_dir()
+        if not directory:
+            return
+        store = self._store()
+        if store is None:
+            self._memory_last_dir = str(directory)
+            return
+        store.setValue(self._last_dir_key(), str(directory))
+
+    def _write_items(self, items):
+        store = self._store()
+        if store is None:
+            self._memory_items = list(items)
+            return
+        store.setValue(self._items_key(), list(items))
 
 
 # ------------------------------------------------- 용도별 시작 위치 (키 하나 = 용도 하나)

@@ -226,14 +226,18 @@ class _AcceptBlocker(_Blocker):
         else:
             return ""
 
-        # 상대 경로("..")도 현재 폴더 기준으로 푼다
-        return _typed_path(self._dialog, self._edit.text())
+        # 상대 경로("..")도 현재 폴더 기준으로 푼다. 여러 개 모드에서 Qt 는
+        # 따옴표로 묶어 채우므로("a.csv" "b.csv") 첫 경로를 대표로 본다 —
+        # 같은 폴더 안이라 판정은 같고, 안내와 진단에 엉뚱한 문자열이 남지 않는다.
+        parts = _split_typed(self._edit.text())
+        return _typed_path(self._dialog, parts[0]) if parts else ""
 
     def allowed(self, path):
         # 끝의 구분자는 "이 폴더를 열겠다"는 명시적 표기라 판정에 살려서 넘긴다.
         # 정규화하면 사라지므로 원문에서 다시 본다(기록·안내에는 정규화된 경로만
         # 남겨 진단 값이 두 형태로 섞이지 않게 한다).
-        raw = (self._edit.text() or "").strip()
+        parts = _split_typed(self._edit.text())
+        raw = (parts[0] if parts else "").strip()
         if raw.endswith(("/", os.sep)) and not path.endswith(os.sep):
             path += os.sep
         return safety.may_open(path)

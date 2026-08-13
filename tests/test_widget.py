@@ -483,3 +483,39 @@ def test_history_follows_settings_configured_later(qapp, tmp_path):
         assert history.last_dir() == "/data"                       # 값도 새 저장소 기준
     finally:
         configure_settings(None, None)
+
+
+def test_history_is_shared_between_instances(qapp):
+    """같은 이름을 쓰면 **같은 기억을 공유한다** (모듈 설명의 약속).
+
+    값을 인스턴스에 담아 두면 그 사이 남이 바꾼 것을 못 보고, 다음 저장이
+    남의 기록을 통째로 덮어쓴다. 위젯 둘이 같은 settings_key 를 쓰거나
+    위젯과 remember_dir 헬퍼가 섞일 때 실제로 그랬다.
+    """
+    from custom_file_dialog import configure_settings
+    from custom_file_dialog.history import PathHistory, remember_dir
+
+    configure_settings("공유테스트조직", "공유테스트앱")
+    try:
+        first = PathHistory(key="공유키")
+        second = PathHistory(key="공유키")
+        first.clear()
+
+        first.add("/data/a.csv")
+        first.set_last_dir("/data")
+        assert second.items() == ["/data/a.csv"]        # 곧바로 보인다
+        assert second.last_dir() == "/data"
+
+        second.add("/other/b.csv")
+        assert first.items() == ["/other/b.csv", "/data/a.csv"]   # 덮어쓰지 않는다
+
+        # 헬퍼로 바꾼 것도 위젯 쪽에서 보인다
+        remember_dir("공유키", "/etc/hosts")
+        assert first.last_dir() == "/etc"
+
+        # 목록 지우기가 실제로 비운다("▾ → 목록 지우기" 가 이 경로다)
+        first.clear()
+        assert second.items() == []
+        assert second.last_dir() == "/etc"              # 마지막 폴더는 그대로
+    finally:
+        configure_settings(None, None)

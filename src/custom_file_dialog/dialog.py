@@ -382,12 +382,12 @@ class CustomFileDialog(QFileDialog):
 
         # 사이드바에 아이콘이 복사된 뒤부터는 저장소 폴더에서만 제공자를 쓴다
         if provider is not None:
-            self._watch_icon_provider(provider, current)
+            self._watch_icon_provider(provider)
 
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
 
-    def _watch_icon_provider(self, provider, current):
+    def _watch_icon_provider(self, provider):
         """분류 아이콘 제공자를 **저장소 폴더를 볼 때만** 걸어 둔다.
 
         아이콘 제공자는 목록의 **항목마다** 파이썬으로 불린다. 항목이 수천 개인
@@ -399,13 +399,19 @@ class CustomFileDialog(QFileDialog):
         plain = _plain_icon_provider()
         self._icon_providers = (provider, plain)
 
-        def apply_for(path):
-            wanted = provider if self._places.is_inside(path) else plain
+        def apply_for(_entered=None):
+            # 신호가 준 경로가 아니라 **지금 서 있는 폴더**를 본다. 링크 추적이
+            # 이 뒤에 연결돼 있어, 링크 폴더로 들어가면 그쪽이 setDirectory 로
+            # 원본으로 옮긴다(그 이동은 directoryEntered 를 내지 않는다).
+            # 신호의 옛 경로로 판단하면 원본이 큰 폴더일 때 제공자가 걸린 채
+            # 나열되어, 이 장치가 막으려던 멈춤이 그대로 돌아온다.
+            here = self.directory().absolutePath()
+            wanted = provider if self._places.is_inside(here) else plain
             if self.iconProvider() is not wanted:
                 self.setIconProvider(wanted)
 
         self.directoryEntered.connect(apply_for)
-        apply_for(current)
+        apply_for()
 
     # ------------------------------------------------------------- 조회
     def mode(self):
