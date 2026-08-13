@@ -1293,6 +1293,24 @@ def test_may_open_blocks_shallow_paths(shallow_tree):
     assert safety.may_open(os.path.join(root, "jekai", "proj"))   # 깊이 > limit
 
 
+def test_may_open_trailing_separator_is_explicit(shallow_tree):
+    """끝의 구분자('/')는 "이 폴더를 열겠다"는 명시적 표기 — limit 깊이부터 허용.
+
+    "/user/jekai/" 는 열리고 "/user/jekai" 는 막힌다. 더 얕은 "/user/" 는
+    구분자를 붙여도 막힌다.
+    """
+    from custom_file_dialog import safety
+
+    root, depth = shallow_tree
+    safety.configure(min_depth=depth + 1)
+    assert safety.may_open(os.path.join(root, "jekai") + os.sep)  # 깊이 == limit + '/'
+    assert safety.may_open(os.path.join(root, "j") + os.sep)      # 오타여도 명시면 허용
+    assert not safety.may_open(root + os.sep)                     # 깊이 < limit 는 불가
+    # 차단 경로는 구분자를 붙여도 막힌다
+    safety.configure(guarded_roots=[root], min_depth=0)
+    assert not safety.may_open(root + os.sep)
+
+
 def test_may_open_blocks_guarded_roots(guarded_root):
     """차단 경로 자체는 확정 불가, 하위는 허용(문서된 규칙 그대로)."""
     from custom_file_dialog import safety
@@ -1337,6 +1355,15 @@ def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):
     assert press_enter() is True
     edit.setText(os.path.join(root, "jekai"))        # 이름이 맞아도 같은 깊이
     assert press_enter() is True
+
+    # 막히면 왜 막혔는지 안내한다 (비모달 — 테스트가 갇히지 않는다)
+    assert blocker.notice is not None and blocker.notice.isVisible()
+    assert "%d단계" % (depth + 1) in blocker.notice.text()
+    assert os.sep in blocker.notice.text()
+
+    # 끝에 구분자를 붙인 명시적 폴더 표기는 같은 깊이라도 열린다
+    edit.setText(os.path.join(root, "jekai") + os.sep)
+    assert press_enter() is False
 
     edit.setText(os.path.join(root, "jekai", "proj"))    # 더 깊으면 확정 가능
     assert press_enter() is False

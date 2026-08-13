@@ -30,6 +30,7 @@ from qtpy.QtWidgets import (
     QFileSystemModel,
     QLineEdit,
     QListView,
+    QMessageBox,
     QTreeView,
 )
 
@@ -140,6 +141,7 @@ class _AcceptBlocker(QObject):
         self._dialog = dialog
         self._edit = name_edit
         self.blocked = []
+        self.notice = None              # min_depth 안내 팝업 (재사용)
 
     def eventFilter(self, obj, event):   # noqa: N802 (Qt 시그니처)
         try:
@@ -161,12 +163,49 @@ class _AcceptBlocker(QObject):
         else:
             return False
 
-        # 상대 경로("..")도 현재 폴더 기준으로 풀어서 판정한다
-        path = _typed_path(self._dialog, self._edit.text())
-        if path and not safety.may_open(path):
+        # 상대 경로("..")도 현재 폴더 기준으로 풀되, 끝의 구분자는 "이 폴더를
+        # 열겠다"는 명시적 표기라 판정(may_open)까지 살려서 넘긴다.
+        raw = (self._edit.text() or "").strip()
+        path = _typed_path(self._dialog, raw)
+        if not path:
+            return False
+        opener = path
+        if raw.endswith(("/", os.sep)) and not opener.endswith(os.sep):
+            opener += os.sep
+        if not safety.may_open(opener):
             self.blocked.append(path)
+            self._explain(path)
             return True
         return False
+
+    def _explain(self, path):
+        """왜 안 열리는지 안내한다 — min_depth 규칙에 걸렸을 때만.
+
+        지목해서 막은 자리(``guarded_roots``)는 기존처럼 조용히 삼킨다.
+        모달 exec 는 쓰지 않는다 — Enter 를 연타해도 확인 버튼에 갇히지 않게
+        비모달로 띄우고, 이미 떠 있으면 내용만 갱신한다.
+        """
+        if safety.is_guarded(path):
+            return
+        limit = safety.min_depth()
+        if limit <= 0:
+            return
+        lines = [
+            "이 깊이의 경로는 자동으로 열지 않습니다 (automount 보호).",
+            "%d단계 이상의 경로를 입력하고, 폴더를 열려면 끝에 '%s' 를 붙이세요."
+            % (limit, os.sep),
+        ]
+        example = path + os.sep
+        if safety.may_open(example):
+            lines.append("예) %s" % example)
+        if self.notice is None:
+            self.notice = QMessageBox(self._dialog)
+            self.notice.setIcon(QMessageBox.Icon.Warning)
+            self.notice.setWindowTitle("경로가 너무 얕습니다")
+            self.notice.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self.notice.setText("\n".join(lines))
+        self.notice.show()
+        self.notice.raise_()
 
 
 def _typed_path(dialog, text):

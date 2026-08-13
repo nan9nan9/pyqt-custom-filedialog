@@ -156,10 +156,13 @@ def configure(
             (:func:`may_stat`) · **Enter/열기 버튼으로 확정하는 것**
             (:func:`may_open`)까지 전부다. 확정의 stat 한 번도 automount
             아래에서는 마운트 시도라 그 한 번으로 멈추기 때문이다.
-            ``min_depth=2`` 면 ``/user/je`` 는 물론 ``/user/jekai`` 도 Enter
-            로는 못 열고, ``/user/jekai/a.csv`` 처럼 더 깊은 경로부터 확정이
-            된다. 다이얼로그에서 폴더를 **눌러** 들어가는 것은 막지 않는다 —
-            그쪽까지 막으려면 ``guarded_roots`` 를 함께 쓴다.
+
+            예외 하나 — **끝에 구분자를 붙인 폴더 표기는 명시적 의사**로 보고
+            이 깊이부터 허용한다. ``min_depth=2`` 기준: ``/user/je`` 와
+            ``/user/jekai`` 는 Enter 로 안 열리고(안내 팝업이 뜬다),
+            ``/user/jekai/`` 와 ``/user/jekai/a.csv`` 는 열린다. 다이얼로그에서
+            폴더를 **눌러** 들어가는 것은 막지 않는다 — 그쪽까지 막으려면
+            ``guarded_roots`` 를 함께 쓴다.
         allow_listing: **자동완성이 폴더 목록을 읽어도 되는지.** ``False`` 면
             깊이와 무관하게 어떤 폴더도 읽지 않아 완성 후보가 아예 뜨지 않는다.
             자동완성을 통째로 끄는 스위치다.
@@ -323,21 +326,28 @@ def may_open(path):
 
     확정은 Qt 가 GUI 스레드에서 그 경로를 곧바로 stat 하는 일이라, automount
     아래의 얕은 미완성 경로(``/user/j``)에 Enter 를 치면 자동 확인을 다 막아도
-    그 한 번으로 멈춘다. 그래서 ``guarded_roots`` 로 지목한 자리와 깊이가
-    ``min_depth`` 보다 **작거나 같은** 경로는 확정도 막는다.
+    그 한 번으로 멈춘다. 규칙:
 
-    :func:`may_stat` 보다 느슨하다 — automount 위라도 **깊은** 경로
-    (``/user/jekai/a.csv``)는 허용한다. 의도한 마운트는 확정의 stat 한 번으로
-    일어나야 하기 때문이다. 그 대신 얕은 경로는 이름이 맞아도 확정할 수 없다
-    (``min_depth=2`` 면 ``/user/jekai`` 도 Enter 로는 못 연다 — 더 깊은 전체
-    경로를 치거나 사이드바/목록으로 이동한다).
+    - ``guarded_roots`` 로 지목한 자리 → 항상 False (구분자 여부와 무관)
+    - 깊이가 ``min_depth`` 보다 깊음 → True (``/user/jekai/a.csv``)
+    - 깊이가 ``min_depth`` **이상**이고 끝에 구분자를 붙인 폴더 표기 → True
+      — ``/user/jekai/`` 는 "이 폴더를 열겠다"는 **명시적 의사**로 본다.
+      의도한 마운트는 이 확정의 stat 한 번으로 일어난다.
+    - 그 외(구분자 없는 얕은 경로) → False — ``/user/jekai`` 도 ``/user/jeka``
+      도 Enter 로는 안 열린다. 폴더로 가려면 끝에 구분자를 붙인다.
     """
     if not path:
         return True
-    if is_guarded(path):
+    text = str(path).strip()
+    explicit_dir = text.endswith(("/", os.sep))
+    absolute = _abspath(text)
+    if is_guarded(absolute):
         return False
     limit = min_depth()
-    return not (limit > 0 and path_depth(path) <= limit)
+    if limit <= 0:
+        return True
+    depth = path_depth(absolute)
+    return depth > limit or (explicit_dir and depth >= limit)
 
 
 def clear_cache():

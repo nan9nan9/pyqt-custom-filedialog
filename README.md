@@ -1192,10 +1192,15 @@ safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
 것**까지 전부입니다. automount 아래에서는 확정의 stat 한 번도 마운트 시도라,
 `/user/j` 에서 Enter 를 쳐도 시스템이 멈추기 때문입니다.
 
+**끝의 `/` 는 "이 폴더를 열겠다"는 명시적 표기**로 보고 min_depth 깊이부터
+허용합니다. `min_depth=2` 기준:
+
 ```
-/user/j      Enter →  막힘 (깊이 2 ≤ min_depth 2 — 예전엔 여기서 멈췄다)
-/user/jekai  Enter →  막힘 (같은 이유 — 더 깊은 전체 경로로 연다)
-/user/jekai/a.csv Enter →  확정됨 (깊이 3 — 의도한 마운트는 이 한 번으로)
+/user/j           Enter →  막힘 + 안내 팝업 (예전엔 여기서 멈췄다)
+/user/jekai       Enter →  막힘 + 안내 팝업 ("2단계 이상 + 끝에 / 를 붙이세요")
+/user/jekai/      Enter →  열림 (명시적 폴더 표기 — 의도한 마운트는 이 한 번으로)
+/user/jekai/a.csv Enter →  확정됨 (깊이 3)
+/user/            Enter →  막힘 (/ 를 붙여도 min_depth 미만은 불가)
 ```
 
 대가는 `/ho` → `/home` 처럼 **얕은 자리의 완성·자동 확인·Enter 확정이 함께
@@ -1316,7 +1321,7 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
 | `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단 경로 · 깊이 ≤ min_depth · autofs 위면 False) |
-| `safety.may_open(path)` | **확정**(Enter·열기)해도 되는지 (차단 경로 · 깊이 ≤ min_depth 면 False — 깊은 경로는 automount 위라도 허용) |
+| `safety.may_open(path)` | **확정**(Enter·열기)해도 되는지 (차단 경로 · 깊이 ≤ min_depth 면 False — 끝에 `/` 를 붙인 폴더 표기는 min_depth 깊이부터, 더 깊은 경로는 그대로 허용) |
 | `safety.on_automount(path)` / `has_automounts()` | autofs 마운트 위인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
 | `safety.reset()` | 모든 설정을 기본값으로 |

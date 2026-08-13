@@ -170,6 +170,8 @@ def test_dialog_lists_affix_patterns(qapp, tmp_path):
         dialog.selectNameFilter(name_filter)
         assert visible() == files, name_filter
     dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)         # 지연 삭제를 여기서 소화해 다음 테스트에 안 넘긴다
 
 
 def test_save_mode_keeps_affix_pattern_names(qapp, tmp_path):
@@ -191,3 +193,5 @@ def test_save_mode_keeps_affix_pattern_names(qapp, tmp_path):
     dialog.selectNameFilter("CSV (*.csv)")
     assert dialog.selectedFiles() == [os.path.join(str(tmp_path), "ss.csv")]
     dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
