@@ -28,8 +28,14 @@ from .util import abspath, to_urls
 # 분류 폴더들이 들어갈 기본 위치의 하위 폴더 이름
 DEFAULT_DIRNAME = "favorites"
 
-# configure_favorites() 로 지정하는 앱 전체 기본 위치 (None 이면 OS 표준 위치)
+# 저장소 뿌리의 기본 폴더 이름 (~/.config/<이 이름>/favorites · recent)
+DEFAULT_STORAGE_DIRNAME = "custom_file_dialog"
+
+# configure_favorites() 로 지정하는 즐겨찾기 폴더 위치 (None 이면 뿌리 아래)
 _CONFIGURED_BASE_DIR = None
+
+# configure_storage() 로 지정하는 저장소 뿌리 (None 이면 ~/.config 아래)
+_CONFIGURED_STORAGE_DIR = None
 
 # 링크 -> 원본 매핑을 적어 두는 파일.
 # 심볼릭 링크는 realpath 로 원본을 되찾을 수 있지만, 윈도우 폴백인 하드링크는
@@ -74,23 +80,57 @@ def configured_base_dir():
     return _CONFIGURED_BASE_DIR
 
 
+def configure_storage(base_dir):
+    """즐겨찾기·최근 파일 저장소가 들어갈 **뿌리 폴더**를 지정한다.
+
+    앱 시작 시 한 번 부르면 기본 생성 위치가 통째로 옮겨진다::
+
+        configure_storage("~/.config/myapp")
+        FavoritesStore()        # -> ~/.config/myapp/favorites
+        RecentStore()           # -> ~/.config/myapp/recent
+
+    ``~`` 는 홈으로 펼쳐진다. ``None`` 을 주면 기본 위치
+    (``~/.config/custom_file_dialog`` — ``XDG_CONFIG_HOME`` 을 따른다)로
+    되돌린다. 즐겨찾기 폴더 **하나만** 다른 곳에 두려면
+    :func:`configure_favorites` 를 쓴다(이쪽이 우선한다).
+
+    Returns:
+        적용된 뿌리 폴더.
+    """
+    global _CONFIGURED_STORAGE_DIR
+    _CONFIGURED_STORAGE_DIR = abspath(base_dir) if base_dir else None
+    return default_storage_dir()
+
+
+def default_storage_dir():
+    """즐겨찾기·최근 파일 폴더들이 들어갈 뿌리 폴더.
+
+    :func:`configure_storage` 로 지정한 위치, 없으면
+    ``~/.config/custom_file_dialog`` (정확히는 ``XDG_CONFIG_HOME`` 을 따르는
+    ``QStandardPaths.GenericConfigLocation`` 아래)다.
+    """
+    if _CONFIGURED_STORAGE_DIR:
+        return _CONFIGURED_STORAGE_DIR
+    root = QStandardPaths.writableLocation(_standard_location("GenericConfigLocation"))
+    if not root:
+        root = os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(root, DEFAULT_STORAGE_DIRNAME)
+
+
 def default_base_dir():
     """즐겨찾기 폴더의 기본 위치.
 
     다음 순서로 정해진다.
 
     1. :func:`configure_favorites` 로 지정한 위치
-    2. ``QStandardPaths.AppDataLocation`` 아래의 ``favorites``
-    3. 앱 이름이 없어 2번을 못 얻으면 ``~/.custom_file_dialog/favorites``
+    2. :func:`configure_storage` 로 지정한 뿌리 아래의 ``favorites``
+    3. ``~/.config/custom_file_dialog/favorites`` (``XDG_CONFIG_HOME`` 준수)
 
     개별 저장소만 다른 곳에 두려면 ``FavoritesStore(base_dir=...)`` 를 쓴다.
     """
     if _CONFIGURED_BASE_DIR:
         return _CONFIGURED_BASE_DIR
-    root = QStandardPaths.writableLocation(_standard_location("AppDataLocation"))
-    if not root:
-        root = os.path.join(os.path.expanduser("~"), ".custom_file_dialog")
-    return os.path.join(root, DEFAULT_DIRNAME)
+    return os.path.join(default_storage_dir(), DEFAULT_DIRNAME)
 
 
 def _safe_name(name):

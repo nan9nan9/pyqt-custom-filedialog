@@ -189,7 +189,7 @@ pip install ".[pyqt5]"     # 또는 pyqt6 / pyside2 / pyside6
 셋 다 선택 사항이고, `QApplication` 을 만든 직후에 부르면 됩니다.
 
 ```python
-from custom_file_dialog import configure_favorites, configure_settings, safety
+from custom_file_dialog import configure_settings, configure_storage, safety
 
 app = QApplication([])
 app.setOrganizationName("회사이름")
@@ -199,9 +199,9 @@ app.setApplicationName("앱이름")
 #    (setOrganizationName/setApplicationName 을 했다면 생략해도 됩니다)
 configure_settings("회사이름", "앱이름")
 
-# 2) 즐겨찾기·최근 파일을 저장할 폴더
-#    (생략하면 앱 데이터 폴더 아래에 자동 생성)
-configure_favorites("~/.myapp/favorites")
+# 2) 즐겨찾기·최근 파일이 들어갈 뿌리 폴더
+#    (생략하면 ~/.config/custom_file_dialog 아래에 자동 생성)
+configure_storage("~/.config/myapp")
 
 # 3) 위험한 경로 방어 — 나열만으로 시스템이 주저앉는 자리
 safety.configure(
@@ -447,7 +447,8 @@ if dlg.exec():
     paths = dlg.selectedFiles()
 ```
 
-`True` 를 주면 **기본 위치**(앱 데이터 폴더)에 저장소를 알아서 만들어 씁니다.
+`True` 를 주면 **기본 위치**(`~/.config/custom_file_dialog` — `configure_storage()`
+로 옮길 수 있음)에 저장소를 알아서 만들어 씁니다.
 등록해 둔 즐겨찾기·최근 파일은 **디스크에 남아 있으므로, 띄울 때마다 새로
 만들어도 내용은 그대로입니다.** 목록을 코드에서 관리할 필요가 없습니다.
 
@@ -718,27 +719,36 @@ if dlg.exec():         # 사이드바에 "설계", "보고서" 가 보인다
 
 ### 저장 위치 정하기
 
-분류 폴더가 만들어질 위치는 세 단계로 정해집니다.
+분류 폴더가 만들어질 위치는 네 단계로 정해집니다.
 
 ```python
-from custom_file_dialog import FavoritesStore, configure_favorites, default_base_dir
+from custom_file_dialog import (
+    FavoritesStore, RecentStore,
+    configure_favorites, configure_storage, default_base_dir,
+)
 
 # 1) 저장소 하나만 다른 곳에 두기 — 생성자 인자가 가장 우선
 store = FavoritesStore(base_dir="/srv/공용/즐겨찾기")
 
-# 2) 앱 전체 기본 위치 — 시작할 때 한 번 부르면 이후 FavoritesStore() 가 모두 여기로
+# 2) 즐겨찾기 폴더만 앱 전체 기본으로 — 시작할 때 한 번
 configure_favorites("~/문서/내앱-즐겨찾기")
 store = FavoritesStore()          # -> ~/문서/내앱-즐겨찾기
 
-# 3) 아무것도 안 하면 OS 표준 앱 데이터 폴더
-default_base_dir()                # -> ~/.local/share/<조직>/<앱>/favorites
+# 3) 즐겨찾기·최근 파일이 함께 들어갈 **뿌리**를 지정
+configure_storage("~/.config/myapp")
+FavoritesStore()                  # -> ~/.config/myapp/favorites
+RecentStore()                     # -> ~/.config/myapp/recent
+
+# 4) 아무것도 안 하면 ~/.config 아래 (XDG_CONFIG_HOME 준수)
+default_base_dir()                # -> ~/.config/custom_file_dialog/favorites
 ```
 
 | 함수 | 설명 |
 | --- | --- |
-| `configure_favorites(path)` | 앱 전체 기본 위치 지정. `None` 이면 지정 해제. 적용된 위치를 반환 |
-| `configured_base_dir()` | 위에서 지정한 위치 (지정 안 했으면 `None`) |
-| `default_base_dir()` | 지금 `FavoritesStore()` 가 실제로 쓸 위치 |
+| `configure_storage(path)` | 즐겨찾기·최근 파일의 **뿌리 폴더** 지정 (`<뿌리>/favorites` · `<뿌리>/recent`). `None` 이면 기본(`~/.config/custom_file_dialog`)으로 복귀 |
+| `configure_favorites(path)` | **즐겨찾기 폴더만** 직접 지정 (뿌리보다 우선). `None` 이면 지정 해제 |
+| `configured_base_dir()` | 위에서 지정한 즐겨찾기 위치 (지정 안 했으면 `None`) |
+| `default_storage_dir()` / `default_base_dir()` | 지금 실제로 쓸 뿌리 / 즐겨찾기 위치 |
 | `store.base_dir` | 그 저장소가 쓰는 위치 |
 
 - `~` 표기를 쓸 수 있고, 없는 폴더는 만들어 줍니다(`create=False` 로 끌 수 있음).

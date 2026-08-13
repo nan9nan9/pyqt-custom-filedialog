@@ -532,3 +532,63 @@ def test_index_cache_sees_other_instances(tmp_path):
     index = a._load_index()
     index.clear()
     assert a.resolve(link1) == f1
+
+
+def test_configure_storage_moves_both_stores(tmp_path):
+    """저장소 뿌리 하나로 즐겨찾기(<뿌리>/favorites)·최근(<뿌리>/recent)이 정해진다."""
+    from custom_file_dialog import (
+        configure_storage,
+        default_base_dir,
+        default_storage_dir,
+    )
+    from custom_file_dialog.recent import default_recent_dir
+
+    root = str(tmp_path / "저장소")
+    try:
+        assert configure_storage(root) == os.path.normpath(root)
+        assert default_storage_dir() == os.path.normpath(root)
+        assert default_base_dir() == os.path.join(os.path.normpath(root), "favorites")
+        assert default_recent_dir() == os.path.join(os.path.normpath(root), "recent")
+
+        store = FavoritesStore()
+        recent = RecentStore()
+        assert store.base_dir == os.path.join(os.path.normpath(root), "favorites")
+        assert recent.base_dir == os.path.join(os.path.normpath(root), "recent")
+
+        # configure_favorites (즐겨찾기 폴더 직접 지정)가 뿌리보다 우선한다
+        from custom_file_dialog import configure_favorites
+
+        configure_favorites(str(tmp_path / "따로"))
+        assert default_base_dir() == os.path.normpath(str(tmp_path / "따로"))
+    finally:
+        from custom_file_dialog import configure_favorites
+
+        configure_favorites(None)
+        configure_storage(None)
+
+
+def test_default_storage_is_under_user_config():
+    """지정이 없으면 기본은 ~/.config/custom_file_dialog (XDG_CONFIG_HOME 준수)다.
+
+    예전 기본(QStandardPaths.AppDataLocation)은 앱 이름이 없는 환경에서 엉뚱한
+    자리(임시 폴더 등)에 만들어질 수 있었다.
+    """
+    from custom_file_dialog import (
+        configure_favorites,
+        configure_storage,
+        default_base_dir,
+        default_storage_dir,
+    )
+
+    configure_favorites(None)
+    configure_storage(None)
+
+    expected_root = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"
+    )
+    assert default_storage_dir() == os.path.join(
+        expected_root, "custom_file_dialog"
+    )
+    assert default_base_dir() == os.path.join(
+        expected_root, "custom_file_dialog", "favorites"
+    )

@@ -28,8 +28,10 @@ from .favorites import (
     FavoritesError,
     FavoritesStore,
     configure_favorites,
+    configure_storage,
     configured_base_dir,
     default_base_dir,
+    default_storage_dir,
 )
 from .filters import build_filter, ensure_suffix, suffix_of
 from .form import FilePathForm
@@ -65,8 +67,10 @@ __all__ = [
     "RecentStore",
     "DEFAULT_RECENT_MAX",
     "configure_favorites",
+    "configure_storage",
     "configured_base_dir",
     "default_base_dir",
+    "default_storage_dir",
     "default_recent_dir",
     # 사이드바
     "Places",
