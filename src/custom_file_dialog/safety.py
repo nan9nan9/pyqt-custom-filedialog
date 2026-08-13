@@ -336,6 +336,22 @@ def may_stat(path):
     return not on_automount(absolute)
 
 
+def may_enter(path):
+    """그 자리를 **열어(=들어가) 되는지** — 들어가면 통째로 나열되기 때문이다.
+
+    폴더를 여는 순간 Qt 는 그 안을 전부 읽어 항목마다 stat 한다. automount
+    아래에서는 그것이 곧 "그 폴더의 모든 이름을 마운트"다. 그래서 나열 판정
+    (:func:`may_list`)과 같은 기준을 쓴다 — ``guarded_roots`` 로 지목된 자리,
+    ``min_depth`` 보다 얕은 자리, autofs 마운트 위면 False.
+
+    ``allow_listing`` 은 보지 않는다. 그 설정은 **자동완성**을 끄는 스위치이지,
+    사용자가 눌러서 들어가는 것까지 막는 뜻이 아니다.
+    """
+    return not (
+        is_guarded(path) or is_too_shallow(path) or on_automount(path)
+    )
+
+
 def may_open(path):
     """그 경로를 **확정**(Enter · 열기 버튼)해도 되는지.
 

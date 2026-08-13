@@ -31,6 +31,7 @@ from qtpy.QtWidgets import (
     QLineEdit,
     QListView,
     QMessageBox,
+    QToolButton,
     QTreeView,
 )
 
@@ -88,7 +89,10 @@ class GuardedFileSystemModel(QFileSystemModel):
 
 
 class _ItemBlocker(QObject):
-    """뷰에서 차단 경로 항목을 **여는 이벤트**를 삼킨다.
+    """뷰에서 **열면 안 되는 자리**를 여는 이벤트를 삼킨다.
+
+    폴더를 열면 Qt 가 그 안을 통째로 읽으므로, 차단 경로만이 아니라 얕은
+    자리와 autofs 위도 막아야 한다 (:func:`~custom_file_dialog.safety.may_enter`).
 
     파일 목록은 더블클릭으로, 콤보 팝업은 클릭(release)으로 열리므로 어떤
     이벤트를 볼지는 ``open_events`` 로 정한다. Enter 키는 양쪽 공통이다.
@@ -118,11 +122,44 @@ class _ItemBlocker(QObject):
             return False
 
         path = url_path(index.data(PATH_ROLE)) if index.isValid() else ""
-        if path and safety.is_guarded(path):
+        if path and not safety.may_enter(path):
             self.blocked.append(path)
             if self._after is not None:
                 self._after()
             return True                  # 여는 동작 자체를 없던 일로
+        return False
+
+
+class _ParentBlocker(QObject):
+    """"상위 폴더(↑)" 로 **열면 안 되는 자리**로 올라가는 것을 막는다.
+
+    ``/user/myaccount`` 에서 ↑ 를 누르면 ``/user`` 가 열리며 통째로 나열된다 —
+    automount 라면 그 한 번으로 전부 마운트된다. 목적지는 지금 폴더의 부모라
+    문자열만으로 알 수 있으므로, 파일시스템을 건드리지 않고 판정한다.
+    """
+
+    def __init__(self, dialog, button, parent=None):
+        super().__init__(parent if parent is not None else dialog)
+        self._dialog = dialog
+        self._button = button
+        self.blocked = []
+
+    def eventFilter(self, obj, event):   # noqa: N802 (Qt 시그니처)
+        try:
+            kind = event.type()
+            if kind == QEvent.Type.KeyPress:
+                if event.key() not in _OPEN_KEYS + (Qt.Key.Key_Space,):
+                    return False
+            elif kind != QEvent.Type.MouseButtonRelease:
+                return False
+            destination = os.path.dirname(
+                abspath(self._dialog.directory().absolutePath()) or ""
+            )
+            if destination and not safety.may_enter(destination):
+                self.blocked.append(destination)
+                return True              # 올라가는 동작 자체를 없던 일로
+        except RuntimeError:
+            pass                         # 다이얼로그가 닫히는 중
         return False
 
 
@@ -432,9 +469,10 @@ def guard_dialog(dialog, bounce=True):
 
     - 설정 없이 시스템에 autofs 마운트만 있음 → 자동완성 모델 + 타이핑 가드
     - ``allow_listing=False`` 만 → 위와 같음 (나열만 막는 설정이므로)
-    - ``min_depth`` → 위에 더해 **확정 차단** (깊이 ≤ min_depth 는 Enter · 열기
-      버튼으로도 못 연다 — 확정의 stat 한 번이 automount 를 부른다)
-    - ``guarded_roots`` → 전부 (더블클릭 · "Look in" · 확정 · 마지막 방어)
+    - ``min_depth`` 또는 autofs 존재 → 위에 더해 **확정 차단**(깊이 ≤ min_depth
+      는 Enter · 열기 버튼으로도 못 연다)과 **이동 차단**(더블클릭 · "Look in" ·
+      상위 폴더 · 마지막 방어). 들어가는 순간 그 자리가 통째로 나열되기 때문이다
+    - ``guarded_roots`` → 전부
 
     걸 이유가 하나도 없으면 아무 일도 하지 않는다.
 
@@ -469,34 +507,41 @@ def guard_dialog(dialog, bounce=True):
     if typing_guard is not None:
         installed.append(typing_guard)
 
-    if not guarded and not safety.min_depth():
+    if not guarded and not safety.min_depth() and not safety.has_automounts():
         return installed        # 아래는 "확정하거나 들어가지 못하게" 하는 장치들이다
 
-    if guarded:
-        # 3) 파일 목록에서 열기 차단 (더블클릭)
-        for view in (
-            dialog.findChild(QTreeView, "treeView"),
-            dialog.findChild(QListView, "listView"),
-        ):
-            if view is None:
-                continue
-            blocker = _ItemBlocker(
-                view, (QEvent.Type.MouseButtonDblClick,), parent=dialog
-            )
-            view.viewport().installEventFilter(blocker)
-            view.installEventFilter(blocker)
-            installed.append(blocker)
+    # 3) 파일 목록에서 열기 차단 (더블클릭). 폴더를 열면 그 안이 통째로
+    #    나열되므로 차단 경로만이 아니라 얕은 자리·autofs 위도 막는다.
+    for view in (
+        dialog.findChild(QTreeView, "treeView"),
+        dialog.findChild(QListView, "listView"),
+    ):
+        if view is None:
+            continue
+        blocker = _ItemBlocker(
+            view, (QEvent.Type.MouseButtonDblClick,), parent=dialog
+        )
+        view.viewport().installEventFilter(blocker)
+        view.installEventFilter(blocker)
+        installed.append(blocker)
 
-        # 4) "Look in" 드롭다운에서 고르기 차단 (클릭 = release)
-        combo = dialog.findChild(QComboBox, "lookInCombo")
-        if combo is not None:
-            view = combo.view()
-            blocker = _ItemBlocker(
-                view, (QEvent.Type.MouseButtonRelease,), combo.hidePopup, parent=dialog
-            )
-            view.viewport().installEventFilter(blocker)
-            view.installEventFilter(blocker)
-            installed.append(blocker)
+    # 4) "Look in" 드롭다운에서 고르기 차단 (클릭 = release)
+    combo = dialog.findChild(QComboBox, "lookInCombo")
+    if combo is not None:
+        view = combo.view()
+        blocker = _ItemBlocker(
+            view, (QEvent.Type.MouseButtonRelease,), combo.hidePopup, parent=dialog
+        )
+        view.viewport().installEventFilter(blocker)
+        view.installEventFilter(blocker)
+        installed.append(blocker)
+
+    # 4b) "상위 폴더(↑)" 로 올라가는 것도 같은 규칙으로 막는다
+    up_button = dialog.findChild(QToolButton, "toParentButton")
+    if up_button is not None:
+        blocker = _ParentBlocker(dialog, up_button, dialog)
+        up_button.installEventFilter(blocker)
+        installed.append(blocker)
 
     # 5) 파일 이름 칸으로 확정하기 차단 (Enter · 열기 버튼).
     #    guarded 는 물론 min_depth 만 켜도 건다 — Enter 의 확정은 Qt 가 GUI
@@ -512,12 +557,12 @@ def guard_dialog(dialog, bounce=True):
                 button.installEventFilter(blocker)
         installed.append(blocker)
 
-    # 6) 마지막 방어 (guarded 전용 — 이동 자체는 guarded 로만 막는다)
-    if bounce and guarded:
+    # 6) 마지막 방어 — 그래도 들어가졌으면 직전 폴더로 되돌린다
+    if bounce:
         last = {"dir": dialog.directory().absolutePath()}
 
         def on_entered(path):
-            if safety.is_guarded(path):
+            if not safety.may_enter(path):
                 dialog.setDirectory(last["dir"])
             else:
                 last["dir"] = path

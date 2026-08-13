@@ -1216,9 +1216,19 @@ safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
 /user/            Enter →  막힘 (/ 를 붙여도 min_depth 미만은 불가)
 ```
 
-대가는 `/ho` → `/home` 처럼 **얕은 자리의 완성·자동 확인·Enter 확정이 함께
-없어지는 것**입니다. 다이얼로그에서 폴더를 **클릭해** 들어가는 것은 막지
-않습니다(목록에 이미 보이는 항목은 안전합니다).
+**얕은 자리로 들어가는 것도 막습니다** — 들어가는 순간 그 자리가 통째로
+나열되어 automount 라면 전부 마운트되기 때문입니다. 더블클릭 · "Look in"
+드롭다운 · **상위 폴더(↑)** 가 모두 같은 규칙을 따르고, 그래도 들어가지면
+직전 폴더로 되돌립니다.
+
+```
+/user/myaccount 에서 ↑ 를 누르면 →  /user (깊이 1) 이므로 막힘
+/user/myaccount/proj 에서 ↑     →  /user/myaccount (깊이 2) 이므로 정상
+```
+
+대가는 `/ho` → `/home` 처럼 **얕은 자리의 완성·자동 확인·Enter 확정·이동이
+함께 없어지는 것**입니다. 사이드바에 등록해 둔 자리(홈 등)를 클릭하는 것은
+막지 않습니다 — 사용자가 명시적으로 등록한 위치이기 때문입니다.
 
 > **autofs 는 자동으로 압니다.** `/proc/self/mountinfo` 에 autofs 로 잡히는
 > 마운트 위 경로는 `guarded_roots`/`min_depth` 를 설정하지 않아도 나열·자동
@@ -1268,7 +1278,7 @@ edit.set_completer(False)                                # 실행 중에도 전�
 | | `guarded_roots` | `min_depth` | `allow_listing=False` |
 | --- | --- | --- | --- |
 | 지정 방식 | 위험한 경로를 이름으로 나열 | 깊이 하나로 일괄 | 스위치 하나 |
-| 막는 것 | 나열 + 자동 stat + 확정 + **그 자리로 이동** | 나열 + 자동 stat + **Enter 확정** (깊이 ≤ 값) | 자동완성 나열만 |
+| 막는 것 | 나열 + 자동 stat + 확정 + 이동 (그 자리 전용) | 나열 + 자동 stat + **Enter 확정 + 이동** (깊이 기준) | 자동완성 나열만 |
 | 모르는 위험 경로 | 못 막음 (autofs 는 자동 인지) | 얕으면 막힘 | **전부 막힘** |
 | 부작용 | 없음 (그 자리만) | 얕은 자리의 완성·자동 확인이 사라짐 | 자동완성이 통째로 사라짐 |
 
@@ -1334,6 +1344,7 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | `safety.is_too_shallow(path)` / `min_depth()` | 자동완성이 나열하지 않을 만큼 얕은지 / 설정값 |
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
 | `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단 경로 · 깊이 ≤ min_depth · autofs 위면 False) |
+| `safety.may_enter(path)` | 그 자리를 **열어(들어가) 되는지** (차단 경로 · 깊이 < min_depth · autofs 위면 False) |
 | `safety.may_open(path)` | **확정**(Enter·열기)해도 되는지 (차단 경로 · 깊이 ≤ min_depth 면 False — 끝에 `/` 를 붙인 폴더 표기는 min_depth 깊이부터, 더 깊은 경로는 그대로 허용) |
 | `safety.on_automount(path)` / `has_automounts()` | autofs 마운트 위인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |

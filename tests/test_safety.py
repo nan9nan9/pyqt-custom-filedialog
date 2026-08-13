@@ -430,18 +430,21 @@ def test_min_depth_alone_installs_completer_guard(qapp, shallow_tree):
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     installed = hooks_module.guard_dialog(dialog)
 
-    # 자동완성 모델 + 타이핑 가드 + 확정 차단까지. 얕은 자리를 "눌러 들어가는"
-    # 것은 막지 않으므로 더블클릭/콤보 차단(_ItemBlocker)과 bounce 는 안 건다.
-    from custom_file_dialog.guard import _AcceptBlocker, _ItemBlocker, _TypingGuard
+    # min_depth 만 켜도 전부 건다 — 얕은 자리는 **들어가는 것만으로** 통째로
+    # 나열되므로 확정뿐 아니라 이동(더블클릭 · 콤보 · 상위 폴더)도 막아야 한다.
+    from custom_file_dialog.guard import (
+        _AcceptBlocker,
+        _ItemBlocker,
+        _ParentBlocker,
+        _TypingGuard,
+    )
 
     assert installed[0] == "completer"
+    assert any(isinstance(item, _TypingGuard) for item in installed)
     assert any(isinstance(item, _AcceptBlocker) for item in installed)
-    assert not any(isinstance(item, _ItemBlocker) for item in installed)
-    assert "bounce" not in installed
-    assert all(
-        item == "completer" or isinstance(item, (_TypingGuard, _AcceptBlocker))
-        for item in installed
-    )
+    assert any(isinstance(item, _ItemBlocker) for item in installed)
+    assert any(isinstance(item, _ParentBlocker) for item in installed)
+    assert "bounce" in installed
     name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
     assert isinstance(name_edit.completer().model(), GuardedFileSystemModel)
 
@@ -1581,3 +1584,76 @@ def test_safety_forces_qt_dialog_over_native(qapp, guarded_root, monkeypatch):
     monkeypatch.setattr(safety, "has_automounts", lambda: False)
     exec_file_dialog(mode="open_file", native=True)
     assert used == ["native"], used
+
+
+def test_min_depth_blocks_entering_shallow_places(qapp, shallow_tree):
+    """min_depth 만 켜도 얕은 자리로 **들어가는** 통로가 막힌다.
+
+    들어가는 순간 그 자리가 통째로 나열된다 — automount 라면 그 한 번으로
+    전부 마운트다. 예전에는 상위 폴더(↑)·더블클릭·"Look in" 이 모두 열려 있어
+    /user/myaccount 에서 ↑ 한 번이면 /user 가 나열됐다.
+    """
+    from qtpy.QtCore import QEvent, QPointF, Qt
+    from qtpy.QtGui import QMouseEvent
+    from qtpy.QtWidgets import QFileDialog, QToolButton
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _ParentBlocker
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(inner)
+    dialog.show()
+    _spin(qapp, 300)
+
+    installed = guard_dialog(dialog)
+    blocker = [h for h in installed if isinstance(h, _ParentBlocker)][0]
+    button = dialog.findChild(QToolButton, "toParentButton")
+
+    def click_up():
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(5, 5),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        return blocker.eventFilter(button, event)
+
+    # /user/myaccount 에서 ↑ -> /user(얕음) 이므로 삼킨다
+    assert click_up() is True
+    assert blocker.blocked == [os.path.normpath(root)]
+
+    # 충분히 깊은 자리에서는 평소대로 올라간다
+    deeper = os.path.join(inner, "proj")
+    dialog.setDirectory(deeper)
+    assert click_up() is False
+    dialog.close()
+
+
+def test_min_depth_bounces_back_from_shallow_place(qapp, shallow_tree):
+    """그래도 들어가졌으면 직전 폴더로 되돌린다(마지막 방어).
+
+    이미 읽은 뒤라 늦지만, 그 자리에 머무르며 계속 갱신되지는 않게 한다.
+    """
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import guard_dialog, safety
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(inner)
+    assert "bounce" in guard_dialog(dialog)
+
+    dialog.setDirectory(root)                 # 어떻게든 얕은 자리로 갔다면
+    dialog.directoryEntered.emit(root)        # 사용자 이동과 같은 신호
+    assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(inner)
+    dialog.close()
