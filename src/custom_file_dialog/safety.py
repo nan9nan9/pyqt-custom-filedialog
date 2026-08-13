@@ -30,13 +30,33 @@ NFS 같은 하드 마운트에서는 서버가 응답하지 않으면 ``os.stat(
   막아야 할 때 쓰는 마지막 스위치다.
 
 나열만이 아니라 **한 경로를 만져 보는 것(stat)** 도 automount 아래에서는
-마운트를 부른다. ``/user/my`` 를 stat 하면 automounter 가 ``j`` 라는 이름을
+마운트를 부른다. ``/user/my`` 를 stat 하면 automounter 가 ``my`` 라는 이름을
 마운트하려고 시도한다 — 경로를 한 글자씩 칠 때마다 이 일이 일어나면 그것만으로
-시스템이 주저앉는다. 그래서 "입력 중인 경로를 **자동으로** 만져 봐도 되는가"를
-:func:`may_stat` 하나로 판정한다. 부모 폴더가 ``guarded_roots`` 이거나, 깊이가
-``min_depth`` 보다 **작거나 같거나**, **autofs 마운트 위**면 False — 그때는
-스레드+타임아웃 확인조차 하지 않고 **디스크를 아예 만지지 않는다.** autofs 는
-설정 없이도 ``/proc/self/mountinfo`` 에서 자동으로 알아본다.
+시스템이 주저앉는다. 그래서 **동작마다 무엇을 만지게 되는지**로 판정을 나눈다.
+두 가지만 알면 나머지는 따라온다.
+
+- :func:`risky_place` — 그 자리를 **통째로 읽으면** 위험한가
+  (지목된 자리 · 얕은 자리 · autofs 위)
+- :func:`risky_name` — 그 **이름 하나를 stat 하면** 위험한가
+  (= 그 **부모**가 위험한가. ``/user/my`` 의 stat 은 ``/user`` 안에서 ``my`` 를
+  찾는 일이다)
+
+네 판정은 그 둘에 "누가 시켰는가"를 곱한 것이다. 사용자가 명시적으로 시킨
+쪽이 한 단계 관대하다 — 목록에 이미 보이는 항목을 누르거나, 끝에 구분자를
+붙여 "이 폴더를 열겠다"고 밝힌 경우다.
+
+======================  ========================  ========================
+동작이 만지는 것          자동 (우리가 건다)         사용자 명시 (눌렀다)
+======================  ========================  ========================
+폴더를 통째로            :func:`may_list`          :func:`may_enter`
+                        (+ ``allow_listing``)
+경로 이름 하나           :func:`may_stat`          :func:`may_open`
+                                                  (+ 끝 구분자 예외)
+======================  ========================  ========================
+
+위험하다고 판정되면 **디스크를 아예 만지지 않는다** — 스레드+타임아웃 확인조차
+하지 않는다. autofs 는 설정 없이도 ``/proc/self/mountinfo`` 에서 자동으로
+알아본다.
 
 멈춘 확인 스레드가 쌓이지도 않는다 — 죽은 원격 마운트를 실제로 만져 보는
 확인은 **마운트당 한 번에 하나만** 돌고(:func:`call_with_timeout` 의
@@ -264,21 +284,38 @@ def listing_allowed():
         return _settings["allow_listing"]
 
 
-def may_list(path):
-    """그 폴더를 자동완성이 읽어도 되는지 — 세 설정과 automount 를 한 번에 본다.
+def risky_place(path):
+    """그 자리를 **통째로 읽으면** 위험한가 — 나열·진입 판정의 공통 뼈대.
 
-    ``allow_listing`` 이 꺼져 있거나, ``guarded_roots`` 에 지목됐거나,
-    ``min_depth`` 보다 얕거나, **autofs 마운트 위**면 False.
-    (autofs 는 항목을 나열해 stat 하는 것만으로 전부 마운트되고, 아직 안 붙은
-    하위 폴더는 나열하려면 먼저 마운트해야 한다 — 설정이 없어도 mountinfo 에서
-    자동으로 알아보고 아예 읽지 않는다.)
+    폴더를 읽으면 Qt 가 항목마다 stat 하므로, automount 아래에서는 그것이 곧
+    "그 폴더의 모든 이름을 마운트"다. 셋 중 하나면 위험하다.
+
+    - ``guarded_roots`` 로 지목한 자리
+    - ``min_depth`` 보다 얕은 자리
+    - autofs 마운트 위 (설정 없이 마운트 표에서 자동으로 알아본다)
     """
-    return (
-        listing_allowed()
-        and not is_guarded(path)
-        and not is_too_shallow(path)
-        and not on_automount(path)
-    )
+    return is_guarded(path) or is_too_shallow(path) or on_automount(path)
+
+
+def risky_name(path):
+    """그 **이름 하나를 stat 하면** 위험한가 — 자동 확인 판정의 뼈대.
+
+    경로 하나를 stat 하는 것은 "부모 폴더 안에서 그 이름을 찾는" 일이라
+    **부모**가 기준이다(``/user/my`` 를 stat = ``/user`` 안에서 ``my`` 를 찾음
+    = automounter 에게 ``my`` 를 마운트해 보라는 뜻). 경로 자신이 autofs 위인
+    것도 함께 본다 — 아직 안 붙은 이름일 수 있다.
+    """
+    return risky_place(os.path.dirname(_abspath(path))) or on_automount(path)
+
+
+def may_list(path):
+    """그 폴더를 **자동완성이** 읽어도 되는지.
+
+    :func:`risky_place` 에 더해 ``allow_listing`` 스위치를 본다 — 그 설정은
+    자동완성 전용이라 여기서만 걸린다(사용자가 눌러 들어가는 :func:`may_enter`
+    는 보지 않는다).
+    """
+    return listing_allowed() and not risky_place(path)
 
 
 def protection_active():
@@ -315,45 +352,24 @@ def on_automount(path):
 def may_stat(path):
     """입력 중인 경로를 **자동으로** 만져(stat) 봐도 되는지.
 
-    타이핑 도중의 미완성 경로를 키 입력마다 stat 하면, automount 아래에서는
-    글자마다 마운트 시도가 일어난다(``/user/my`` → ``j`` 마운트 시도). 다음이면
-    False — **디스크를 아예 만지지 않는다** (스레드+타임아웃 확인조차 안 한다).
+    타이핑 도중의 미완성 경로를 키 입력마다 stat 하면 글자마다 마운트 시도가
+    일어난다(``/user/my`` → ``my`` 를 마운트해 보라는 뜻). 위험하면 **디스크를
+    아예 만지지 않는다** — 스레드+타임아웃 확인조차 하지 않는다.
 
-    - 부모 폴더가 ``guarded_roots`` 로 지목된 자리
-    - 깊이가 ``min_depth`` 보다 **작거나 같음** (``min_depth=2`` 면 ``/user/my``
-      까지 금지, ``/user/myaccount/x`` 부터 허용)
-    - autofs 마운트 위 (지점 자체든 아직 안 붙은 그 아래든 — 설정 없이 자동)
-
-    자동 확인(자동완성 · 키 입력마다의 유효성 표시)에만 쓰는 판정이다. 사용자가
-    Enter 나 버튼으로 **확정**하는 쪽은 :func:`may_open` 이 따로 판정한다 —
-    깊은 경로의 의도한 마운트(``/user/myaccount/a.csv``)는 확정의 stat 한 번으로
-    일어나면 된다.
+    자동 확인(자동완성 · 키 입력마다의 유효성 표시)에만 쓴다. 사용자가 Enter 나
+    버튼으로 **확정**하는 쪽은 :func:`may_open` 이 한 단계 관대하게 판정한다.
     """
-    if not path:
-        return True
-    absolute = _abspath(path)
-    if is_guarded(os.path.dirname(absolute)):
-        return False
-    limit = min_depth()
-    if limit > 0 and path_depth(absolute) <= limit:
-        return False
-    return not on_automount(absolute)
+    return not path or not risky_name(path)
 
 
 def may_enter(path):
-    """그 자리를 **열어(=들어가) 되는지** — 들어가면 통째로 나열되기 때문이다.
+    """그 자리를 **열어(=들어가) 되는지**.
 
-    폴더를 여는 순간 Qt 는 그 안을 전부 읽어 항목마다 stat 한다. automount
-    아래에서는 그것이 곧 "그 폴더의 모든 이름을 마운트"다. 그래서 나열 판정
-    (:func:`may_list`)과 같은 기준을 쓴다 — ``guarded_roots`` 로 지목된 자리,
-    ``min_depth`` 보다 얕은 자리, autofs 마운트 위면 False.
-
-    ``allow_listing`` 은 보지 않는다. 그 설정은 **자동완성**을 끄는 스위치이지,
+    들어가면 그 폴더가 통째로 나열되므로 :func:`risky_place` 를 그대로 쓴다.
+    ``allow_listing`` 은 보지 않는다 — 그 설정은 자동완성을 끄는 스위치이지,
     사용자가 눌러서 들어가는 것까지 막는 뜻이 아니다.
     """
-    return not (
-        is_guarded(path) or is_too_shallow(path) or on_automount(path)
-    )
+    return not risky_place(path)
 
 
 def may_open(path):

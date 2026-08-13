@@ -88,7 +88,59 @@ class GuardedFileSystemModel(QFileSystemModel):
         super().fetchMore(index)
 
 
-class _ItemBlocker(QObject):
+class _Blocker(QObject):
+    """열면 안 되는 자리로 가는 **입력 이벤트를 삼켜** 막는 장치들의 공통 뼈대.
+
+    Qt 가 C++ 에서 연결해 둔 슬롯(``activated`` · ``accept()``)은 파이썬에서
+    끊을 수 없다. 그래서 그 신호가 나기 **전 단계인 입력 이벤트**를 가로챈다.
+    세 장치(목록 더블클릭 · 상위 폴더 · 파일 이름 칸 확정)가 모두 같은 흐름을
+    타므로 여기 모은다.
+
+        관심 있는 이벤트인가?  ->  목적지가 어디인가?  ->  가도 되는가?
+
+    하위 클래스는 그 세 물음에 답하는 :meth:`destination` 하나만 채우면 되고,
+    삼킨 뒤 할 일(팝업 닫기 · 버튼 풀기 · 안내)은 :meth:`on_blocked` 에 적는다.
+    ``blocked`` 에는 막은 경로가 쌓여 진단에 쓰인다.
+    """
+
+    def __init__(self, dialog, parent=None):
+        super().__init__(parent if parent is not None else dialog)
+        self._dialog = dialog
+        self.blocked = []
+
+    # -------------------------------------------------------- 하위 클래스 몫
+    def destination(self, obj, event):
+        """이 이벤트가 열려는 경로 (관심 없는 이벤트면 빈 문자열)."""
+        raise NotImplementedError
+
+    def allowed(self, path):
+        """그 경로로 가도 되는지. 기본은 "들어가도 되는가"."""
+        return safety.may_enter(path)
+
+    def on_blocked(self, obj, event, path):
+        """삼킨 뒤 할 일 (기본: 아무것도 안 함)."""
+
+    # ------------------------------------------------------------ Qt 진입점
+    def eventFilter(self, obj, event):   # noqa: N802 (Qt 시그니처)
+        try:
+            path = self.destination(obj, event)
+            if not path or self.allowed(path):
+                return False
+            self.blocked.append(path)
+            self.on_blocked(obj, event, path)
+            return True                  # 그 동작 자체를 없던 일로
+        except RuntimeError:
+            # 다이얼로그가 닫히는 중이면 대상 위젯이 이미 사라졌을 수 있다
+            return False
+
+
+def _pressed_button(obj, event):
+    """릴리즈를 삼킬 때 눌린 채로 남지 않도록 버튼을 풀어 준다."""
+    if event.type() == QEvent.Type.MouseButtonRelease and hasattr(obj, "setDown"):
+        obj.setDown(False)
+
+
+class _ItemBlocker(_Blocker):
     """뷰에서 **열면 안 되는 자리**를 여는 이벤트를 삼킨다.
 
     폴더를 열면 Qt 가 그 안을 통째로 읽으므로, 차단 경로만이 아니라 얕은
@@ -99,38 +151,27 @@ class _ItemBlocker(QObject):
     """
 
     def __init__(self, view, open_events, after=None, parent=None):
-        super().__init__(parent if parent is not None else view)
+        super().__init__(view, parent)
         self._view = view
         self._events = open_events
         self._after = after              # 삼킨 뒤 할 일 (예: 팝업 닫기)
-        self.blocked = []
 
-    def eventFilter(self, obj, event):   # noqa: N802 (Qt 시그니처)
-        try:
-            return self._filter(event)
-        except RuntimeError:
-            # 다이얼로그가 닫히는 중이면 대상 위젯이 이미 사라졌을 수 있다
-            return False
-
-    def _filter(self, event):
+    def destination(self, obj, event):
         kind = event.type()
         if kind in self._events:
             index = self._view.indexAt(event.pos())
         elif kind == QEvent.Type.KeyPress and event.key() in _OPEN_KEYS:
             index = self._view.currentIndex()
         else:
-            return False
+            return ""
+        return url_path(index.data(PATH_ROLE)) if index.isValid() else ""
 
-        path = url_path(index.data(PATH_ROLE)) if index.isValid() else ""
-        if path and not safety.may_enter(path):
-            self.blocked.append(path)
-            if self._after is not None:
-                self._after()
-            return True                  # 여는 동작 자체를 없던 일로
-        return False
+    def on_blocked(self, obj, event, path):
+        if self._after is not None:
+            self._after()
 
 
-class _ParentBlocker(QObject):
+class _ParentBlocker(_Blocker):
     """"상위 폴더(↑)" 로 **열면 안 되는 자리**로 올라가는 것을 막는다.
 
     ``/user/myaccount`` 에서 ↑ 를 누르면 ``/user`` 가 열리며 통째로 나열된다 —
@@ -139,86 +180,67 @@ class _ParentBlocker(QObject):
     """
 
     def __init__(self, dialog, button, parent=None):
-        super().__init__(parent if parent is not None else dialog)
-        self._dialog = dialog
+        super().__init__(dialog, parent)
         self._button = button
-        self.blocked = []
 
-    def eventFilter(self, obj, event):   # noqa: N802 (Qt 시그니처)
-        try:
-            kind = event.type()
-            if kind == QEvent.Type.KeyPress:
-                if event.key() not in _OPEN_KEYS + (Qt.Key.Key_Space,):
-                    return False
-            elif kind != QEvent.Type.MouseButtonRelease:
-                return False
-            destination = os.path.dirname(
-                abspath(self._dialog.directory().absolutePath()) or ""
-            )
-            if destination and not safety.may_enter(destination):
-                self.blocked.append(destination)
-                # 릴리즈를 삼키면 버튼이 눌린 상태로 남는다 — 직접 풀어 준다
-                self._button.setDown(False)
-                return True              # 올라가는 동작 자체를 없던 일로
-        except RuntimeError:
-            pass                         # 다이얼로그가 닫히는 중
-        return False
+    def destination(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.KeyPress:
+            if event.key() not in _OPEN_KEYS + (Qt.Key.Key_Space,):
+                return ""
+        elif kind != QEvent.Type.MouseButtonRelease:
+            return ""
+        return os.path.dirname(abspath(self._dialog.directory().absolutePath()) or "")
+
+    def on_blocked(self, obj, event, path):
+        _pressed_button(self._button, event)
 
 
-class _AcceptBlocker(QObject):
+class _AcceptBlocker(_Blocker):
     """파일 이름 칸에 친 경로를 확정하는 것을 막는다 — 차단 경로와 얕은 경로.
 
     ``QDialog.accept()`` 는 Qt 가 C++ 에서 부르므로 가로챌 수 없다. 그 앞 단계인
     **Enter 키와 열기 버튼 클릭**을 삼킨다. accept 는 GUI 스레드에서 입력 경로를
     곧바로 stat 하므로, automount 아래의 얕은 경로(``/user/my``)는 확정 한 번으로
-    멈춘다 — 무엇을 막을지는 :func:`~custom_file_dialog.safety.may_open`
-    (``guarded_roots`` + 깊이 ≤ ``min_depth``)이 정한다.
+    멈춘다 — 무엇을 막을지는 :func:`~custom_file_dialog.safety.may_open` 이
+    정한다(형제 장치들이 쓰는 :func:`may_enter` 보다 한 단계 관대하다:
+    끝에 구분자를 붙이면 ``min_depth`` 깊이부터 열 수 있다).
     """
 
     def __init__(self, dialog, name_edit, parent=None):
-        super().__init__(parent if parent is not None else dialog)
-        self._dialog = dialog
+        super().__init__(dialog, parent)
         self._edit = name_edit
-        self.blocked = []
         self.notice = None              # min_depth 안내 팝업 (재사용)
 
-    def eventFilter(self, obj, event):   # noqa: N802 (Qt 시그니처)
-        try:
-            return self._filter(obj, event)
-        except RuntimeError:
-            return False
-
-    def _filter(self, obj, event):
+    def destination(self, obj, event):
         kind = event.type()
         if kind == QEvent.Type.KeyPress:
             keys = _OPEN_KEYS if obj is self._edit else _OPEN_KEYS + (Qt.Key.Key_Space,)
             if event.key() not in keys:
-                return False
+                return ""
         elif kind == QEvent.Type.MouseButtonRelease:
             # 클릭으로 "확정"이 되는 건 열기/저장 버튼뿐이다. 입력창 클릭까지
             # 삼키면 차단 경로를 고치려고 칸을 클릭하는 것조차 안 된다.
             if obj is self._edit:
-                return False
+                return ""
         else:
-            return False
+            return ""
 
-        # 상대 경로("..")도 현재 폴더 기준으로 풀되, 끝의 구분자는 "이 폴더를
-        # 열겠다"는 명시적 표기라 판정(may_open)까지 살려서 넘긴다.
+        # 상대 경로("..")도 현재 폴더 기준으로 푼다
+        return _typed_path(self._dialog, self._edit.text())
+
+    def allowed(self, path):
+        # 끝의 구분자는 "이 폴더를 열겠다"는 명시적 표기라 판정에 살려서 넘긴다.
+        # 정규화하면 사라지므로 원문에서 다시 본다(기록·안내에는 정규화된 경로만
+        # 남겨 진단 값이 두 형태로 섞이지 않게 한다).
         raw = (self._edit.text() or "").strip()
-        path = _typed_path(self._dialog, raw)
-        if not path:
-            return False
-        opener = path
-        if raw.endswith(("/", os.sep)) and not opener.endswith(os.sep):
-            opener += os.sep
-        if not safety.may_open(opener):
-            self.blocked.append(path)
-            # 릴리즈를 삼키면 그 버튼이 눌린 상태로 남는다 — 직접 풀어 준다
-            if kind == QEvent.Type.MouseButtonRelease and hasattr(obj, "setDown"):
-                obj.setDown(False)
-            self._explain(path)
-            return True
-        return False
+        if raw.endswith(("/", os.sep)) and not path.endswith(os.sep):
+            path += os.sep
+        return safety.may_open(path)
+
+    def on_blocked(self, obj, event, path):
+        _pressed_button(obj, event)
+        self._explain(path)
 
     def _explain(self, path):
         """왜 안 열리는지 안내한다 — min_depth 규칙에 걸렸을 때만.
