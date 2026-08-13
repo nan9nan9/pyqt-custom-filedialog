@@ -1573,6 +1573,32 @@ ok, reason = validate_paths(paths, mode="open_files")
 QT_QPA_PLATFORM=offscreen python -m pytest -q
 ```
 
+**네 바인딩에서 모두 돌려야 합니다.** 바인딩마다 없는 API 가 달라(PySide2 의
+`Q_ARG`, Qt6 의 QFileDialog 내부 슬롯) 한 곳에서만 통과하는 코드가 나옵니다.
+
+```bash
+QT_API=pyside2 python -m pytest -q      # PySide2 는 Python ≤3.10
+QT_API=pyside6 python -m pytest -q
+QT_API=pyqt6   python -m pytest -q
+```
+
+### 보호가 정말 잠겨 있는지 확인하기
+
+automount 보호는 규칙이 여러 통로에 걸쳐 있어, 테스트가 "통과"해도 실제로
+무엇을 지키는지 알기 어렵습니다. 핵심 판정에 **일부러 결함을 심어** 테스트가
+잡아내는지 보면 확실합니다. 예를 들어 `policy.risky_place` 에서
+`mounts.on_automount(path)` 항을 지우고 전체 테스트를 돌리면 실패해야 합니다.
+아래 여섯 자리가 그런 급소이고, 모두 지금 테스트가 잡습니다.
+
+| 심을 결함 | 잡는 축 |
+| --- | --- |
+| `risky_place` 가 autofs 를 무시 | 나열·진입 판정 |
+| 명시 표기(`/`)가 automount 지점도 허용 | 확정 판정 |
+| `mount_for` 가 같은 지점의 **먼저** 나온 줄을 선택 | 이미 붙은 마운트 판별 |
+| `reach` 가 autofs 를 로컬처럼 곧바로 stat | 실제 접근 차단 |
+| 타이핑 중 목록 선택을 동기화하지 않음 | 연속 이동 |
+| 확정 차단 판정을 항상 통과 | Enter 차단 |
+
 테스트도 소스와 같은 기준으로 나뉘어 있습니다. 공용 부트스트랩(QSettings 를
 임시 폴더로 돌리는 것 포함)은 `conftest.py`, 파일을 넘나드는 도우미는
 `helpers.py` 에 있습니다.
