@@ -1737,17 +1737,32 @@ def test_mountinfo_survives_non_utf8_paths(monkeypatch, tmp_path):
         b"37 25 0:33 / /mnt/ok rw - nfs4 srv:/e rw\n"
     )
     monkeypatch.setattr(safety_mounts, "MOUNTINFO", str(fake))
+    safety.reset()                                   # 앞 테스트 설정에 기대지 않는다
     safety.clear_cache()
     try:
         mounts = safety.iter_mounts(refresh=True)
         assert len(mounts) == 2                      # 두 줄 다 살아 있다
         assert safety.mount_for("/mnt/ok/a")[1] == "nfs4"
-        # 판정 함수들이 예외 없이 돈다
-        assert safety.may_stat("/mnt/ok/a/b/c") in (True, False)
-        assert safety.may_enter("/mnt/ok/a") in (True, False)
-        assert safety.protection_active() in (True, False)
+
+        # 깨진 이름이 섞인 표에서도 판정이 **제 값을 낸다**(예외가 아니라)
+        assert safety.may_stat("/mnt/ok/a/b/c") is True
+        assert safety.may_enter("/mnt/ok/a") is True
+        assert safety.protection_active() is False   # autofs 도 설정도 없다
+
+        # 그 깨진 이름의 마운트도 정상으로 잡힌다
+        broken = mounts[0][0]
+        assert safety.mount_for(os.path.join(broken, "x"))[1] == "cifs"
+
+        # autofs 로 잡히면 보호가 켜지는 것도 확인(같은 표에서)
+        fake.write_bytes(
+            b"36 25 0:32 / /mnt/\xc7\xd1\xb1\xdb rw - autofs auto.x rw\n"
+        )
+        safety.clear_cache()
+        assert safety.protection_active() is True
+        assert safety.may_enter(mounts[0][0]) is False
     finally:
         safety.clear_cache()
+        safety.reset()
 
 
 def test_start_dir_respects_guarded_root(qapp, guarded_root):
