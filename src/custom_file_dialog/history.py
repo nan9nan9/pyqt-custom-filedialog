@@ -62,8 +62,9 @@ class PathHistory:
         self._settings = settings
         self._items = []
         self._last_dir = None
+        self._loaded_from = None        # 지금 들고 있는 값을 어느 저장소에서 읽었나
         if self.key:
-            self._load()
+            self._store()               # 읽기까지 여기서 한다
 
     # ------------------------------------------------------------- 저장소
     def _store(self):
@@ -72,16 +73,20 @@ class PathHistory:
         한 번 만들어 붙들고 있으면, 위젯을 만든 **뒤에**
         :func:`configure_settings` 를 부른 앱에서 그 위젯만 옛 저장소를 계속
         써서 "같은 이름이면 같은 기억을 공유한다"는 약속이 조용히 깨진다.
-        QSettings 만들기는 값싸다.
+
+        저장소가 **바뀌었으면 값도 다시 읽는다.** 새 저장소를 쓰면서 옛 목록을
+        들고 있으면, 다음 저장이 그쪽에 이미 쌓여 있던 기록을 통째로 덮어쓴다.
         """
         if not self.key:
             return None
-        return self._settings if self._settings is not None else default_settings()
+        store = self._settings if self._settings is not None else default_settings()
+        where = store.fileName()
+        if where != self._loaded_from:
+            self._loaded_from = where
+            self._load(store)
+        return store
 
-    def _load(self):
-        store = self._store()
-        if store is None:
-            return
+    def _load(self, store):
         items = store.value("custom_file_dialog/%s/recent" % self.key, [])
         # QSettings 는 항목이 1개면 문자열로 돌려주는 바인딩이 있어 보정한다.
         if isinstance(items, str):
@@ -111,6 +116,9 @@ class PathHistory:
         """경로를 최근 목록 맨 앞에 추가한다(중복은 위로 끌어올림)."""
         if not path or self.max_items <= 0:
             return
+        # **먼저** 저장소를 확인한다. 목록을 고친 뒤에 확인하면, 그 안에서
+        # 일어나는 "저장소가 바뀌었으니 다시 읽기"가 방금 넣은 값을 지운다.
+        self._store()
         path = str(path)
         if path in self._items:
             self._items.remove(path)
@@ -126,7 +134,7 @@ class PathHistory:
         """직전에 다이얼로그를 닫았던 폴더."""
         return self._last_dir
 
-    def set_last_dir(self, directory):
+    def set_last_dir(self, directory):  # noqa: D401 (아래 docstring 참고)
         """마지막 폴더만 기록한다.
 
         최근 경로 목록은 **건드리지 않는다.** 같은 키를 max_items 가 다른 곳에서
@@ -134,6 +142,7 @@ class PathHistory:
         여기서 목록까지 다시 쓰면 작은 쪽 기준으로 잘려 나간다.
         """
         if directory:
+            self._store()               # add() 와 같은 이유로 먼저 확인한다
             self._last_dir = str(directory)
             self._save_last_dir()
 

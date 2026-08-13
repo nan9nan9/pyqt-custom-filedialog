@@ -987,9 +987,13 @@ def test_existing_recent_dir_is_kept_after_rule_change(tmp_path):
             os.path.normpath(str(tmp_path / "뿌리")), "recent"
         )
 
-        # 옛 자리에 이미 쌓여 있으면 그것을 계속 쓴다
+        # 이름만 같은 **남의 폴더**는 뺏지 않는다(우리 표식이 없다)
         old_dir = legacy_recent_dir()
         os.makedirs(old_dir)
+        assert default_recent_dir() != old_dir
+
+        # 우리가 쌓아 둔 저장소면 그것을 계속 쓴다
+        os.makedirs(os.path.join(old_dir, "최근 파일"))
         assert default_recent_dir() == old_dir
         assert RecentStore().base_dir == os.path.normpath(old_dir)
     finally:

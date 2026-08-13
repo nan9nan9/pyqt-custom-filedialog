@@ -14,6 +14,7 @@ import os
 
 from . import safety
 from .favorites import (
+    INDEX_FILENAME,
     FavoritesError,
     FavoritesStore,
     _safe_name,
@@ -43,6 +44,20 @@ def legacy_recent_dir():
     )
 
 
+def _looks_like_our_store(directory):
+    """그 폴더가 **우리가 만든** 최근 파일 저장소인지.
+
+    이름이 같다고 아무 폴더나 쓰면 안 된다 — 사용자가 홈에 만들어 둔 ``recent``
+    를 뺏어 그 안에 분류 폴더를 만들어 버린다. 우리 저장소에는 링크 -> 원본
+    매핑 파일이나 분류 폴더가 있다.
+    """
+    if not os.path.isdir(directory):
+        return False
+    if os.path.exists(os.path.join(directory, INDEX_FILENAME)):
+        return True
+    return os.path.isdir(os.path.join(directory, DEFAULT_RECENT_NAME))
+
+
 def default_recent_dir():
     """최근 파일 폴더의 기본 위치 — 저장소 뿌리 아래의 ``recent``.
 
@@ -59,7 +74,7 @@ def default_recent_dir():
     if os.path.isdir(fresh):
         return fresh
     legacy = legacy_recent_dir()
-    if legacy != fresh and os.path.isdir(legacy):
+    if legacy != fresh and _looks_like_our_store(legacy):
         return legacy
     return fresh
 

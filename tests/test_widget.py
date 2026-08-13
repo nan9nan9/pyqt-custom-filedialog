@@ -452,3 +452,34 @@ def test_effective_sidebar_shows_a_folder_in_save_mode(qapp, tmp_path):
 
     urls = [u.toLocalFile() for u in edit.effective_sidebar_urls()]
     assert os.path.normpath(str(target)) not in [os.path.normpath(u) for u in urls]
+
+
+def test_history_follows_settings_configured_later(qapp, tmp_path):
+    """위젯을 만든 **뒤에** configure_settings 를 불러도 기억을 공유한다.
+
+    예전에는 만들 때의 저장소에 값을 묶어 둬서, 나중에 공용 저장소를 지정하면
+    그 위젯만 옛 저장소를 계속 썼다. 그것을 고치자 이번에는 목록을 고친 뒤에
+    저장소를 확인해 **다시 읽기가 방금 넣은 값을 덮어썼다** — 즉 이미 쌓여
+    있던 기록이 통째로 날아갔다.
+    """
+    from qtpy.QtCore import QSettings
+
+    from custom_file_dialog import configure_settings
+    from custom_file_dialog.history import PathHistory
+
+    shared = QSettings("테스트조직", "테스트앱")
+    shared.setValue("custom_file_dialog/키/recent", ["/data/a.csv", "/data/b.csv"])
+    shared.setValue("custom_file_dialog/키/last_dir", "/data")
+    shared.sync()
+
+    history = PathHistory(key="키")          # 설정을 지정하기 **전에** 만든다
+    configure_settings("테스트조직", "테스트앱")
+    try:
+        history.add("/data/new.csv")
+
+        saved = QSettings("테스트조직", "테스트앱").value("custom_file_dialog/키/recent")
+        assert saved[0] == "/data/new.csv"
+        assert "/data/a.csv" in saved and "/data/b.csv" in saved   # 기존 기록 유지
+        assert history.last_dir() == "/data"                       # 값도 새 저장소 기준
+    finally:
+        configure_settings(None, None)
