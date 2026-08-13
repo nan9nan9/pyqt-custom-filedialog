@@ -25,7 +25,7 @@ from qtpy.QtWidgets import QFileDialog
 from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
 from .filters import build_filter, ensure_suffix, suffix_of
-from .places import Places
+from .places import PlacesOptions
 from .qt_compat import enum_value, exec_dialog, make_options
 from .recent import DEFAULT_RECENT_MAX
 from .sidebar import fit_sidebar
@@ -324,14 +324,16 @@ class CustomFileDialog(QFileDialog):
         self._sidebar_width = sidebar_width
         self._sidebar_fitted = False
         self._path_timeout = None if path_timeout is None else float(path_timeout)
-        self._places = places if places is not None else Places.from_options(
+        # 위젯과 같은 규칙으로 조립한다(True = 기본 위치에 자동 생성 등).
+        # 다이얼로그는 뜬 뒤 설정이 바뀌지 않으므로 한 번 만들고 만다.
+        self._places = places if places is not None else PlacesOptions(
             favorites=favorites,
             recent=recent,
             recent_max=recent_max,
             sidebar_urls=sidebar_urls,
             fixed_urls=fixed_sidebar_urls,
             icon=favorites_icon,
-        )
+        ).places()
 
         # 네이티브 창으로는 아래 것들을 하나도 걸 수 없다
         self.setOptions(

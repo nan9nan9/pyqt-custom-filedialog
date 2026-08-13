@@ -15,6 +15,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import dialog as dialog_module
+from . import drops
 from .constants import (
     DEFAULT_BUTTON_TEXT,
     DEFAULT_CAPTIONS,
@@ -30,7 +31,7 @@ from .constants import (
 from . import safety
 from .hooks import GuardedFileSystemModel
 from .icons import standard_icon
-from .places import Places, as_recent_store
+from .places import PlacesOptions
 from .filters import build_filter, ensure_suffix, suffix_of
 from .history import PathHistory
 from .validators import isdir_check, join_paths, split_paths, validate_paths
@@ -170,15 +171,16 @@ class FilePathEdit(QWidget):
         self._drag_drop = bool(drag_drop)
         self._native = bool(native)
         self._path_timeout = None if path_timeout is None else float(path_timeout)
-        self._sidebar_urls = list(sidebar_urls) if sidebar_urls is not None else None
-        self._fixed_sidebar_urls = (
-            list(fixed_sidebar_urls) if fixed_sidebar_urls is not None else None
+        # 사이드바에 얹을 것들의 설정은 한 객체가 들고 있다가 Places 를 만든다
+        # (같은 관리를 다이얼로그도 하므로 places 모듈에 모아 두었다).
+        self._options = PlacesOptions(
+            favorites=favorites,
+            recent=recent_files,
+            recent_max=recent_max,
+            sidebar_urls=sidebar_urls,
+            fixed_urls=fixed_sidebar_urls,
+            icon=favorites_icon,
         )
-        self._favorites = favorites
-        self._favorites_icon = favorites_icon
-        self._recent = as_recent_store(recent_files, recent_max)
-        # Places 는 아이콘 제공자 참조도 들고 있다(Qt 가 소유하지 않으므로 필요)
-        self._places_cache = None
         self._separator = separator or DEFAULT_SEPARATOR
         self._valid = True
         self._reason = ""
@@ -192,7 +194,42 @@ class FilePathEdit(QWidget):
             key=settings_key, max_items=history_size, settings=settings
         )
 
-        # ------------------------------------------------------------ UI
+        self._build_ui(
+            label=label,
+            placeholder=placeholder,
+            button_text=button_text,
+            button_icon=button_icon,
+            read_only=read_only,
+            clear_button=clear_button,
+            history_size=history_size,
+        )
+
+        # 자동완성: 실제 파일시스템을 대상으로 경로를 완성해 준다.
+        self._completer = None
+        self._completer_model = None
+        if completer:
+            self._install_completer()
+
+        # 드롭은 이 위젯이 직접 처리한다. QLineEdit 이 드롭을 먼저 먹어
+        # URL 문자열이 그대로 붙는 것을 막기 위해 자식은 드롭을 받지 않는다.
+        if self._drag_drop:
+            self.setAcceptDrops(True)
+            self._edit.setAcceptDrops(False)
+
+
+        self._edit.textChanged.connect(self._on_text_changed)
+        self._edit.editingFinished.connect(self.editingFinished)
+
+        self._update_validity()
+
+    # ------------------------------------------------------------ UI 조립
+    def _build_ui(self, label, placeholder, button_text, button_icon,
+                  read_only, clear_button, history_size):
+        """``[라벨] [입력창] [▾] [...]`` 한 줄을 만든다.
+
+        생성자에서 떼어 둔다 — 설정을 받아 상태를 세우는 일과 위젯을
+        늘어놓는 일은 함께 읽을 이유가 없다.
+        """
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -235,23 +272,6 @@ class FilePathEdit(QWidget):
         self._button.setToolTip(self._caption or DEFAULT_CAPTIONS[self._mode])
         self._button.clicked.connect(self.browse)
         layout.addWidget(self._button)
-
-        # 자동완성: 실제 파일시스템을 대상으로 경로를 완성해 준다.
-        self._completer = None
-        self._completer_model = None
-        if completer:
-            self._install_completer()
-
-        # 드롭은 이 위젯이 직접 처리한다. QLineEdit 이 드롭을 먼저 먹어
-        # URL 문자열이 그대로 붙는 것을 막기 위해 자식은 드롭을 받지 않는다.
-        if self._drag_drop:
-            self.setAcceptDrops(True)
-            self._edit.setAcceptDrops(False)
-
-        self._edit.textChanged.connect(self._on_text_changed)
-        self._edit.editingFinished.connect(self.editingFinished)
-
-        self._update_validity()
 
     # ------------------------------------------------------------ 내부 구성
     def _install_completer(self):
@@ -384,18 +404,7 @@ class FilePathEdit(QWidget):
 
     def _places(self):
         """사이드바에 얹을 것들의 묶음(설정이 바뀌면 다시 만든다)."""
-        if self._places_cache is None:
-            self._places_cache = Places(
-                favorites=self._favorites,
-                recent=self._recent,
-                sidebar_urls=self._sidebar_urls,
-                fixed_urls=self._fixed_sidebar_urls,
-                icon=self._favorites_icon,
-            )
-        return self._places_cache
-
-    def _reset_places(self):
-        self._places_cache = None
+        return self._options.places()
 
     def _isdir(self, path):
         """죽은 마운트에서 멈추지 않는 isdir (위젯의 path_timeout 설정을 따른다)."""
@@ -551,8 +560,7 @@ class FilePathEdit(QWidget):
         - Qt 가 사이드바 항목을 사용자 설정에 **영구 저장**하므로, 한 번 지정하면
           다음 실행에도 남는다(``None`` 으로 되돌려도 저장된 항목이 보인다).
         """
-        self._sidebar_urls = list(urls) if urls is not None else None
-        self._reset_places()
+        self._options.update(sidebar_urls=urls)
 
     def sidebar_urls(self):
         """지정된 사이드바 항목 목록(커스터마이즈하지 않았으면 None).
@@ -560,7 +568,8 @@ class FilePathEdit(QWidget):
         즐겨찾기로 덧붙는 분류는 포함되지 않는다. 다이얼로그에 실제로 넘어가는
         최종 목록이 필요하면 :meth:`effective_sidebar_urls` 를 쓴다.
         """
-        return list(self._sidebar_urls) if self._sidebar_urls is not None else None
+        urls = self._options.sidebar_urls
+        return list(urls) if urls is not None else None
 
     def effective_sidebar_urls(self):
         """지금 열면 사이드바에 실제로 들어갈 목록(홈 · 현재 위치 · 최근 · 북마크).
@@ -596,14 +605,12 @@ class FilePathEdit(QWidget):
 
         ``None`` 이면 사용자 홈만 보호하고, ``[]`` 면 아무것도 보호하지 않는다.
         """
-        self._fixed_sidebar_urls = list(urls) if urls is not None else None
-        self._reset_places()
+        self._options.update(fixed_urls=urls)
 
     def fixed_sidebar_urls(self):
         """지정한 보호 위치 목록(지정 안 했으면 None = 홈만 보호)."""
-        if self._fixed_sidebar_urls is None:
-            return None
-        return list(self._fixed_sidebar_urls)
+        urls = self._options.fixed_urls
+        return list(urls) if urls is not None else None
 
     def set_favorites(self, store):
         """즐겨찾기 저장소를 지정한다(``None`` 이면 사용 안 함).
@@ -612,12 +619,11 @@ class FilePathEdit(QWidget):
         경로로 복원된다. 즐겨찾기를 쓰면 사이드바를 건드리게 되므로
         네이티브 다이얼로그 대신 Qt 자체 다이얼로그로 열린다.
         """
-        self._favorites = store
-        self._reset_places()
+        self._options.update(favorites=store)
 
     def favorites(self):
         """지정된 :class:`FavoritesStore` (없으면 None)."""
-        return self._favorites
+        return self._options.favorites
 
     def set_favorites_icon(self, icon):
         """즐겨찾기 분류에 씌울 아이콘.
@@ -625,8 +631,7 @@ class FilePathEdit(QWidget):
         ``True`` 면 기본 별표, ``QIcon`` 이면 그 아이콘, ``False`` 면 Qt 기본
         폴더 아이콘을 그대로 쓴다.
         """
-        self._favorites_icon = icon
-        self._reset_places()
+        self._options.update(icon=icon)
 
     def set_recent_files(self, recent_files, recent_max=None):
         """"최근 파일" 사이드바 항목을 켜거나 끈다.
@@ -635,16 +640,16 @@ class FilePathEdit(QWidget):
         쓰지 않는다. :class:`~custom_file_dialog.recent.RecentStore` 를 직접
         넘기면 여러 위젯이 같은 목록을 공유할 수 있다.
         """
-        self._recent = as_recent_store(recent_files, recent_max)
-        self._reset_places()
+        self._options.update(recent=recent_files, recent_max=recent_max)
 
     def recent_files(self):
         """쓰고 있는 :class:`RecentStore` (안 쓰면 None)."""
-        return self._recent
+        return self._options.recent
 
     def recent_items(self):
         """최근에 고른 파일 목록(최신순). 최근 파일을 안 쓰면 빈 리스트."""
-        return self._recent.items() if self._recent is not None else []
+        recent = self._options.recent
+        return recent.items() if recent is not None else []
 
     def set_read_only(self, read_only):
         self._edit.setReadOnly(bool(read_only))
@@ -706,27 +711,12 @@ class FilePathEdit(QWidget):
         event.acceptProposedAction()
 
     def _acceptable_paths(self, event):
-        """드래그된 항목 중 현재 모드에 맞는 로컬 경로만 골라 반환한다."""
+        """드래그된 항목 중 현재 모드에 맞는 로컬 경로만 골라 반환한다.
+
+        규칙 자체는 Qt 와 무관하므로 :mod:`~custom_file_dialog.drops` 에 있다.
+        여기서는 이벤트에서 URL 을 꺼내 넘기기만 한다.
+        """
         mime = event.mimeData()
         if not mime.hasUrls():
             return []
-
-        paths = []
-        for url in mime.urls():
-            path = url.toLocalFile()
-            if not path:
-                continue
-            if self._mode == SelectMode.DIRECTORY:
-                # 폴더 모드에 파일을 떨어뜨리면 그 파일이 든 폴더로 받아 준다.
-                path = path if self._isdir(path) else os.path.dirname(path)
-                if not path:
-                    continue
-            elif self._isdir(path):
-                continue    # 파일 모드에 폴더는 받지 않는다
-            paths.append(path)
-
-        if not paths:
-            return []
-        if not is_multi_mode(self._mode):
-            paths = paths[:1]
-        return paths
+        return drops.acceptable_paths(mime.urls(), self._mode, self._isdir)

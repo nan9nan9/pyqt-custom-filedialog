@@ -127,29 +127,13 @@ class Places:
         self._category_icons = {}       # id(저장소) -> 아이콘 (처음 쓸 때 그린다)
 
     @classmethod
-    def from_options(
-        cls,
-        favorites=None,
-        recent=None,
-        recent_max=None,
-        sidebar_urls=None,
-        fixed_urls=None,
-        icon=True,
-    ):
-        """다이얼로그·위젯 생성자 인자를 그대로 받아 :class:`Places` 를 만든다.
+    def from_options(cls, **options):
+        """생성자 인자를 그대로 받아 :class:`Places` 를 만든다(예전 이름).
 
-        저장소 인자는 ``True`` (기본 위치에 자동 생성) · 인스턴스 · None 세 가지를
-        받는다 (:func:`as_favorites_store` · :func:`as_recent_store` 와 같은 규칙).
-        ``CustomFileDialog`` 와 ``FilePathEdit`` 이 같은 조립을 두 번 들고 있지
-        않도록 여기 한곳에 둔다.
+        규칙은 :class:`PlacesOptions` 하나에 모여 있다 — 이 이름은 그쪽으로
+        넘겨 주기만 한다.
         """
-        return cls(
-            favorites=as_favorites_store(favorites),
-            recent=as_recent_store(recent, recent_max),
-            sidebar_urls=sidebar_urls,
-            fixed_urls=fixed_urls,
-            icon=icon,
-        )
+        return PlacesOptions(**options).places()
 
     def __bool__(self):
         """사이드바에 얹을 게 하나라도 있는지."""
@@ -337,6 +321,72 @@ class Places:
                 provider.add_store(self.recent, clock_icon())
             self._provider = provider
         return self._provider
+
+
+class PlacesOptions:
+    """사이드바 구성 **설정**을 들고 있다가 :class:`Places` 를 만들어 준다.
+
+    위젯(:class:`~custom_file_dialog.path_edit.FilePathEdit`)은 이 설정들을
+    실행 중에 바꿀 수 있어야 해서, "설정 여섯 개를 들고 있다가 하나라도 바뀌면
+    다음에 쓸 때 다시 만든다"는 관리를 하고 있었다. 그 상태와 규칙을 한곳에
+    모은다 — 위젯은 값을 넘기고 :meth:`places` 만 부르면 된다.
+
+        options = PlacesOptions(favorites=store, recent_files=True)
+        options.places().sidebar_urls(cwd)
+        options.update(favorites=None)      # 다음 places() 는 새로 만든다
+
+    저장소 인자는 :class:`Places` 와 같은 규칙을 따른다 — ``True`` 면 기본
+    위치에 만들고, 인스턴스를 주면 그대로 쓰고, ``False``/``None`` 이면 안 쓴다.
+    """
+
+    _KEYS = ("favorites", "recent", "sidebar_urls", "fixed_urls", "icon")
+
+    def __init__(
+        self,
+        favorites=None,
+        recent=None,
+        recent_max=None,
+        sidebar_urls=None,
+        fixed_urls=None,
+        icon=True,
+    ):
+        self.favorites = as_favorites_store(favorites)
+        self.recent = as_recent_store(recent, recent_max)
+        self.sidebar_urls = list(sidebar_urls) if sidebar_urls is not None else None
+        self.fixed_urls = list(fixed_urls) if fixed_urls is not None else None
+        self.icon = icon
+        self._cache = None
+
+    def places(self):
+        """지금 설정으로 만든 :class:`Places` (설정이 바뀌면 다시 만든다).
+
+        ``Places`` 는 아이콘 제공자 참조도 들고 있어(Qt 가 소유하지 않는다)
+        같은 것을 계속 쓰는 편이 낫다. 그래서 캐시한다.
+        """
+        if self._cache is None:
+            self._cache = Places(
+                favorites=self.favorites,
+                recent=self.recent,
+                sidebar_urls=self.sidebar_urls,
+                fixed_urls=self.fixed_urls,
+                icon=self.icon,
+            )
+        return self._cache
+
+    def update(self, **changes):
+        """설정을 바꾸고 캐시를 버린다 (``recent_max`` 는 ``recent`` 와 함께 준다)."""
+        recent_max = changes.pop("recent_max", None)
+        if "favorites" in changes:
+            changes["favorites"] = as_favorites_store(changes["favorites"])
+        if "recent" in changes:
+            changes["recent"] = as_recent_store(changes["recent"], recent_max)
+        for key, value in changes.items():
+            if key not in self._KEYS:
+                raise TypeError("모르는 설정입니다: %r" % key)
+            if key in ("sidebar_urls", "fixed_urls") and value is not None:
+                value = list(value)
+            setattr(self, key, value)
+        self._cache = None
 
 
 def _dedup(urls):

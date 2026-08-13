@@ -1533,7 +1533,8 @@ ok, reason = validate_paths(paths, mode="open_files")
    recent      최근 파일 저장소 (favorites 를 물려받음)
 
 3  hooks       위 장치들을 한 번에 걸어 주는 설치기
-   places      사이드바에 얹는 것들의 묶음 + 저장소 인자 정규화(from_options)
+   places      사이드바에 얹는 것들의 묶음(Places) + 그 설정 보관(PlacesOptions)
+   drops       끌어다 놓은 것을 모드에 맞는 경로로 거르는 규칙
 
 4  dialog      CustomFileDialog · exec_file_dialog · resolve_start_dir
    path_edit   FilePathEdit
