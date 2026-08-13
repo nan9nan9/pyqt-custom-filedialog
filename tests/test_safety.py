@@ -1343,3 +1343,53 @@ def test_min_depth_blocks_enter_on_shallow_path(qapp, shallow_tree):
 
     assert blocker.blocked
     dialog.close()
+
+
+def test_typing_guard_python_route(qapp, guarded_root, tmp_path):
+    """Qt6 폴백(내부 슬롯이 없을 때)의 버튼 활성 판정 — 어느 바인딩에서든 검증.
+
+    Qt6 는 _q_updateOkButton 등이 메타오브젝트에서 사라져 재호출이 안 되므로
+    같은 판정을 직접 한다. 그 경로를 강제로 태워 규칙(있는 파일만 열기 가능 ·
+    저장은 이름만 · 위험한 자리는 건너뛰되 버튼 유지)을 잠근다.
+    """
+    from qtpy.QtTest import QTest
+    from qtpy.QtWidgets import QDialogButtonBox, QFileDialog, QLineEdit
+
+    from custom_file_dialog import guard_dialog
+    from custom_file_dialog.guard import _TypingGuard
+
+    (tmp_path / "hello.txt").write_text("x")
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    dialog.setDirectory(str(tmp_path))
+    dialog.show()
+    _spin(qapp, 300)
+
+    guards = [h for h in guard_dialog(dialog) if isinstance(h, _TypingGuard)]
+    assert guards
+    guard = guards[0]
+    guard._route = "python"                  # Qt6 상황을 강제
+
+    edit = dialog.findChild(QLineEdit, "fileNameEdit")
+    box = dialog.findChild(QDialogButtonBox, "buttonBox")
+    button = box.button(QDialogButtonBox.StandardButton.Open)
+
+    edit.setFocus()
+    QTest.keyClicks(edit, "hello.txt")
+    qapp.processEvents()
+    assert button.isEnabled()                # 있는 파일 -> 열기 가능
+
+    edit.clear()
+    QTest.keyClicks(edit, "nope.txt")
+    qapp.processEvents()
+    assert not button.isEnabled()            # 없는 파일 -> 비활성
+
+    # 위험한 자리(차단 하위)는 stat 없이 건너뛰고 버튼은 살아 있다
+    edit.clear()
+    QTest.keyClicks(edit, guarded_root + os.sep + "jX")
+    qapp.processEvents()
+    assert guard.skipped
+    assert button.isEnabled()
+    dialog.done(0)

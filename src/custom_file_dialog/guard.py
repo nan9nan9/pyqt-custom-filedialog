@@ -23,7 +23,7 @@ Qt 가 C++ 에서 연결해 둔 ``activated`` · ``accept()`` 는 파이썬에�
 
 import os
 
-from qtpy.QtCore import QEvent, QMetaObject, QObject, Qt
+from qtpy.QtCore import QEvent, QMetaObject, QObject, Qt, Signal
 from qtpy.QtWidgets import (
     QComboBox,
     QDialogButtonBox,
@@ -33,10 +33,15 @@ from qtpy.QtWidgets import (
     QTreeView,
 )
 
-try:
+try:                                # PySide2 에는 없다 (있으면 invoke 경로에 쓴다)
     from qtpy.QtCore import Q_ARG
-except ImportError:                 # pragma: no cover - 바인딩에 없으면 기능 생략
+except ImportError:
     Q_ARG = None
+
+try:                                # PyQt6 에는 없다 (있으면 relay 경로에 쓴다)
+    from qtpy.QtCore import SIGNAL, SLOT
+except ImportError:
+    SIGNAL = SLOT = None
 
 from . import safety
 from .constants import PATH_ROLE
@@ -174,6 +179,14 @@ def _typed_path(dialog, text):
     return abspath(text)
 
 
+def _split_typed(text):
+    """파일 이름 칸의 텍스트를 경로 목록으로 나눈다(여러 개는 따옴표로 묶인다)."""
+    if '"' not in text:
+        return [text]
+    parts = text.split('"')
+    return [p for index, p in enumerate(parts) if index % 2 == 1 and p.strip()]
+
+
 class _TypingGuard(QObject):
     """파일 이름 칸의 키 입력마다 도는 자동 경로 확인을 위험한 자리에서 끈다.
 
@@ -184,41 +197,72 @@ class _TypingGuard(QObject):
     곧 마운트 시도**라, 한 글자마다 시스템이 주저앉는다. ``guarded_roots`` ·
     ``min_depth`` 는 "나열"만 막으므로 이 통로는 잡지 못한다.
 
-    ``textChanged`` 에 걸린 Qt 내부 슬롯을 **보내는 쪽에서** 전부 끊고, 입력된
-    경로가 안전할 때만(:func:`~custom_file_dialog.safety.may_stat`) 같은 슬롯을
-    이름으로 다시 부른다(동작 동일). 위험한 자리에서는 자동 확인을 건너뛰고
-    열기/저장 버튼만 직접 켠다 — 확정(Enter·버튼)은 원래 흐름대로 가되,
-    차단 경로 자체는 :class:`_AcceptBlocker` 가 계속 막는다.
+    ``textChanged`` 에 걸린 Qt 내부 동작을 **보내는 쪽에서** 전부 끊고, 입력된
+    경로가 안전할 때만(:func:`~custom_file_dialog.safety.may_stat`) 같은 일을
+    다시 해 준다. 위험한 자리에서는 자동 확인을 건너뛰고 열기/저장 버튼만
+    직접 켠다 — 확정(Enter·버튼)은 원래 흐름대로 가되, 차단/얕은 경로는
+    :class:`_AcceptBlocker` 가 계속 막는다.
+
+    "같은 일을 다시" 하는 방법은 바인딩마다 다르다 (전부 설치 시점에 정한다):
+
+    - **PyQt5**: ``QMetaObject.invokeMethod`` + ``Q_ARG`` 로 내부 슬롯을 이름으로
+      재호출 (동작 동일).
+    - **PySide2**: ``Q_ARG`` 가 없다. 대신 옛 방식
+      ``QObject.connect(SIGNAL, SLOT)`` 이 되므로, 중계 시그널을 내부 슬롯에
+      이어 두고 emit 한다 (동작 동일).
+    - **Qt6 (PyQt6·PySide6)**: 내부 슬롯이 메타오브젝트에서 사라져 둘 다 안
+      된다. 버튼 활성 판정을 :meth:`_update_accept_python` 으로 직접 하고,
+      목록 항목 자동 하이라이트는 포기한다(표시만의 차이).
     """
 
     _SLOTS = ("_q_autoCompleteFileName(QString)", "_q_updateOkButton()")
+
+    # PySide 옛 방식 connect 로 내부 슬롯에 이어 둘 중계 시그널
+    relayText = Signal(str)
+    relayPlain = Signal()
 
     def __init__(self, dialog, name_edit, parent=None):
         super().__init__(parent if parent is not None else dialog)
         self._dialog = dialog
         self._edit = name_edit
+        self._route = None              # "invoke" | "relay" | "python"
         self.skipped = []               # 자동 확인을 건너뛴 경로들(진단용)
 
     @classmethod
     def install(cls, dialog, name_edit):
-        """타이핑 가드를 건다. 걸 수 없는 환경이면 None (원래 연결을 그대로 둔다).
-
-        Qt 내부 슬롯을 이름으로 다시 불러야 하므로, 그 슬롯들이 메타오브젝트에
-        없는(미래의) Qt 나 ``Q_ARG`` 가 없는 바인딩에서는 걸지 않는다 — 그 경우
-        자동 확인은 Qt 기본 동작 그대로다.
-        """
-        if name_edit is None or Q_ARG is None:
+        """타이핑 가드를 건다. 걸 수 없는 환경이면 None (원래 연결을 그대로 둔다)."""
+        if name_edit is None:
             return None
-        meta = dialog.metaObject()
-        if any(meta.indexOfSlot(slot) < 0 for slot in cls._SLOTS):
-            return None
+        guard = cls(dialog, name_edit)
+        guard._pick_route()
         try:
             name_edit.textChanged.disconnect()
         except (TypeError, RuntimeError):
+            guard.deleteLater()
             return None                 # 이미 끊겨 있는 등 — 손대지 않는다
-        guard = cls(dialog, name_edit)
         name_edit.textChanged.connect(guard.on_text_changed)
         return guard
+
+    def _pick_route(self):
+        """이 바인딩에서 되는 재호출 방법을 고른다 (클래스 docstring 참고)."""
+        meta = self._dialog.metaObject()
+        have_slots = all(meta.indexOfSlot(slot) >= 0 for slot in self._SLOTS)
+        if have_slots and Q_ARG is not None:
+            self._route = "invoke"
+            return
+        if have_slots and SIGNAL is not None and hasattr(QObject, "connect"):
+            linked_text = QObject.connect(
+                self, SIGNAL("relayText(QString)"),
+                self._dialog, SLOT("_q_autoCompleteFileName(QString)"),
+            )
+            linked_plain = QObject.connect(
+                self, SIGNAL("relayPlain()"),
+                self._dialog, SLOT("_q_updateOkButton()"),
+            )
+            if linked_text and linked_plain:
+                self._route = "relay"
+                return
+        self._route = "python"
 
     def on_text_changed(self, text):
         try:
@@ -234,10 +278,40 @@ class _TypingGuard(QObject):
             # (열기 시점의 존재 확인은 QFileDialog.accept() 가 한 번만 한다)
             self._enable_accept(bool(text.strip()))
             return
-        QMetaObject.invokeMethod(
-            self._dialog, "_q_autoCompleteFileName", Q_ARG(str, text)
-        )
-        QMetaObject.invokeMethod(self._dialog, "_q_updateOkButton")
+        if self._route == "invoke":
+            QMetaObject.invokeMethod(
+                self._dialog, "_q_autoCompleteFileName", Q_ARG(str, text)
+            )
+            QMetaObject.invokeMethod(self._dialog, "_q_updateOkButton")
+        elif self._route == "relay":
+            self.relayText.emit(text)
+            self.relayPlain.emit()
+        else:
+            self._update_accept_python(text)
+
+    def _update_accept_python(self, text):
+        """Qt6 — 내부 슬롯이 없어 열기/저장 버튼 활성 판정을 직접 한다.
+
+        Qt 원본 규칙의 근사다: 있는 파일(들)만 열 수 있고, 저장은 이름만 있으면
+        되고, 폴더 모드는 폴더여야 한다. 판정이 어긋나 버튼이 살아 있어도
+        ``QFileDialog.accept()`` 가 확정 시점에 다시 검증하므로 안전하다.
+        존재 확인은 safe_* 라 죽은 마운트에서도 멈추지 않는다.
+        """
+        mode = self._dialog.fileMode()
+        text = (text or "").strip()
+        if not text:
+            enabled = mode == enum_value("FileMode", "Directory")
+        elif mode == enum_value("FileMode", "Directory"):
+            enabled = safety.safe_isdir(_typed_path(self._dialog, text))
+        elif mode in (
+            enum_value("FileMode", "ExistingFile"),
+            enum_value("FileMode", "ExistingFiles"),
+        ):
+            paths = [_typed_path(self._dialog, t) for t in _split_typed(text)]
+            enabled = bool(paths) and all(safety.safe_exists(p) for p in paths if p)
+        else:                           # AnyFile (저장)
+            enabled = True
+        self._enable_accept(bool(enabled))
 
     def _enable_accept(self, enabled):
         box = self._dialog.findChild(QDialogButtonBox, "buttonBox")
