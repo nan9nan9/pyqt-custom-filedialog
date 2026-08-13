@@ -354,8 +354,34 @@ class CustomFileDialog(QFileDialog):
 
         install_hooks(self, self._places, current)
 
+        # 사이드바에 아이콘이 복사된 뒤부터는 저장소 폴더에서만 제공자를 쓴다
+        if provider is not None:
+            self._watch_icon_provider(provider, current)
+
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
+
+    def _watch_icon_provider(self, provider, current):
+        """분류 아이콘 제공자를 **저장소 폴더를 볼 때만** 걸어 둔다.
+
+        아이콘 제공자는 목록의 **항목마다** 파이썬으로 불린다. 항목이 수천 개인
+        폴더(홈 등)에서는 그것만으로 목록이 채워질 때 GUI 가 100ms 단위로 멈추고,
+        그 폴더를 떠난 뒤에도 이미 시작된 나열이 끝나며 멈춤이 이어진다. 분류
+        아이콘이 필요한 자리는 저장소 안뿐이라 그 밖에서는 기본 제공자로 되돌린다
+        (분류가 아닌 항목에는 어차피 기본 아이콘을 주므로 보이는 것은 같다).
+        """
+        from qtpy.QtWidgets import QFileIconProvider
+
+        plain = QFileIconProvider()             # Qt 기본 — 참조를 붙들어 둔다
+        self._icon_providers = (provider, plain)
+
+        def apply_for(path):
+            wanted = provider if self._places.is_inside(path) else plain
+            if self.iconProvider() is not wanted:
+                self.setIconProvider(wanted)
+
+        self.directoryEntered.connect(apply_for)
+        apply_for(current)
 
     # ------------------------------------------------------------- 조회
     def mode(self):

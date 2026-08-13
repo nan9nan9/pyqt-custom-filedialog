@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from qtpy.QtCore import QDir, QMimeData, QPoint, QSettings, QUrl
+from qtpy.QtCore import QDir, QMimeData, QPoint, QSettings, Qt, QUrl
 from qtpy.QtGui import QDropEvent
 from qtpy.QtWidgets import QApplication
 
@@ -705,3 +705,50 @@ def test_favorites_reject_store_internal_paths(tmp_path):
         with pytest.raises(FavoritesError):
             store.add("보고서", inside)
     assert store.categories() == ["설계"]            # 분류가 새로 생기지도 않는다
+
+
+def test_icon_provider_only_inside_stores(qapp, tmp_path):
+    """분류 아이콘 제공자는 저장소 폴더를 볼 때만 걸려 있다.
+
+    제공자는 목록의 **항목마다** 파이썬으로 불려서, 항목이 수천 개인 폴더(홈)
+    에서는 그것만으로 GUI 가 100ms 단위로 멈춘다(실측 190ms -> 103ms). 분류
+    아이콘이 필요한 자리는 저장소 안뿐이다.
+    """
+    from qtpy.QtWidgets import QListView
+
+    from custom_file_dialog import CustomFileDialog
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    design, _report, _output = _make_tree(tmp_path)
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    store.add("설계", design)
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=os.path.dirname(design), favorites=store
+    )
+    dialog.show()
+    _spin(qapp, 300)
+
+    # 평범한 폴더 -> 기본 제공자
+    assert not isinstance(dialog.iconProvider(), CategoryIconProvider)
+
+    # 저장소 안으로 들어가면 분류 아이콘 제공자가 걸린다
+    dialog.setDirectory(store.base_dir)
+    dialog.directoryEntered.emit(store.base_dir)      # 사용자 이동과 같은 신호
+    assert isinstance(dialog.iconProvider(), CategoryIconProvider)
+
+    dialog.setDirectory(str(tmp_path))
+    dialog.directoryEntered.emit(str(tmp_path))
+    assert not isinstance(dialog.iconProvider(), CategoryIconProvider)
+
+    # 사이드바의 분류 아이콘은 폴더를 옮겨도 남는다(등록 시점에 복사되므로)
+    sidebar = dialog.findChild(QListView, "sidebar")
+    model = sidebar.model()
+    icons = {
+        model.index(r, 0).data(): model.index(r, 0).data(Qt.ItemDataRole.DecorationRole)
+        for r in range(model.rowCount())
+    }
+    assert icons.get("설계") is not None
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
