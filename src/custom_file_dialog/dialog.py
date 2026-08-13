@@ -462,7 +462,10 @@ class CustomFileDialog(QFileDialog):
             self.setDirectory(directory)
             return
         parent_dir = os.path.dirname(directory)
-        if parent_dir and safety.may_enter(parent_dir):
+        # 폴백에도 **실제 확인**이 필요하다. may_enter 는 문자열과 마운트 표만
+        # 보므로 죽은 NFS 도 통과시킨다 — 기억해 둔 파일 경로로 열 때 그 부모를
+        # 그대로 setDirectory 하면 GUI 가 D 상태로 멈춘다.
+        if parent_dir and safety.may_enter(parent_dir) and isdir(parent_dir):
             self.setDirectory(parent_dir)
         self.selectFile(os.path.basename(directory))
 

@@ -157,6 +157,22 @@ def on_automount(path):
     return bool(mount) and mount[1] in AUTOMOUNT_FSTYPES
 
 
+def is_automount_point(path):
+    """그 자리 **자체**가 automount(autofs) 지점인지.
+
+    지점 자체를 여는 것은 "그 아래 이름을 전부 마운트해 보라"는 뜻이라 가장
+    위험하다. 반면 그 아래의 특정 이름(``/user/myaccount``)을 여는 것은 **하나만**
+    마운트하는 일이라, 사용자가 명시적으로 지정했다면 의도된 동작이다.
+    :func:`on_automount` 가 둘을 함께 묶는 것과 달리 여기서는 지점만 가린다.
+    """
+    mount = mount_for(path)
+    return (
+        bool(mount)
+        and mount[1] in AUTOMOUNT_FSTYPES
+        and os.path.normpath(mount[0]) == _abspath(path)
+    )
+
+
 def has_automounts():
     """시스템에 automount(autofs) 마운트가 하나라도 있는지."""
     return any(fstype in AUTOMOUNT_FSTYPES for _point, fstype, _src in iter_mounts())

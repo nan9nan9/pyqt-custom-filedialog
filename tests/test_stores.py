@@ -871,3 +871,26 @@ def test_from_options_keeps_old_signature(tmp_path):
     places = Places.from_options(store)              # 위치 인자
     assert places.favorites_store() is store
     assert Places.from_options(favorites=store).favorites_store() is store
+
+
+def test_remove_by_name_does_not_match_cwd_paths(tmp_path, monkeypatch):
+    """이름으로 지울 때 현재 작업 디렉터리 기준 경로로 오해하지 않는다.
+
+    abspath("보고서.md") 는 cwd 기준 절대 경로가 되어, 우연히 그곳을 가리키는
+    다른 이름의 링크까지 함께 지워졌다.
+    """
+    work = tmp_path / "작업"
+    work.mkdir()
+    victim = work / "보고서.md"
+    victim.write_text("x")
+    other = _touch(tmp_path, "다른.md")
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    store.add("설계", str(other), name="보고서.md")     # 이름만 같은 항목
+    store.add("설계", str(victim), name="원본연결")      # cwd 기준 경로와 겹치는 대상
+
+    monkeypatch.chdir(work)                              # cwd 를 그 폴더로
+    assert store.remove("설계", "보고서.md")             # 이름으로 하나만 지운다
+
+    남은 = dict(store.entries("설계"))
+    assert "원본연결" in 남은 and 남은["원본연결"] == str(victim)

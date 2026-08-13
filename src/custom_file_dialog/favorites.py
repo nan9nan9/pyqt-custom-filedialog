@@ -289,13 +289,19 @@ class FavoritesStore:
         if not os.path.isdir(directory):
             return False
 
-        wanted = abspath(path_or_name)
+        # 이름으로 준 것을 경로로 해석하면 안 된다 — abspath 는 상대 이름을
+        # **현재 작업 디렉터리 기준**으로 펴서, 우연히 같은 곳을 가리키는 다른
+        # 링크까지 지울 수 있다. 절대 경로일 때만 경로로 본다.
+        text = str(path_or_name)
+        wanted = abspath(text) if os.path.isabs(os.path.expanduser(text)) else None
         index = self._load_index()
         removed = False
 
         for name in list(os.listdir(directory)):
             link = os.path.join(directory, name)
-            if name == str(path_or_name) or self._target_of(link, index) == wanted:
+            if name == text or (
+                wanted is not None and self._target_of(link, index) == wanted
+            ):
                 index.pop(os.path.normpath(link), None)
                 self._unlink(link)
                 removed = True

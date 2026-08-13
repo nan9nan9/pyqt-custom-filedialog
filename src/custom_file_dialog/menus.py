@@ -104,8 +104,15 @@ class FavoritesMenus(QObject):
 
     # ------------------------------------------------------------- 설치
     def install(self):
-        """메뉴를 건다. 걸지 못하면 False."""
-        if not self._places.stores():
+        """메뉴를 건다. 걸지 못하면 False.
+
+        저장소(즐겨찾기·최근 파일)가 없어도 **사이드바 메뉴는 건다.** 보호
+        위치(``fixed_sidebar_urls``)를 지키는 곳이 그 메뉴이기 때문이다 —
+        걸지 않으면 Qt 기본 "Remove" 가 그대로 남아 지정한 자리가 그냥
+        빠진다. 파일 목록은 저장소가 있을 때만 가로챈다(없으면 우리가 더할
+        항목이 없어, 가로채 봐야 Qt 기본 메뉴만 못 쓰게 된다).
+        """
+        if not self._places:
             return False
 
         self._sidebar = self._dialog.findChild(QListView, "sidebar")
@@ -122,7 +129,7 @@ class FavoritesMenus(QObject):
 
         if self._sidebar is not None:
             self._take_over(self._sidebar, self._show_sidebar_menu)
-        if self._add_menu:
+        if self._add_menu and self._places.stores():
             # 즐겨찾기가 없어도(최근 파일만 써도) "…에서 제거"는 필요하다
             for view in self._views:
                 self._take_over(view, self._make_view_handler(view))

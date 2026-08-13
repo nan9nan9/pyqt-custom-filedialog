@@ -195,3 +195,21 @@ def test_save_mode_keeps_affix_pattern_names(qapp, tmp_path):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_directory_mode_rejects_existing_file(tmp_path):
+    """폴더 자리에 이미 **파일**이 있으면 must_exist 와 무관하게 오류다."""
+    target = tmp_path / "이름.txt"
+    target.write_text("x")
+
+    for must_exist in (True, False):
+        ok, reason = validate_paths(
+            [str(target)], mode=SelectMode.DIRECTORY, must_exist=must_exist
+        )
+        assert not ok and "폴더가 아니라 파일" in reason, must_exist
+
+    # 아직 없는 폴더는 must_exist=False 에서 그대로 유효하다
+    ok, _ = validate_paths(
+        [str(tmp_path / "새폴더")], mode=SelectMode.DIRECTORY, must_exist=False
+    )
+    assert ok

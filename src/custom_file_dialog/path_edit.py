@@ -213,9 +213,10 @@ class FilePathEdit(QWidget):
 
         # 드롭은 이 위젯이 직접 처리한다. QLineEdit 이 드롭을 먼저 먹어
         # URL 문자열이 그대로 붙는 것을 막기 위해 자식은 드롭을 받지 않는다.
-        if self._drag_drop:
-            self.setAcceptDrops(True)
-            self._edit.setAcceptDrops(False)
+        # 끈 경우에도 QLineEdit 의 기본 드롭을 꺼야 한다. 그대로 두면 파일을
+        # 떨어뜨렸을 때 "file:///…" 원문이 입력창에 붙는다(우리가 막으려던 것).
+        self.setAcceptDrops(self._drag_drop)
+        self._edit.setAcceptDrops(False)
 
 
         self._edit.textChanged.connect(self._on_text_changed)
@@ -335,8 +336,16 @@ class FilePathEdit(QWidget):
         return paths[0] if paths else ""
 
     def paths(self):
-        """현재 경로 리스트. open_files 모드가 아니면 0~1개."""
-        return split_paths(self._edit.text(), self._separator)
+        """현재 경로 리스트. open_files 모드가 아니면 0~1개.
+
+        **여러 개 모드일 때만** 구분자로 쪼갠다. 리눅스·맥에서는 ``a;b.txt`` 도
+        합법인 파일 이름이라, 단일 선택인데 쪼개면 멀쩡한 경로가 두 동강 난다.
+        """
+        text = self._edit.text()
+        if is_multi_mode(self._mode):
+            return split_paths(text, self._separator)
+        text = (text or "").strip()
+        return [text] if text else []
 
     def set_path(self, path):
         """경로 하나를 지정한다."""
@@ -658,9 +667,14 @@ class FilePathEdit(QWidget):
         self._edit.setClearButtonEnabled(self._clear_button and not read_only)
 
     def set_drag_drop_enabled(self, enabled):
+        """끌어다 놓기를 켜고 끈다.
+
+        꺼도 입력창이 Qt 기본 드롭을 받지 않게 한다 — 받으면 URL 원문이 그대로
+        붙어 경로가 아닌 값이 들어간다.
+        """
         self._drag_drop = bool(enabled)
         self.setAcceptDrops(self._drag_drop)
-        self._edit.setAcceptDrops(not self._drag_drop)
+        self._edit.setAcceptDrops(False)
 
     def set_label(self, text):
         """라벨 텍스트를 바꾼다(생성 시 label 을 준 경우에만 유효)."""

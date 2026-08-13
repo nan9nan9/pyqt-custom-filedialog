@@ -54,16 +54,19 @@ def install_hooks(dialog, places, current=None):
             지금 열려 있는 폴더를 쓴다.
 
     사이드바 표시와 차단 방어는 **얹을 것이 없어도** 건다(차단은 전역 설정이,
-    홈 아이콘은 사이드바 자체가 있으면 의미가 있다). 링크 추적과 우클릭 메뉴는
-    저장소가 있을 때만 건다.
+    홈 아이콘은 사이드바 자체가 있으면 의미가 있다). 우클릭 메뉴는 보호 위치만
+    지정해도 걸고(그 메뉴가 "사이드바에서 제거"를 막는다), 링크 추적은 저장소가
+    있을 때만 건다.
     """
     guard_dialog(dialog)
     mark_sidebar(dialog, places, current)
 
-    if not places.stores():
-        return
-
+    # 우클릭 메뉴는 보호 위치만 지정해도 필요하다(그 메뉴가 제거를 막는다)
     FavoritesMenus(dialog, places).install()
+
+    if not places.stores():
+        return                                   # 링크 추적은 저장소가 있을 때만
+
     follow_link_directories(dialog, places)      # 링크 폴더로 진입할 때
     show_link_target_in_combo(dialog, places)    # 목록에서 항목을 고를 때
     follow_link_on_parent(dialog, places)        # "상위 폴더" 로 올라갈 때

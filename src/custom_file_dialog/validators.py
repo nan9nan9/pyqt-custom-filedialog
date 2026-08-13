@@ -104,10 +104,12 @@ def _validate_one(path, mode, must_exist, timeout=None):
     if mode == SelectMode.DIRECTORY:
         if isdir(expanded):
             return True, ""
-        if not must_exist:
-            return _check_parent(expanded, timeout)
+        # 존재 확인을 must_exist 보다 **먼저** 한다. 그 자리에 이미 파일이 있으면
+        # 아직 없어도 되는 경우(must_exist=False)에도 폴더로 쓸 수 없다.
         if exists(expanded):
             return False, "폴더가 아니라 파일입니다: %s" % path
+        if not must_exist:
+            return _check_parent(expanded, timeout)
         return False, "폴더가 존재하지 않습니다: %s" % path
 
     # 파일 계열 모드

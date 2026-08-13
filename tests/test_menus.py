@@ -776,3 +776,33 @@ def test_new_category_gets_its_icon_right_away(qapp, tmp_path):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_sidebar_menu_installed_without_stores(qapp, tmp_path):
+    """저장소가 없어도 보호 위치를 지정했으면 사이드바 메뉴가 걸린다.
+
+    그 메뉴가 "사이드바에서 제거"를 막는 곳이다. 걸지 않으면 Qt 기본 Remove 가
+    남아 지정한 자리가 그냥 빠졌다(창만 비네이티브로 바뀌고 지정은 무시).
+    """
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QListView
+
+    from custom_file_dialog import CustomFileDialog
+
+    home = os.path.expanduser("~")
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(tmp_path), fixed_sidebar_urls=[home]
+    )
+    dialog.show()
+    _spin(qapp, 200)
+
+    menus = [c for c in dialog.children() if type(c).__name__ == "FavoritesMenus"]
+    assert menus, "보호 위치만 지정해도 메뉴가 걸려야 한다"
+    assert menus[0].is_fixed(home)
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    assert sidebar.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    assert not menus[0].remove_sidebar_entry(home)      # 보호가 실제로 걸린다
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)

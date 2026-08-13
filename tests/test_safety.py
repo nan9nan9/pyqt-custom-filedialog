@@ -1901,8 +1901,9 @@ _PATHS = [
 ]
 
 
+@pytest.mark.parametrize("automount", [False, True], ids=["autofs없음", "autofs있음"])
 @pytest.mark.parametrize("setup", _SETUPS, ids=lambda s: str(sorted(s)) or "기본")
-def test_decision_invariants(setup):
+def test_decision_invariants(setup, automount, monkeypatch):
     """설정 × 경로를 모두 돌며 판정끼리 지켜야 할 관계를 확인한다.
 
     이 프로젝트의 버그는 대부분 **통로를 하나 더 막을 때 나머지와 규칙이
@@ -1911,7 +1912,17 @@ def test_decision_invariants(setup):
     """
     from custom_file_dialog import safety
 
+    if automount:
+        # 이 머신에는 autofs 가 없다. 그래서 "설정 없이 autofs 만 있는" 조합이
+        # 검증에서 통째로 빠졌고, 실제로 그 자리에 구멍이 있었다
+        # (끝에 / 를 붙이면 autofs 뿌리가 열렸다).
+        monkeypatch.setattr(
+            safety_mounts, "iter_mounts",
+            lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                                   ("/user", "autofs", "auto.user")],
+        )
     safety.reset()
+    safety.clear_cache()
     safety.configure(**setup)
     try:
         for path in _PATHS:
@@ -1935,11 +1946,22 @@ def test_decision_invariants(setup):
             # 구분자 없는 확정은 "이름 하나를 만지는" 일이라 자동 stat 과 같은 판정
             assert safety.may_open(path) == safety.may_stat(path), path
 
-            # 끝에 구분자를 붙인 명시적 표기는 깊이만 본다
+            # 끝에 구분자를 붙인 명시적 표기는 깊이만 본다 — 단 automount
+            # **지점 자체**는 열 수 없다(그 자리를 여는 것은 아래를 전부
+            # 마운트해 보라는 뜻이라, 하나만 붙이는 하위와 위험이 다르다).
             limit = safety.min_depth()
-            expected = limit <= 0 or safety.path_depth(path) >= limit
+            expected = (limit <= 0 or safety.path_depth(path) >= limit) and not (
+                safety.is_automount_point(path)
+            )
             assert safety.may_open(path + "/") == expected, path
+
+            # 어떤 표기로도 automount 지점 자체는 열리지 않는다
+            if safety.is_automount_point(path):
+                assert not safety.may_open(path), path
+                assert not safety.may_open(path + "/"), path
+                assert not safety.may_enter(path), path
     finally:
+        safety.clear_cache()
         safety.reset()
 
 
@@ -1971,3 +1993,36 @@ def test_every_guard_uses_a_shared_decision():
     # may_list 로 물을 수 없는 자리)를 처리할 때만 쓴다.
     assert source.count("listing_allowed()") == 1
     assert "listing_allowed()" in inspect.getsource(guard.GuardedFileSystemModel)
+
+
+def test_automount_root_never_opens_even_with_separator(monkeypatch, tmp_path):
+    """automount **지점 자체**는 끝에 구분자를 붙여도 열 수 없다.
+
+    설정 없이 autofs 만 있는 시스템에서 min_depth 가 0 이라, 명시적 표기
+    예외가 "깊이 조건 없음 = 무조건 허용"으로 새어 ``/user/`` 를 Enter 로 열 수
+    있었다. 그 자리를 여는 것은 아래 이름을 전부 마운트해 보라는 뜻이다.
+    """
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    (root / "myaccount").mkdir(parents=True)
+    safety.reset()
+    safety.clear_cache()
+    monkeypatch.setattr(
+        safety_mounts, "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (str(root), "autofs", "auto.user")],
+    )
+    try:
+        assert safety.is_automount_point(str(root))
+        assert not safety.may_open(str(root))            # 지점 자체
+        assert not safety.may_open(str(root) + os.sep)   # 구분자를 붙여도
+        assert not safety.may_enter(str(root))
+
+        # 그 아래의 특정 이름은 명시하면 열린다(하나만 마운트하는 일이다)
+        inner = os.path.join(str(root), "myaccount")
+        assert safety.may_open(inner + os.sep)
+        assert not safety.may_open(inner)                # 구분자 없이는 안 된다
+    finally:
+        safety.clear_cache()
+        safety.reset()

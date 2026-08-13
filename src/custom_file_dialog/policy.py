@@ -251,6 +251,10 @@ def may_open(path):
 
     limit = min_depth()
     if explicit_dir:
-        # "이 폴더를 열겠다"는 명시 — 깊이만 본다
+        # "이 폴더를 열겠다"는 명시. 그래도 **automount 지점 자체**는 안 된다 —
+        # 그 자리를 여는 것은 아래 이름을 전부 마운트해 보라는 뜻이라, 하나만
+        # 붙이는 하위(``/user/myaccount/``)와 위험이 다르다.
+        if mounts.is_automount_point(absolute):
+            return False
         return limit <= 0 or path_depth(absolute) >= limit
     return not risky_name(absolute)

@@ -381,3 +381,33 @@ def test_fixed_sidebar_urls_forces_qt_dialog(qapp, tmp_path, monkeypatch):
     edit = FilePathEdit(mode="open_file", fixed_sidebar_urls=[str(tmp_path)])
     edit.browse()
     assert used == ["CustomFileDialog"], used
+
+
+def test_paths_does_not_split_single_mode(qapp, tmp_path):
+    """단일 선택에서는 구분자로 쪼개지 않는다 — ``a;b.txt`` 도 합법인 이름이다."""
+    tricky = str(tmp_path / "a;b.txt")
+    edit = FilePathEdit(mode="open_file")
+    edit.set_path(tricky)
+    assert edit.paths() == [tricky]
+    assert edit.path() == tricky
+
+    # 여러 개 모드에서는 예전처럼 구분자로 나눈다
+    multi = FilePathEdit(mode="open_files")
+    multi.set_paths(["/a.txt", "/b.txt"])
+    assert multi.paths() == ["/a.txt", "/b.txt"]
+
+
+def test_drag_drop_off_blocks_line_edit_drops(qapp):
+    """드롭을 끄면 입력창도 Qt 기본 드롭을 받지 않는다.
+
+    받으면 "file:///…" 원문이 그대로 붙어 경로가 아닌 값이 들어간다.
+    """
+    off = FilePathEdit(mode="open_file", drag_drop=False)
+    assert not off.acceptDrops()
+    assert not off.line_edit.acceptDrops()
+
+    on = FilePathEdit(mode="open_file", drag_drop=True)
+    assert on.acceptDrops() and not on.line_edit.acceptDrops()
+
+    on.set_drag_drop_enabled(False)
+    assert not on.acceptDrops() and not on.line_edit.acceptDrops()
