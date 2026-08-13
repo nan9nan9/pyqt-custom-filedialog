@@ -277,6 +277,21 @@ def may_list(path):
     )
 
 
+def protection_active():
+    """지금 다이얼로그에 안전장치를 걸어야 하는 상태인지.
+
+    ``guarded_roots`` · ``min_depth`` 중 하나라도 켜졌거나, ``allow_listing``
+    을 껐거나, 시스템에 autofs 마운트가 있으면 True. 이 상태에서는 **OS
+    네이티브 다이얼로그를 쓸 수 없다** — 그 창은 OS 가 그려서 자동완성도
+    확정도 가로챌 수 없기 때문이다
+    (:func:`~custom_file_dialog.dialog.exec_file_dialog` 가 Qt 자체 창으로
+    자동 전환한다).
+    """
+    return bool(
+        guarded_roots() or min_depth() or not listing_allowed() or has_automounts()
+    )
+
+
 def has_automounts():
     """시스템에 automount(autofs) 마운트가 하나라도 있는지."""
     return any(fstype in AUTOMOUNT_FSTYPES for _point, fstype, _src in iter_mounts())

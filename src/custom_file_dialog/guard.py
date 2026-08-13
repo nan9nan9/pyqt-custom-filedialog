@@ -441,14 +441,9 @@ def guard_dialog(dialog, bounce=True):
     Returns:
         건 장치들의 목록(진단용). 걸 게 없으면 빈 리스트.
     """
-    guarded = safety.guarded_roots()
-    if (
-        not guarded
-        and not safety.min_depth()
-        and safety.listing_allowed()
-        and not safety.has_automounts()
-    ):
+    if not safety.protection_active():
         return []
+    guarded = safety.guarded_roots()
 
     # 이미 걸린 다이얼로그에 또 걸지 않는다. 두 번 걸면 이벤트 필터가 둘이 되어
     # 안내 팝업이 두 번 뜨고, 두 번째 타이핑 가드가 첫 번째의 연결을 끊어

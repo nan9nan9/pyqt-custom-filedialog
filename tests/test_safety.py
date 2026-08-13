@@ -1550,3 +1550,34 @@ def test_guard_dialog_is_idempotent(qapp, guarded_root):
     assert len(dialog.findChildren(_TypingGuard)) == 1
     assert len(dialog.findChildren(_AcceptBlocker)) == 1
     dialog.close()
+
+
+def test_safety_forces_qt_dialog_over_native(qapp, guarded_root, monkeypatch):
+    """안전장치가 켜져 있으면 네이티브 창 대신 Qt 자체 창으로 연다.
+
+    네이티브 창은 OS 가 그려서 자동완성도 확정도 가로챌 수 없다. 예전에는
+    꾸밀 것(즐겨찾기 등)이 없으면 그대로 네이티브로 열려, guarded_roots 와
+    min_depth 를 켜 두고도 보호가 통째로 빠졌다.
+    """
+    from custom_file_dialog import exec_file_dialog, safety
+
+    used = []
+    monkeypatch.setattr(
+        dialog_module, "_run_dialog",
+        lambda *a, **k: (used.append("native"), ([], ""))[1],
+    )
+    monkeypatch.setattr(
+        dialog_module, "exec_dialog",
+        lambda dialog: (used.append(type(dialog).__name__), 0)[1],
+    )
+
+    # 안전장치가 켜진 상태(guarded_root 픽스처) -> 인스턴스 다이얼로그
+    exec_file_dialog(mode="open_file", native=True)
+    assert used == ["CustomFileDialog"], used
+
+    # 아무 설정도 없고 autofs 도 없으면 예전처럼 네이티브를 쓴다
+    used.clear()
+    safety.reset()
+    monkeypatch.setattr(safety, "has_automounts", lambda: False)
+    exec_file_dialog(mode="open_file", native=True)
+    assert used == ["native"], used

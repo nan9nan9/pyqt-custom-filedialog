@@ -395,7 +395,10 @@ filters=[("라이브러리", ["*lib"]),      # foolib, toplib ...   (접미사)
 - `completer` : 경로 자동완성 (기본 `True`)
 - `history` : 최근 경로 개수. `0` 이면 드롭다운 없음 (기본 `0`)
 - `settings_key` / `settings` : `QSettings` 저장 키 / 저장소 인스턴스
-- `native` : OS 네이티브 다이얼로그 사용 (기본 `True`)
+- `native` : OS 네이티브 다이얼로그 사용 (기본 `True`).
+  **안전장치(`safety.configure`)를 켜 두었거나 시스템에 autofs 마운트가 있으면
+  이 설정과 무관하게 Qt 자체 창으로 열립니다** — OS 가 그리는 창에는 자동완성
+  차단도 확정 차단도 걸 수 없기 때문입니다
 - `path_timeout` : 죽은 네트워크 경로 방어 제한 시간(초). 기본 `1.0`(켜짐), `None`=끔
 - `sidebar_urls` : 다이얼로그 왼쪽 사이드바 항목 (기본 `None` = 손대지 않음)
 - `fixed_sidebar_urls` : 우클릭 "제거"를 막을 위치 (기본 `None` = 홈만 보호)
@@ -1456,7 +1459,10 @@ paths, _ = exec_file_dialog(self, "directory")    # 폴더 1개   -> ["/a"]
 
 생성자 인자는 `CustomFileDialog` 와 거의 같고, 사이드바를 손보려면 `places=` 에
 `Places` 를 넘깁니다. `native=True` 로 두면 정적 메서드를 써서 OS 네이티브 창이
-뜹니다(대신 꾸미기는 적용되지 않습니다).
+뜹니다(대신 꾸미기는 적용되지 않습니다). 단 **안전장치가 켜져 있으면
+`native=True` 라도 Qt 자체 창으로 전환**됩니다 — 네이티브 창에는 보호를 걸 수
+없어, 그대로 두면 `guarded_roots`·`min_depth` 를 켜고도 automount 사고가
+그대로 납니다.
 
 ```python
 from custom_file_dialog import Places, exec_file_dialog

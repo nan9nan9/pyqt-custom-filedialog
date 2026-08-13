@@ -102,6 +102,12 @@ def exec_file_dialog(
         or sidebar_width is not None
     )
 
+    # 안전장치가 켜져 있으면 네이티브 창을 쓸 수 없다. OS 가 그리는 창에는
+    # 자동완성도 확정도 가로챌 수 없어, guarded_roots/min_depth 를 켜 두고도
+    # automount 사고가 그대로 난다. 꾸밀 것이 없어도 인스턴스로 열어 가드를 건다.
+    if not decorated and safety.protection_active():
+        decorated = True
+
     if decorated:
         dialog = CustomFileDialog(
             parent,
