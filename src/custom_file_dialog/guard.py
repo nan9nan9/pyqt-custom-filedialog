@@ -508,7 +508,6 @@ def guard_dialog(dialog, bounce=True):
     """
     if not safety.protection_active():
         return []
-    guarded = safety.guarded_roots()
 
     # 이미 걸린 다이얼로그에 또 걸지 않는다. 두 번 걸면 이벤트 필터가 둘이 되어
     # 안내 팝업이 두 번 뜨고, 두 번째 타이핑 가드가 첫 번째의 연결을 끊어
@@ -534,7 +533,7 @@ def guard_dialog(dialog, bounce=True):
     if typing_guard is not None:
         installed.append(typing_guard)
 
-    if not guarded and not safety.min_depth() and not safety.has_automounts():
+    if not safety.blocks_navigation():
         return installed        # 아래는 "확정하거나 들어가지 못하게" 하는 장치들이다
 
     # 3) 파일 목록에서 열기 차단 (더블클릭). 폴더를 열면 그 안이 통째로

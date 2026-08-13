@@ -69,6 +69,7 @@ from .mounts import (
 )
 from .policy import (
     DEFAULT_ALLOW_LISTING,
+    blocks_navigation,
     DEFAULT_MIN_DEPTH,
     guarded_roots,
     is_guarded,
@@ -114,6 +115,7 @@ __all__ = [
     "may_stat",
     "may_open",
     "protection_active",
+    "blocks_navigation",
     "guarded_roots",
     "is_guarded",
     "min_depth",

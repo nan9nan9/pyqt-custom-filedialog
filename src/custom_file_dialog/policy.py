@@ -186,6 +186,21 @@ def protection_active():
     )
 
 
+def blocks_navigation():
+    """**이동·확정까지** 막아야 하는 상태인지.
+
+    ``guarded_roots`` · ``min_depth`` 중 하나라도 켜졌거나 시스템에 autofs 가
+    있으면 True. ``allow_listing`` 은 보지 않는다 — 자동완성을 끄는 스위치이지
+    사용자가 눌러 들어가는 것까지 막는 뜻이 아니다
+    (:func:`protection_active` 는 그것까지 세므로 더 넓다).
+
+    무엇을 걸지 정하는 판단을 :mod:`~custom_file_dialog.guard` 가 설정에서
+    직접 읽어 조합하고 있었다. 그러면 규칙이 두 곳으로 갈라져, 한쪽만 고치는
+    실수가 난다 — 판단은 여기 한곳에 둔다.
+    """
+    return bool(guarded_roots() or min_depth() or mounts.has_automounts())
+
+
 def may_stat(path):
     """입력 중인 경로를 **자동으로** 만져(stat) 봐도 되는지.
 

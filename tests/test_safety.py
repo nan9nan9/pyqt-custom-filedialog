@@ -1880,3 +1880,94 @@ def test_resolve_start_dir_skips_missing_parent(tmp_path):
         [missing], start_dir=alive, mode=SelectMode.DIRECTORY
     )
     assert resolved == alive
+
+
+# ---------------------------------------------------------------------------
+# 판정들 사이의 불변식 — 통로가 늘어나도 규칙이 어긋나지 않게 잠근다
+# ---------------------------------------------------------------------------
+
+_SETUPS = [
+    dict(),
+    dict(min_depth=2),
+    dict(guarded_roots=["/user"]),
+    dict(guarded_roots=["/user"], min_depth=2),
+    dict(allow_listing=False),
+    dict(guarded_roots=["/user"], min_depth=3, allow_listing=False),
+]
+
+_PATHS = [
+    "/", "/user", "/user/my", "/user/myaccount", "/user/myaccount/proj",
+    "/user/myaccount/proj/a.csv", "/home", "/home/me", "/home/me/x.csv", "/tmp/a",
+]
+
+
+@pytest.mark.parametrize("setup", _SETUPS, ids=lambda s: str(sorted(s)) or "기본")
+def test_decision_invariants(setup):
+    """설정 × 경로를 모두 돌며 판정끼리 지켜야 할 관계를 확인한다.
+
+    이 프로젝트의 버그는 대부분 **통로를 하나 더 막을 때 나머지와 규칙이
+    어긋나서** 났다(확정만 autofs 를 안 보던 것 등). 개별 시나리오 테스트는
+    새로 생긴 통로를 알지 못하므로, 관계 자체를 잠근다.
+    """
+    from custom_file_dialog import safety
+
+    safety.reset()
+    safety.configure(**setup)
+    try:
+        for path in _PATHS:
+            guarded = safety.is_guarded(path)
+
+            # 나열이 되면 진입도 된다(allow_listing 만 더 엄격하다)
+            if safety.may_list(path):
+                assert safety.may_enter(path), path
+
+            # 통째로 읽으면 위험한 자리는 진입할 수 없다
+            if safety.risky_place(path):
+                assert not safety.may_enter(path), path
+
+            if guarded:
+                # 지목한 자리는 어떤 표기로도 열리지 않는다
+                assert not safety.may_enter(path), path
+                assert not safety.may_open(path), path
+                assert not safety.may_open(path + "/"), path
+                continue
+
+            # 구분자 없는 확정은 "이름 하나를 만지는" 일이라 자동 stat 과 같은 판정
+            assert safety.may_open(path) == safety.may_stat(path), path
+
+            # 끝에 구분자를 붙인 명시적 표기는 깊이만 본다
+            limit = safety.min_depth()
+            expected = limit <= 0 or safety.path_depth(path) >= limit
+            assert safety.may_open(path + "/") == expected, path
+    finally:
+        safety.reset()
+
+
+def test_every_guard_uses_a_shared_decision():
+    """다이얼로그에 거는 장치들이 **공용 판정**을 쓰는지 확인한다.
+
+    장치가 제 나름의 조건을 들고 있으면(예전 may_open 이 그랬다) 규칙이
+    갈라진다. 새 장치를 넣을 때 판정 없이 직접 조건을 쓰면 여기서 걸린다.
+    """
+    import inspect
+
+    from custom_file_dialog import guard
+
+    source = inspect.getsource(guard)
+    decisions = ("may_enter", "may_open", "may_stat", "may_list")
+    assert all(name in source for name in decisions), "판정을 안 쓰는 장치가 있다"
+
+    # 무엇을 걸지·무엇을 막을지 **판단**할 때 설정을 직접 조합하면 안 된다.
+    # 규칙이 두 곳으로 갈라져 한쪽만 고치는 실수가 난다(실제로 그렇게 났다).
+    for raw in ("guarded_roots()", "path_depth(", "is_too_shallow("):
+        assert raw not in source, "guard 가 설정을 직접 본다: %s" % raw
+
+    # min_depth() 는 딱 한 군데, **안내 문구에 단계 수를 적을 때만** 쓴다
+    assert source.count("min_depth()") == 1, "min_depth 를 판단에 쓰고 있다"
+    notice = inspect.getsource(guard._AcceptBlocker._explain)
+    assert "min_depth()" in notice
+
+    # listing_allowed() 도 한 군데뿐이다 — 자동완성 모델의 **뿌리**(경로가 없어
+    # may_list 로 물을 수 없는 자리)를 처리할 때만 쓴다.
+    assert source.count("listing_allowed()") == 1
+    assert "listing_allowed()" in inspect.getsource(guard.GuardedFileSystemModel)
