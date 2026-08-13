@@ -320,7 +320,9 @@ class FavoritesMenus(QObject):
 
         try:
             store.add(category, path)
-        except (FavoritesError, ValueError) as exc:
+        except (FavoritesError, ValueError, OSError) as exc:
+            # OSError 까지 잡는다 — 읽기 전용/가득 찬 홈에서는 분류 폴더를 만들다
+            # 실패한다. 우클릭 슬롯에서 예외가 새어 나가면 앱이 죽는다.
             QMessageBox.warning(self._dialog, "즐겨찾기 추가 실패", str(exc))
             return False
 

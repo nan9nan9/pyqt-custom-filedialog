@@ -476,8 +476,11 @@ class FavoritesStore:
         )
 
     def _unlink(self, link):
+        # islink 를 **먼저** 본다. isdir 는 링크를 따라가며 대상을 stat 하므로,
+        # 원본이 죽은 원격 마운트인 링크를 지우려는 순간 GUI 가 멈춘다.
+        # islink 는 링크 자신만 보므로(lstat) 절대 멈추지 않는다.
         try:
-            if os.path.isdir(link) and not os.path.islink(link):
+            if not os.path.islink(link) and os.path.isdir(link):
                 os.rmdir(link)      # 윈도우 정션
             else:
                 os.remove(link)

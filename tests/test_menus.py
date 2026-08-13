@@ -692,3 +692,28 @@ def test_view_menu_hides_add_inside_stores(qapp, tmp_path):
     assert not menus.add_to_favorites(store.category_dir("설계"), "보고서")
     assert store.categories() == ["설계"]
     dialog.close()
+
+
+def test_add_to_favorites_survives_os_error(qapp, tmp_path, monkeypatch):
+    """저장소 폴더를 만들지 못해도(읽기 전용 홈 등) 예외가 새지 않는다.
+
+    우클릭 슬롯에서 예외가 튀면 PyQt5.5+ 는 앱을 abort 시킨다.
+    """
+    from qtpy.QtWidgets import QMessageBox
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    design, _report, _output = _make_tree(tmp_path)
+    dialog, menus = _menu_dialog(store, str(tmp_path))
+
+    def deny(*args, **kwargs):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(os, "makedirs", deny)
+    warned = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *a, **k: warned.append(a[-1]) or 0
+    )
+
+    assert menus.add_to_favorites(design, "설계") is False   # 조용히 실패
+    assert warned                                            # 사용자에게 알린다
+    dialog.close()

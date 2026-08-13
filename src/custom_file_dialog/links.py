@@ -108,10 +108,14 @@ def follow_link_directories(dialog, places):
 
     def on_entered(path):
         target = places.link_target(path)
-        if target is not None:
-            # 프로그램이 부르는 setDirectory 는 directoryEntered 를 다시 내지
-            # 않으므로 여기서 되돌아 들어오는 일은 없다.
-            dialog.setDirectory(target)
+        if target is None:
+            return
+        # 원본이 열면 안 되는 자리이거나(얕은 자리·automount·차단 경로) 죽은
+        # 마운트면 그대로 둔다. setDirectory 는 그 폴더를 통째로 나열하고,
+        # directoryEntered 를 다시 내지 않아 마지막 방어도 걸리지 않는다.
+        if not safety.may_enter(target) or not safety.safe_isdir(target):
+            return
+        dialog.setDirectory(target)
 
     dialog.directoryEntered.connect(on_entered)
     return True

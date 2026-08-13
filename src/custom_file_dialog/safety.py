@@ -428,10 +428,14 @@ def iter_mounts(refresh=False):
         if now - _mounts["stamp"] <= MOUNTS_TTL:
             return _mounts["list"]
 
+    # 마운트 경로에 비UTF-8 바이트가 섞일 수 있다(옛 공유의 EUC-KR 이름 등).
+    # 순정 utf-8 로 읽으면 UnicodeDecodeError 가 나는데 그것은 OSError 가 아니라,
+    # 여기서 새면 mount_for -> may_stat/may_enter/safe_* 가 전부 터진다(= 다이얼로그
+    # 생성과 키 입력마다 크래시). 바이트를 그대로 오가는 surrogateescape 로 읽는다.
     try:
-        with open(MOUNTINFO, encoding="utf-8") as handle:
+        with open(MOUNTINFO, encoding="utf-8", errors="surrogateescape") as handle:
             lines = handle.readlines()
-    except OSError:
+    except (OSError, ValueError):
         _mounts["list"], _mounts["stamp"] = [], now
         return []
 

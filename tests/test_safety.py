@@ -1717,3 +1717,132 @@ def test_min_depth_keeps_normal_browsing(qapp, shallow_tree):
     # 그 안에서 파일 이름을 쳐서 확정하는 것도 된다(깊이 > min_depth)
     assert safety.may_open(os.path.join(inner, "설계도.csv"))
     dialog.close()
+
+
+def test_mountinfo_survives_non_utf8_paths(monkeypatch, tmp_path):
+    """마운트 경로에 비UTF-8 바이트가 있어도 판정이 터지지 않는다.
+
+    순정 utf-8 로 읽으면 UnicodeDecodeError 가 나는데 그것은 OSError 가 아니라,
+    mount_for -> may_stat/may_enter/safe_* 가 전부 예외로 터졌다(= 다이얼로그
+    생성과 키 입력마다 크래시). 옛 공유의 EUC-KR 이름 등이 실제로 그렇다.
+    """
+    from custom_file_dialog import safety
+
+    fake = tmp_path / "mountinfo"
+    fake.write_bytes(
+        b"36 25 0:32 / /mnt/\xc7\xd1\xb1\xdb rw - cifs //srv/\xc7\xd1\xb1\xdb rw\n"
+        b"37 25 0:33 / /mnt/ok rw - nfs4 srv:/e rw\n"
+    )
+    monkeypatch.setattr(safety, "MOUNTINFO", str(fake))
+    safety.clear_cache()
+    try:
+        mounts = safety.iter_mounts(refresh=True)
+        assert len(mounts) == 2                      # 두 줄 다 살아 있다
+        assert safety.mount_for("/mnt/ok/a")[1] == "nfs4"
+        # 판정 함수들이 예외 없이 돈다
+        assert safety.may_stat("/mnt/ok/a/b/c") in (True, False)
+        assert safety.may_enter("/mnt/ok/a") in (True, False)
+        assert safety.protection_active() in (True, False)
+    finally:
+        safety.clear_cache()
+
+
+def test_start_dir_respects_guarded_root(qapp, guarded_root):
+    """시작 폴더가 차단 경로면 그 자리에서 열지 않는다.
+
+    setDirectory 는 directoryEntered 를 내지 않아 마지막 방어가 안 걸리므로
+    여기서 걸러야 한다. path_timeout=None 으로 시간 확인을 꺼도 마찬가지다
+    (예전에는 그 경우 순정 os.path.isdir 를 써서 그대로 열렸다).
+    """
+    from custom_file_dialog import CustomFileDialog
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=guarded_root, path_timeout=None
+    )
+    opened = os.path.normpath(dialog.directory().absolutePath())
+    assert opened != os.path.normpath(guarded_root)
+    dialog.deleteLater()
+    _spin(qapp, 50)         # 지연 삭제를 여기서 소화한다
+
+
+def test_start_dir_respects_min_depth(qapp, shallow_tree):
+    """min_depth 로만 막아 둔 얕은 자리도 시작 폴더로 열리지 않는다."""
+    from custom_file_dialog import CustomFileDialog, safety
+
+    root, depth = shallow_tree
+    safety.configure(min_depth=depth + 1)
+
+    dialog = CustomFileDialog(None, mode="open_file", directory=root)
+    opened = os.path.normpath(dialog.directory().absolutePath())
+    assert opened != os.path.normpath(root)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_blocked_buttons_do_not_stay_pressed(qapp, shallow_tree):
+    """차단으로 릴리즈를 삼켜도 버튼이 눌린 채로 남지 않는다."""
+    from qtpy.QtCore import QEvent, QPointF, Qt
+    from qtpy.QtGui import QMouseEvent
+    from qtpy.QtWidgets import QDialogButtonBox, QFileDialog, QLineEdit, QToolButton
+
+    from custom_file_dialog import guard_dialog, safety
+    from custom_file_dialog.guard import _AcceptBlocker, _ParentBlocker
+
+    root, depth = shallow_tree
+    inner = os.path.join(root, "myaccount")
+    safety.configure(min_depth=depth + 1)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(inner)
+    dialog.show()
+    _spin(qapp, 300)
+    installed = guard_dialog(dialog)
+
+    def release(widget, blocker):
+        widget.setDown(True)
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(5, 5),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        return blocker.eventFilter(widget, event)
+
+    up = dialog.findChild(QToolButton, "toParentButton")
+    parent_blocker = [h for h in installed if isinstance(h, _ParentBlocker)][0]
+    assert release(up, parent_blocker) is True
+    assert not up.isDown()                       # 눌린 상태로 남지 않는다
+
+    accept_blocker = [h for h in installed if isinstance(h, _AcceptBlocker)][0]
+    box = dialog.findChild(QDialogButtonBox, "buttonBox")
+    open_button = box.button(QDialogButtonBox.StandardButton.Open)
+    dialog.findChild(QLineEdit, "fileNameEdit").setText(inner)   # 얕은 경로
+    assert release(open_button, accept_blocker) is True
+    assert not open_button.isDown()
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
+def test_resolve_start_dir_skips_missing_parent(tmp_path):
+    """없는 폴더는 시작 위치로 쓰지 않고 다음 후보로 넘어간다.
+
+    입력창에 오타 경로가 남아 있으면 start_dir 을 무시하고 존재하지 않는
+    폴더에서 열렸다.
+    """
+    alive = str(tmp_path / "정상")
+    os.mkdir(alive)
+    missing = str(tmp_path / "없는폴더" / "x.csv")
+
+    resolved = dialog_module.resolve_start_dir(
+        [missing], start_dir=alive, last_dir=None, mode=SelectMode.OPEN_FILE
+    )
+    assert resolved == alive
+
+    # 폴더 모드도 같다
+    resolved = dialog_module.resolve_start_dir(
+        [missing], start_dir=alive, mode=SelectMode.DIRECTORY
+    )
+    assert resolved == alive

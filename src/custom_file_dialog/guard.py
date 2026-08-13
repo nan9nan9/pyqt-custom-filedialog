@@ -157,6 +157,8 @@ class _ParentBlocker(QObject):
             )
             if destination and not safety.may_enter(destination):
                 self.blocked.append(destination)
+                # 릴리즈를 삼키면 버튼이 눌린 상태로 남는다 — 직접 풀어 준다
+                self._button.setDown(False)
                 return True              # 올라가는 동작 자체를 없던 일로
         except RuntimeError:
             pass                         # 다이얼로그가 닫히는 중
@@ -211,6 +213,9 @@ class _AcceptBlocker(QObject):
             opener += os.sep
         if not safety.may_open(opener):
             self.blocked.append(path)
+            # 릴리즈를 삼키면 그 버튼이 눌린 상태로 남는다 — 직접 풀어 준다
+            if kind == QEvent.Type.MouseButtonRelease and hasattr(obj, "setDown"):
+                obj.setDown(False)
             self._explain(path)
             return True
         return False

@@ -328,3 +328,46 @@ def test_follow_link_on_parent_disarms_without_navigation(qapp, tmp_path):
     dialog.directoryEntered.emit(str(other))
     assert dialog.directory().absolutePath() == str(other)
     dialog.deleteLater()
+
+
+def test_follow_link_directories_checks_destination(qapp, tmp_path, monkeypatch):
+    """링크 폴더로 들어가도 **원본이 열면 안 되는 자리면** 옮기지 않는다.
+
+    setDirectory 는 그 폴더를 통째로 나열하고 directoryEntered 를 다시 내지
+    않아 마지막 방어도 걸리지 않는다. 형제 함수(follow_link_on_parent)는 이미
+    safe_isdir 로 감싸는데 여기만 무방비였다.
+    """
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import safety
+
+    work = tmp_path / "작업"
+    work.mkdir()
+    shallow = tmp_path / "user"                   # 원본이 얕은 자리라고 치자
+    shallow.mkdir()
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    link = favorites.add("설계", str(shallow))
+    places = Places(favorites=favorites)
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(str(work))
+    assert hooks_module.follow_link_directories(dialog, places)
+
+    safety.configure(min_depth=safety.path_depth(str(shallow)) + 1)
+    try:
+        dialog.directoryEntered.emit(link)        # 링크 폴더로 들어갔다
+        assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(
+            str(work)
+        )                                          # 얕은 원본으로 옮기지 않는다
+
+        # 원본이 충분히 깊으면 평소대로 따라간다
+        safety.reset()
+        dialog.directoryEntered.emit(link)
+        assert os.path.normpath(dialog.directory().absolutePath()) == os.path.normpath(
+            str(shallow)
+        )
+    finally:
+        safety.reset()
+    dialog.deleteLater()

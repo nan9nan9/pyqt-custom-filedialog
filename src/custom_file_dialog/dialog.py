@@ -202,6 +202,24 @@ def _run_dialog(
     return ([path] if path else []), (chosen or selected_filter)
 
 
+# Qt 기본 아이콘 제공자 — 프로세스에 하나만 두고 모든 다이얼로그가 공유한다.
+#
+# ``setIconProvider`` 는 **소유권을 가져가지 않는다.** 다이얼로그마다 새로 만들어
+# 그 다이얼로그에 매달아 두면, 창을 닫을 때 파이썬 쪽 객체가 먼저 수거되면서
+# C++ 모델이 이미 사라진 제공자를 가리켜 세그폴트가 난다(PyQt6 에서 재현).
+# 하나를 오래 살려 두면 그 순서 문제가 사라진다.
+_PLAIN_ICONS = None
+
+
+def _plain_icon_provider():
+    global _PLAIN_ICONS
+    if _PLAIN_ICONS is None:
+        from qtpy.QtWidgets import QFileIconProvider
+
+        _PLAIN_ICONS = QFileIconProvider()
+    return _PLAIN_ICONS
+
+
 # 모드별 (AcceptMode, FileMode) 설정값
 _INSTANCE_MODES = {
     SelectMode.OPEN_FILE: ("AcceptOpen", "ExistingFile"),
@@ -376,9 +394,7 @@ class CustomFileDialog(QFileDialog):
         아이콘이 필요한 자리는 저장소 안뿐이라 그 밖에서는 기본 제공자로 되돌린다
         (분류가 아닌 항목에는 어차피 기본 아이콘을 주므로 보이는 것은 같다).
         """
-        from qtpy.QtWidgets import QFileIconProvider
-
-        plain = QFileIconProvider()             # Qt 기본 — 참조를 붙들어 둔다
+        plain = _plain_icon_provider()
         self._icon_providers = (provider, plain)
 
         def apply_for(path):
@@ -431,16 +447,20 @@ class CustomFileDialog(QFileDialog):
 
     # ------------------------------------------------------------- 내부
     def _start_at(self, directory):
-        """시작 위치를 잡는다. 파일 경로면 그 폴더를 열고 이름을 미리 채운다."""
+        """시작 위치를 잡는다. 파일 경로면 그 폴더를 열고 이름을 미리 채운다.
+
+        어느 쪽이든 **열어도 되는 자리인지**(:func:`~custom_file_dialog.safety.may_enter`)
+        먼저 본다. 여는 순간 그 자리가 통째로 나열되기 때문이다. ``setDirectory``
+        는 ``directoryEntered`` 를 내지 않아 마지막 방어(bounce)도 걸리지 않으므로,
+        여기서 걸러야 한다. ``path_timeout=None`` 으로 시간 확인을 꺼도 이 판정은
+        문자열만 보므로 그대로 동작한다.
+        """
         isdir = isdir_check(self._path_timeout)
-        if isdir(directory):
+        if safety.may_enter(directory) and isdir(directory):
             self.setDirectory(directory)
             return
         parent_dir = os.path.dirname(directory)
-        # 부모가 차단 경로나 automount 뿌리면 열지 않는다 — 다이얼로그가 그
-        # 자리를 나열하는 순간 아래 마운트가 전부 붙는다. (아직 안 붙은
-        # ``/user/myaccount/f.csv`` 를 주면 safe_isdir 가 False 라 여기로 온다.)
-        if parent_dir and not safety.is_guarded(parent_dir) and not safety.on_automount(parent_dir):
+        if parent_dir and safety.may_enter(parent_dir):
             self.setDirectory(parent_dir)
         self.selectFile(os.path.basename(directory))
 
@@ -485,15 +505,22 @@ def resolve_start_dir(
         if current:
             if mode == SelectMode.DIRECTORY:
                 # 폴더 모드는 그 폴더 자체에서 시작하는 편이 자연스럽다.
-                return current if isdir(current) else os.path.dirname(current)
-            if isdir(current):
-                return current
-            parent = os.path.dirname(current)
-            # 파일 이름까지 넘기면 다이얼로그가 그 이름을 미리 채워 준다.
-            if isdir(parent):
-                return current if mode == SelectMode.SAVE_FILE else parent
-            if parent and (timeout is None or safety.is_reachable(parent, timeout)):
-                return parent
+                if isdir(current):
+                    return current
+                parent = os.path.dirname(current)
+                if isdir(parent):
+                    return parent
+            else:
+                if isdir(current):
+                    return current
+                parent = os.path.dirname(current)
+                # 파일 이름까지 넘기면 다이얼로그가 그 이름을 미리 채워 준다.
+                if isdir(parent):
+                    return current if mode == SelectMode.SAVE_FILE else parent
+            # 여기까지 왔으면 그 폴더는 **없거나 만질 수 없다.** 둘 다 시작
+            # 위치로는 부적합하므로 다음 후보로 넘어간다 — 예전에는 "없지만
+            # 로컬이라 도달 가능"한 경로를 그대로 돌려주어, 입력창에 오타가
+            # 남아 있으면 start_dir 을 무시하고 없는 폴더에서 열렸다.
 
     for candidate in (start_dir, last_dir):
         if candidate and isdir(candidate):

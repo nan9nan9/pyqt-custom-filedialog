@@ -762,3 +762,30 @@ def test_icon_provider_only_inside_stores(qapp, tmp_path):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_unlink_never_follows_dead_link(tmp_path, monkeypatch):
+    """죽은 원본을 가리키는 링크를 지울 때 대상을 stat 하지 않는다.
+
+    os.path.isdir 를 먼저 보면 링크를 따라가며 대상을 stat 한다 — 원본이 죽은
+    NFS 위면 "'설계'에서 제거"·최근 파일 재기록·정리에서 GUI 가 멈춘다.
+    """
+    from custom_file_dialog import safety
+
+    dead = str(tmp_path / "nfs")
+    os.makedirs(dead)
+    target = os.path.join(dead, "설계도.csv")
+    with open(target, "w", encoding="utf-8") as handle:
+        handle.write("x")
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    link = store.add("설계", target)                  # 살아 있을 때 등록
+
+    _hang_stats_on(monkeypatch, dead)
+    try:
+        start = time.time()
+        assert store.remove("설계", "설계도.csv")      # 링크만 지운다
+        assert time.time() - start < 2.5              # 대상을 만지지 않았다
+        assert not os.path.lexists(link)
+    finally:
+        safety.clear_cache()
