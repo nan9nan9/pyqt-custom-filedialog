@@ -450,6 +450,12 @@ def guard_dialog(dialog, bounce=True):
     ):
         return []
 
+    # 이미 걸린 다이얼로그에 또 걸지 않는다. 두 번 걸면 이벤트 필터가 둘이 되어
+    # 안내 팝업이 두 번 뜨고, 두 번째 타이핑 가드가 첫 번째의 연결을 끊어
+    # 고아를 남긴다. (install_hooks 가 걸어 준 뒤 직접 부르는 경우가 있다.)
+    if dialog.findChild(_TypingGuard) is not None:
+        return []
+
     installed = []
     name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
 

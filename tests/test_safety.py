@@ -1526,3 +1526,27 @@ def test_typing_guard_keeps_matching_selection(qapp, shallow_tree):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_guard_dialog_is_idempotent(qapp, guarded_root):
+    """이미 걸린 다이얼로그에 다시 걸어도 장치가 겹치지 않는다.
+
+    두 번 걸리면 Enter 한 번에 안내 팝업이 두 번 뜨고, 뒤에 걸린 타이핑 가드가
+    앞엣것의 연결을 끊어 고아를 남긴다.
+    """
+    from qtpy.QtWidgets import QFileDialog
+
+    from custom_file_dialog import guard_dialog
+    from custom_file_dialog.guard import _AcceptBlocker, _TypingGuard
+
+    dialog = QFileDialog()
+    dialog.setOptions(QFileDialog.Option.DontUseNativeDialog)
+    dialog.setDirectory(os.path.dirname(guarded_root))
+
+    first = guard_dialog(dialog)
+    assert first                                   # 처음에는 걸린다
+    assert guard_dialog(dialog) == []              # 두 번째는 아무 일도 안 한다
+
+    assert len(dialog.findChildren(_TypingGuard)) == 1
+    assert len(dialog.findChildren(_AcceptBlocker)) == 1
+    dialog.close()
