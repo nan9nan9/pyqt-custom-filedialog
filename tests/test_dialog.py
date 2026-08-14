@@ -105,8 +105,11 @@ def test_options_are_accepted_by_qt(qapp):
 
     dlg = QFileDialog()
     dlg.setOptions(dialog_module.make_options(native=False, show_dirs_only=True))
-    assert dlg.options() & qt_compat.option_value("ShowDirsOnly")
     assert dlg.options() & qt_compat.option_value("DontUseNativeDialog")
+    # ShowDirsOnly 비트는 **여기서 보지 않는다.** 플랫폼 테마에 따라 Qt 가
+    # 그 비트를 지운다(GNOME 의 gtk3 에서 실측 — 그런데도 목록에서는 파일이
+    # 제대로 숨는다). 비트가 아니라 **보이는 결과**를 보는 것이 맞아서,
+    # test_show_dirs_only_actually_hides_files 가 그 몫을 한다.
 
 
 def test_show_dirs_only_actually_hides_files(qapp, tmp_path):
@@ -128,7 +131,8 @@ def test_show_dirs_only_actually_hides_files(qapp, tmp_path):
     dialog.show()
     _spin(qapp, 300)
 
-    assert dialog.options() & qt_compat.option_value("ShowDirsOnly")
+    # 옵션 **비트**가 아니라 화면에 보이는 것을 본다 — 플랫폼 테마에 따라
+    # Qt 가 비트를 지우면서도 목록은 제대로 거른다(gtk3 에서 실측).
     view = dialog.findChild(QListView, "listView")
     model, root = view.model(), view.rootIndex()
     shown = sorted(model.index(r, 0, root).data() for r in range(model.rowCount(root)))
