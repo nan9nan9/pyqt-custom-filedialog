@@ -5,16 +5,21 @@ import re
 
 from qtpy.QtCore import QUrl
 
+from .mounts import abspath as _full
+
 # URL 스킴 판별용. 스킴을 2글자 이상으로 제한해 윈도우 드라이브 문자("C:\\...")를
 # 스킴으로 오인하지 않게 한다. ("file:", "ftp://" 는 매칭, "C:" 는 비매칭)
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]+:")
 
 
 def abspath(path):
-    """``~`` 를 펴고 절대·정규 경로로 만든다. 빈 값이면 None."""
-    if not path:
-        return None
-    return os.path.normpath(os.path.abspath(os.path.expanduser(str(path))))
+    """``~`` 를 펴고 절대·정규 경로로 만든다. **빈 값이면 None.**
+
+    해석 자체는 :func:`custom_file_dialog.mounts.abspath` 하나로 한다. 예전에는
+    같은 코드가 두 벌이었는데, 한쪽만 고치면(bytes 처리 등) 같은 경로가 층마다
+    다른 문자열이 되어 판정이 조용히 갈린다.
+    """
+    return _full(path) if path else None
 
 
 def url_path(url):

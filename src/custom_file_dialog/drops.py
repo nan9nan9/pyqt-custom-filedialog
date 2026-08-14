@@ -35,34 +35,28 @@ def acceptable_paths(urls, mode, isdir, isfile=None):
     Returns:
         받을 수 있는 경로 리스트(없으면 빈 리스트).
     """
-    paths = []
-    for url in urls or []:
-        path = url_path(url)
-        if not path:
-            continue                    # 로컬 파일이 아니다
-        if mode == SelectMode.DIRECTORY:
-            if not isdir(path):
-                # 여기서 넘어온 False 는 "파일이다"일 수도, "확인하지 못했다"
-                # 일 수도 있다(죽은 원격 · automount · 차단 경로에서 safe_* 는
-                # 둘 다 False 다). 확인 수단이 있는데 파일도 아니라면 **버린다**
-                # — 부모로 바꾸면 사용자가 떨어뜨린 적 없는 경로가 조용히
-                # 입력창에 들어가고, 앱은 그 폴더에 산출물을 쓴다.
-                if isfile is not None and not isfile(path):
-                    continue
-                path = os.path.dirname(path)
-                if not path:
-                    continue
-        elif isfile is not None:
-            # 파일 모드 — "폴더가 아니다"가 아니라 **파일이 맞다**로 판정한다.
-            # isdir 만 보면 확인하지 못한 자리(automount 위 등)가 False 로
-            # 돌아와 폴더가 파일 칸에 그대로 들어갔다(폴더 모드와 기준이
-            # 갈리던 자리다 — 어느 쪽이든 모르면 받지 않는다).
-            if not isfile(path):
-                continue
-        elif isdir(path):
-            continue                    # 파일 모드에 폴더는 받지 않는다
-        paths.append(path)
-
+    wants_dir = mode == SelectMode.DIRECTORY
+    paths = [_accept(url_path(url), wants_dir, isdir, isfile) for url in urls or []]
+    paths = [path for path in paths if path]
     if not paths:
         return []
     return paths if is_multi_mode(mode) else paths[:1]
+
+
+def _accept(path, wants_dir, isdir, isfile):
+    """경로 하나를 그 모드가 받을 형태로 바꾼다 (못 받으면 None)."""
+    if not path:
+        return None                     # 로컬 파일이 아니다
+    if isdir(path):
+        return path if wants_dir else None      # 파일 모드에 폴더는 안 받는다
+
+    # 여기서의 "폴더가 아니다"는 **"확인하지 못했다"일 수도 있다** — 죽은
+    # 원격 · automount 위 · 차단 경로에서 safe_* 는 둘 다 False 다. 확인 수단이
+    # 있는데 파일도 아니라면 버린다. 폴더 모드에서 부모로 바꾸면 사용자가
+    # 떨어뜨린 적 없는 폴더가 입력창에 들어가 앱이 거기에 산출물을 쓰고,
+    # 파일 모드에서는 폴더가 그대로 파일 칸에 들어간다.
+    if isfile is not None and not isfile(path):
+        return None
+    if not wants_dir:
+        return path
+    return os.path.dirname(path) or None

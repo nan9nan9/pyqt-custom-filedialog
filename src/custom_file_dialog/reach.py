@@ -50,6 +50,12 @@ SERVER_PORTS = {
 DEFAULT_TIMEOUT = 1.0       # 한 번의 확인에 기다릴 최대 시간(초)
 DEFAULT_TTL = 30.0          # 판정 결과를 재사용할 시간(초)
 
+# 서버 소켓 프로브에만 쓰는 상한(초). 살아 있는 서버의 TCP 연결은 LAN 에서 수
+# ms 라, 이보다 오래 걸리면 그 서버에 기대면 안 되는 상태로 본다. 전체 예산을
+# 프로브에 다 주면 응답을 삼키는 마운트 하나가 다이얼로그 여는 시간을 통째로
+# 먹는다 — 나머지 예산은 실제 stat 몫으로 남긴다.
+PROBE_TIMEOUT = 0.25
+
 # 동시에 멈춰 있어도 되는 확인 스레드 수의 상한. 멈춘 스레드는 D 상태라 죽일
 # 수 없으므로, 늘지 않게 하는 방법은 새로 만들지 않는 것뿐이다. 묶음 키가
 # 잡지 못한 경우의 마지막 방어라 넉넉히 잡는다.
@@ -322,8 +328,12 @@ def self_check(mountpoint, source, timeout=None, fstype=None):
 
     ``fstype`` 이 :data:`SERVER_PORTS` 에 있으면 그 종류에 맞는 포트로 서버를
     두드리고, 없는(모르는) 종류는 서버 프로브를 건너뛰고 stat 으로만 판정한다.
+
+    **두 단계가 하나의 시간 예산을 나눠 쓴다.** 각자 ``timeout`` 을 따로 쓰면
+    합이 두 배가 되어, "정해진 시간만 기다린다"는 이 모듈의 약속이 깨진다.
     """
     wait = _settings["timeout"] if timeout is None else float(timeout)
+    deadline = time.monotonic() + wait
 
     # 1) 마운트한 서버부터 — 종류에 맞는 포트로만.
     #    socket 의 timeout 은 **연결에만** 걸리고 이름 조회(getaddrinfo)에는
@@ -334,18 +344,33 @@ def self_check(mountpoint, source, timeout=None, fstype=None):
     if port is not None:
         host = server_of(source, fstype)
         if host:
+            # 프로브 몫은 짧게 끊는다(:data:`PROBE_TIMEOUT`). TCP 연결은 살아
+            # 있는 서버라면 LAN 에서 수 ms 라, 여기에 예산을 다 주면 **응답을
+            # 삼키는 서버 하나가 다이얼로그 여는 시간을 통째로 먹는다**
+            # (실측: 그런 마운트 하나에 1초. 살아 있는 서버는 2ms).
+            share = min(_remaining(deadline), PROBE_TIMEOUT)
+            if share <= 0:
+                return False
             finished, reachable = call_with_timeout(
-                probe_host, host, port, wait, timeout=wait, pending_key=mountpoint
+                probe_host, host, port, share, timeout=share, pending_key=mountpoint
             )
             if not finished or not reachable:
                 return False
 
     # 2) 여기까지 통과했으면 실제로 만져 본다(멈춰도 GUI 는 안 멈추고,
-    #    같은 마운트에서 멈춘 확인이 있으면 스레드를 더 만들지 않는다)
+    #    같은 마운트에서 멈춘 확인이 있으면 스레드를 더 만들지 않는다).
+    #    남은 예산을 준다 — 갓 붙은 원격 폴더의 첫 stat 은 연결보다 느리다.
+    left = _remaining(deadline)
+    if left <= 0:
+        return False
     finished, _value = call_with_timeout(
-        os.stat, mountpoint, timeout=wait, pending_key=mountpoint
+        os.stat, mountpoint, timeout=left, pending_key=mountpoint
     )
     return finished
+
+
+def _remaining(deadline):
+    return deadline - time.monotonic()
 
 
 def _cached(key):

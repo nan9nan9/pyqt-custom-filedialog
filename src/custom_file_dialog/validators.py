@@ -26,15 +26,29 @@ def _checks(timeout):
 
 
 def isdir_check(timeout):
-    """``timeout`` 규칙이 적용된 isdir 하나.
+    """``timeout`` 규칙이 적용된 isdir 하나 (자세한 설명은 :func:`_check`)."""
+    return _check(0, timeout)
 
-    "None 이면 os.path.isdir, 아니면 safe_isdir" 분기가 위젯·다이얼로그
-    곳곳에서 되풀이되던 것을 한곳에 모은다. ``~`` 도 함께 편다 — 유효성
-    검사는 펴는데 시작 폴더 결정은 안 펴서, ``~/문서/a.txt`` 가 "유효" 로
-    보이면서도 다이얼로그는 엉뚱한 곳에서 열렸다.
+
+def isfile_check(timeout):
+    """``timeout`` 규칙이 적용된 isfile 하나.
+
+    드롭 판정이 "폴더가 아니다"와 "확인하지 못했다"를 갈라야 해서 필요하다
+    (:func:`custom_file_dialog.drops.acceptable_paths`).
     """
-    isdir = _checks(timeout)[0]
-    return lambda path: isdir(os.path.expanduser(path)) if path else False
+    return _check(1, timeout)
+
+
+def _check(which, timeout):
+    """``timeout`` 규칙이 적용된 판정 함수 하나.
+
+    "None 이면 os.path.*, 아니면 safe_*" 분기가 위젯·다이얼로그 곳곳에서
+    되풀이되던 것을 한곳에 모은다. ``~`` 도 함께 편다 — 유효성 검사는 펴는데
+    시작 폴더 결정은 안 펴서, ``~/문서/a.txt`` 가 "유효" 로 보이면서도
+    다이얼로그는 엉뚱한 곳에서 열렸다.
+    """
+    check = _checks(timeout)[which]
+    return lambda path: check(os.path.expanduser(path)) if path else False
 
 
 def split_paths(text, separator="; "):

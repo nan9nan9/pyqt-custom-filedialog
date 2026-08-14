@@ -521,30 +521,21 @@ def resolve_start_dir(
     """
     isdir = isdir_check(timeout)
 
-    if current_paths:
-        # 판정(isdir_check)만 ``~`` 를 펴고 **결과를 안 펴면** 호출자가 그대로
-        # Qt 에 넘겨 cwd 에서 열린다 — Qt 는 ``~`` 를 풀지 않는다. 후보로
-        # 인정한 순간 편 형태로 바꿔서 다음 단계에 넘긴다.
-        current = os.path.expanduser(current_paths[0] or "")
-        if current:
-            if mode == SelectMode.DIRECTORY:
-                # 폴더 모드는 그 폴더 자체에서 시작하는 편이 자연스럽다.
-                if isdir(current):
-                    return current
-                parent = os.path.dirname(current)
-                if isdir(parent):
-                    return parent
-            else:
-                if isdir(current):
-                    return current
-                parent = os.path.dirname(current)
-                # 파일 이름까지 넘기면 다이얼로그가 그 이름을 미리 채워 준다.
-                if isdir(parent):
-                    return current if mode == SelectMode.SAVE_FILE else parent
-            # 여기까지 왔으면 그 폴더는 **없거나 만질 수 없다.** 둘 다 시작
-            # 위치로는 부적합하므로 다음 후보로 넘어간다 — 예전에는 "없지만
-            # 로컬이라 도달 가능"한 경로를 그대로 돌려주어, 입력창에 오타가
-            # 남아 있으면 start_dir 을 무시하고 없는 폴더에서 열렸다.
+    # 판정(isdir_check)만 ``~`` 를 펴고 **결과를 안 펴면** 호출자가 그대로 Qt 에
+    # 넘겨 cwd 에서 열린다 — Qt 는 ``~`` 를 풀지 않는다. 후보로 인정한 순간
+    # 편 형태로 바꿔서 다음 단계에 넘긴다.
+    current = os.path.expanduser((current_paths or [""])[0] or "")
+    if current:
+        if isdir(current):
+            return current
+        parent = os.path.dirname(current)
+        if isdir(parent):
+            # 저장 모드는 파일 이름까지 넘긴다 — 다이얼로그가 미리 채워 준다.
+            return current if mode == SelectMode.SAVE_FILE else parent
+        # 여기까지 왔으면 그 폴더는 **없거나 만질 수 없다.** 둘 다 시작 위치로는
+        # 부적합하므로 다음 후보로 넘어간다 — 예전에는 "없지만 로컬이라 도달
+        # 가능"한 경로를 그대로 돌려주어, 입력창에 오타가 남아 있으면 start_dir
+        # 을 무시하고 없는 폴더에서 열렸다.
 
     for candidate in (start_dir, last_dir):
         if candidate and isdir(candidate):

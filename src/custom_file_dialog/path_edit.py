@@ -34,7 +34,13 @@ from .icons import standard_icon
 from .places import PlacesOptions
 from .filters import build_filter, ensure_suffix, suffix_of
 from .history import PathHistory
-from .validators import isdir_check, join_paths, split_paths, validate_paths
+from .validators import (
+    isdir_check,
+    isfile_check,
+    join_paths,
+    split_paths,
+    validate_paths,
+)
 
 
 class FilePathEdit(QWidget):
@@ -424,12 +430,7 @@ class FilePathEdit(QWidget):
 
     def _isfile(self, path):
         """같은 규칙의 isfile. 드롭에서 "폴더가 아니다"와 "확인 못 했다"를 가른다."""
-        if not path:
-            return False
-        expanded = os.path.expanduser(path)
-        if self._path_timeout is None:
-            return os.path.isfile(expanded)
-        return safety.safe_isfile(expanded, self._path_timeout)
+        return isfile_check(self._path_timeout)(path)
 
     def _remember(self, paths):
         first = paths[0]

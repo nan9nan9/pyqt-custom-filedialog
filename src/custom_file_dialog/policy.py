@@ -35,7 +35,7 @@ import os
 import threading
 
 from . import mounts
-from .mounts import _abspath
+from .mounts import abspath as _abspath
 
 # 자동완성이 폴더를 나열할 최소 깊이. 0 이면 제한 없음(어디서든 완성한다).
 DEFAULT_MIN_DEPTH = 0

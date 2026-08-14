@@ -52,6 +52,10 @@ from .util import abspath, url_path
 
 _OPEN_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
 
+# 항목을 "여는" 이벤트는 위젯마다 다르다 — 목록은 더블클릭, 팝업은 클릭(release).
+_DBLCLICK = QEvent.Type.MouseButtonDblClick
+_RELEASE = QEvent.Type.MouseButtonRelease
+
 
 class GuardedFileSystemModel(QFileSystemModel):
     """위험한 자리의 목록을 **아예 요청하지 않는** 파일시스템 모델.
@@ -289,10 +293,6 @@ class _AcceptBlocker(_Blocker):
                 entries.append((part, path))
         return entries
 
-    def _typed_paths(self):
-        """파일 이름 칸이 가리키는 경로들."""
-        return [path for _part, path in self._typed_entries()]
-
     def _first_blocked(self, entries):
         """확정하면 막힐 **첫 경로** (전부 통과하면 None).
 
@@ -322,68 +322,15 @@ class _AcceptBlocker(_Blocker):
         self._explain(path)
 
     def _explain(self, path):
-        """왜 안 열리는지 안내한다 — **막은 이유마다 다른 말로.**
-
-        지목해서 막은 자리(``guarded_roots``)는 조용히 삼킨다. 앱이 의도적으로
-        가린 자리라 사용자에게 설명할 것이 없다.
+        """왜 안 열리는지 안내한다 (문구는 :func:`_block_message` 가 고른다).
 
         모달 exec 는 쓰지 않는다 — Enter 를 연타해도 확인 버튼에 갇히지 않게
         비모달로 띄우고, 이미 떠 있으면 내용과 제목만 갈아 끼운다.
         """
-        if safety.is_guarded(path):
+        message = _block_message(path)
+        if message is None:
             return
-
-        opener = path + os.sep
-        if safety.is_automount_point(path):
-            # 그 자리를 여는 것은 "아래 이름을 전부 마운트해 보라"는 뜻이라,
-            # 구분자를 붙여도 열 수 없다. 한 단계 아래를 지정하게 안내한다.
-            title = "자동 마운트 지점입니다"
-            lines = [
-                "이 자리는 자동 마운트 지점이라 통째로 열지 않습니다.",
-                "그 아래의 폴더를 지정해 주세요 (예: %s)."
-                % (os.path.join(path, "이름") + os.sep),
-            ]
-        elif safety.on_automount(path):
-            # 자동 마운트 **아래**라 이름만으로는 열지 않는다. 먼저 열어야 할
-            # 폴더(마운트 지점 바로 아래 한 단계)를 짚어 준다 — 그 폴더를 열면
-            # 그것 하나만 붙고, 그 뒤로는 평소대로 쓸 수 있다.
-            title = "먼저 폴더를 열어 주세요"
-            lines = [
-                "자동 마운트 아래라 경로만으로는 열지 않습니다.",
-                "폴더를 먼저 열면(끝에 '%s') 그 안은 평소대로 쓸 수 있습니다."
-                % os.sep,
-            ]
-            step = _first_step_under_automount(path)
-            if step and safety.may_open(step):
-                lines.append("예) %s" % step)
-        elif safety.may_open(opener):
-            # 끝에 구분자만 붙이면 열린다. 막힌 이유는 깊이일 수도, 부모가
-            # 지목된 자리(guarded_roots)일 수도 있으므로 문구를 갈라 쓴다 —
-            # min_depth 가 0 인데 "0단계 이상" 이라고 하면 말이 안 된다.
-            title = "폴더를 열려면 끝에 '%s' 를 붙이세요" % os.sep
-            limit = safety.min_depth()
-            # 지목된 자리 아래인지를 **먼저** 본다. 깊이는 이미 만족했는데
-            # "N단계 이상이어야 한다"고 하면, 사용자는 이미 한 일을 또 하라는
-            # 말을 듣는다.
-            if safety.is_guarded(os.path.dirname(path)):
-                reason = "이 폴더 아래는 이름만으로는 열지 않습니다."
-            elif limit > 0:
-                reason = "%d단계 이상의 경로여야 자동으로 열립니다." % limit
-            else:
-                reason = "이 자리는 이름만으로는 열지 않습니다 (자동 마운트 보호)."
-            lines = [reason, "예) %s" % opener]
-        else:
-            # 구분자를 붙여도 안 되는 자리 — 더 깊은 경로가 필요하다
-            limit = safety.min_depth()
-            if limit <= 0:
-                return          # 막을 이유가 없는데 불렸다면 조용히 넘어간다
-            title = "경로가 너무 얕습니다"
-            lines = [
-                "이 깊이의 경로는 자동으로 열지 않습니다 (automount 보호).",
-                "%d단계 이상의 경로를 입력하고, 폴더를 열려면 끝에 '%s' 를 붙이세요."
-                % (limit, os.sep),
-            ]
-
+        title, lines = message
         if self.notice is None:
             self.notice = QMessageBox(self._dialog)
             self.notice.setIcon(QMessageBox.Icon.Warning)
@@ -392,6 +339,66 @@ class _AcceptBlocker(_Blocker):
         self.notice.setText("\n".join(lines))
         self.notice.show()
         self.notice.raise_()
+
+
+def _block_message(path):
+    """막은 이유에 맞는 ``(제목, 줄들)``. 설명할 것이 없으면 None.
+
+    지목해서 막은 자리(``guarded_roots``)는 조용히 삼킨다 — 앱이 의도적으로
+    가린 자리라 사용자에게 설명할 것이 없다.
+    """
+    if safety.is_guarded(path):
+        return None
+
+    if safety.is_automount_point(path):
+        # 그 자리를 여는 것은 "아래 이름을 전부 마운트해 보라"는 뜻이라,
+        # 구분자를 붙여도 열 수 없다. 한 단계 아래를 지정하게 안내한다.
+        return "자동 마운트 지점입니다", [
+            "이 자리는 자동 마운트 지점이라 통째로 열지 않습니다.",
+            "그 아래의 폴더를 지정해 주세요 (예: %s)."
+            % (os.path.join(path, "이름") + os.sep),
+        ]
+
+    if safety.on_automount(path):
+        # 자동 마운트 **아래**라 이름만으로는 열지 않는다. 먼저 열어야 할
+        # 폴더(마운트 지점 바로 아래 한 단계)를 짚어 준다 — 그 폴더를 열면
+        # 그것 하나만 붙고, 그 뒤로는 평소대로 쓸 수 있다.
+        lines = [
+            "자동 마운트 아래라 경로만으로는 열지 않습니다.",
+            "폴더를 먼저 열면(끝에 '%s') 그 안은 평소대로 쓸 수 있습니다." % os.sep,
+        ]
+        step = _first_step_under_automount(path)
+        if step and safety.may_open(step):
+            lines.append("예) %s" % step)
+        return "먼저 폴더를 열어 주세요", lines
+
+    limit = safety.min_depth()
+    opener = path + os.sep
+    if safety.may_open(opener):
+        # 끝에 구분자만 붙이면 열린다. 막힌 이유는 깊이일 수도, 부모가 지목된
+        # 자리(guarded_roots)일 수도 있으므로 문구를 갈라 쓴다 — min_depth 가
+        # 0 인데 "0단계 이상" 이라고 하면 말이 안 된다. 지목된 자리 아래인지를
+        # **먼저** 본다. 깊이는 이미 만족했는데 "N단계 이상이어야 한다"고 하면
+        # 사용자는 이미 한 일을 또 하라는 말을 듣는다.
+        if safety.is_guarded(os.path.dirname(path)):
+            reason = "이 폴더 아래는 이름만으로는 열지 않습니다."
+        elif limit > 0:
+            reason = "%d단계 이상의 경로여야 자동으로 열립니다." % limit
+        else:
+            reason = "이 자리는 이름만으로는 열지 않습니다 (자동 마운트 보호)."
+        return "폴더를 열려면 끝에 '%s' 를 붙이세요" % os.sep, [
+            reason,
+            "예) %s" % opener,
+        ]
+
+    # 구분자를 붙여도 안 되는 자리 — 더 깊은 경로가 필요하다
+    if limit <= 0:
+        return None             # 막을 이유가 없는데 불렸다면 조용히 넘어간다
+    return "경로가 너무 얕습니다", [
+        "이 깊이의 경로는 자동으로 열지 않습니다 (automount 보호).",
+        "%d단계 이상의 경로를 입력하고, 폴더를 열려면 끝에 '%s' 를 붙이세요."
+        % (limit, os.sep),
+    ]
 
 
 def _typed_path(dialog, text):
@@ -686,13 +693,7 @@ def guard_dialog(dialog, bounce=True):
     name_edit = dialog.findChild(QLineEdit, "fileNameEdit")
 
     # 1) 파일 이름 칸 자동완성 (min_depth 만 켜도 여기까지는 해 준다)
-    completer = name_edit.completer() if name_edit is not None else None
-    if completer is not None and not isinstance(
-        completer.model(), GuardedFileSystemModel
-    ):
-        model = GuardedFileSystemModel(dialog)
-        model.setRootPath("")
-        completer.setModel(model)
+    if _guard_completer(dialog, name_edit):
         installed.append("completer")
 
     # 2) 키 입력마다 입력 경로를 access()/stat() 하는 Qt 내부 동작 차단
@@ -703,80 +704,100 @@ def guard_dialog(dialog, bounce=True):
     if not safety.blocks_navigation():
         return installed        # 아래는 "확정하거나 들어가지 못하게" 하는 장치들이다
 
-    # 3) 파일 목록에서 열기 차단 (더블클릭). 폴더를 열면 그 안이 통째로
-    #    나열되므로 차단 경로만이 아니라 얕은 자리·autofs 위도 막는다.
-    for view in (
-        dialog.findChild(QTreeView, "treeView"),
-        dialog.findChild(QListView, "listView"),
-    ):
-        if view is None:
-            continue
-        blocker = _ItemBlocker(
-            view, (QEvent.Type.MouseButtonDblClick,), parent=dialog
-        )
-        view.viewport().installEventFilter(blocker)
-        view.installEventFilter(blocker)
-        installed.append(blocker)
+    # 3) 목록에서 열기 차단(더블클릭). 폴더를 열면 그 안이 통째로 나열되므로
+    #    차단 경로만이 아니라 얕은 자리·autofs 위도 막는다.
+    for name, kind in (("treeView", QTreeView), ("listView", QListView)):
+        view = dialog.findChild(kind, name)
+        if view is not None:
+            _watch(view, _ItemBlocker(view, (_DBLCLICK,), parent=dialog), installed)
 
     # 4) "Look in" 드롭다운에서 고르기 차단 (클릭 = release)
     combo = dialog.findChild(QComboBox, "lookInCombo")
     if combo is not None:
-        view = combo.view()
-        blocker = _ItemBlocker(
-            view, (QEvent.Type.MouseButtonRelease,), combo.hidePopup, parent=dialog
+        popup = combo.view()
+        _watch(
+            popup,
+            _ItemBlocker(popup, (_RELEASE,), combo.hidePopup, parent=dialog),
+            installed,
         )
-        view.viewport().installEventFilter(blocker)
-        view.installEventFilter(blocker)
-        installed.append(blocker)
 
-    # 4b) "상위 폴더(↑)" 로 올라가는 것도 같은 규칙으로 막는다
+    # 5) "상위 폴더(↑)" 로 올라가는 것도 같은 규칙으로 막는다
     up_button = dialog.findChild(QToolButton, "toParentButton")
     if up_button is not None:
-        blocker = _ParentBlocker(dialog, up_button, dialog)
-        up_button.installEventFilter(blocker)
-        installed.append(blocker)
+        _watch(up_button, _ParentBlocker(dialog, up_button, dialog), installed)
 
-    # 4c) 사이드바에서 고르기 차단. 여기가 비어 있으면 마지막 방어(bounce)가
-    #     유일한 방어가 되는데, 그건 **이미 읽은 뒤**라 마운트 폭주를 못 막는다.
+    # 6) 사이드바에서 고르기 차단. 여기가 비어 있으면 마지막 방어(bounce)가
+    #    유일한 방어가 되는데, 그건 **이미 읽은 뒤**라 마운트 폭주를 못 막는다.
     sidebar = dialog.findChild(QListView, "sidebar")
     if sidebar is not None:
-        blocker = _SidebarBlocker(sidebar, parent=dialog)
-        sidebar.viewport().installEventFilter(blocker)
-        sidebar.installEventFilter(blocker)
-        installed.append(blocker)
+        _watch(sidebar, _SidebarBlocker(sidebar, parent=dialog), installed)
 
-    # 5) 파일 이름 칸으로 확정하기 차단 (Enter · 열기 버튼).
+    # 7) 파일 이름 칸으로 확정하기 차단 (Enter · 열기 버튼).
     #    guarded 는 물론 min_depth 만 켜도 건다 — Enter 의 확정은 Qt 가 GUI
     #    스레드에서 입력 경로를 stat 하는 일이라, automount 의 얕은 경로에서는
     #    그 한 번으로 멈춘다 (safety.may_open 이 판정).
     if name_edit is not None:
         blocker = _AcceptBlocker(dialog, name_edit, dialog)
-        name_edit.installEventFilter(blocker)
-        box = dialog.findChild(QDialogButtonBox, "buttonBox")
-        for standard in ("Open", "Save"):
-            button = box.button(getattr(QDialogButtonBox.StandardButton, standard)) if box else None
-            if button is not None:
-                button.installEventFilter(blocker)
-        installed.append(blocker)
+        _watch(name_edit, blocker, installed)
+        for button in _accept_buttons(dialog):
+            button.installEventFilter(blocker)
 
-    # 6) 마지막 방어 — 그래도 들어가졌으면 직전 폴더로 되돌린다
+    # 8) 마지막 방어 — 그래도 들어가졌으면 직전 폴더로 되돌린다
     if bounce:
-        last = {"dir": dialog.directory().absolutePath()}
-
-        def on_entered(path):
-            if safety.may_enter(path):
-                last["dir"] = path
-                return
-            # 되돌리기를 **한 틱 미룬다.** directoryEntered 를 처리하는 도중에
-            # setDirectory 를 부르면 Qt6 이 사이드바 이동 한가운데서 재진입해
-            # 세그폴트한다(PyQt6·PySide6 에서 100% 재현. Qt5 는 멀쩡하다).
-            # 미뤄도 되돌리기는 그대로 되고, 그사이 사용자가 볼 수 있는 것은
-            # 한 프레임뿐이다.
-            QTimer.singleShot(0, lambda: _set_directory(dialog, last["dir"]))
-
-        dialog.directoryEntered.connect(on_entered)
+        _install_bounce(dialog)
         installed.append("bounce")
 
     return installed
+
+
+def _watch(widget, blocker, installed):
+    """블로커를 위젯에 걸고 목록에 남긴다.
+
+    뷰에는 **뷰포트에도** 걸어야 한다 — 마우스 이벤트는 뷰포트가 먼저 받는다.
+    """
+    viewport = getattr(widget, "viewport", None)
+    if viewport is not None:
+        viewport().installEventFilter(blocker)
+    widget.installEventFilter(blocker)
+    installed.append(blocker)
+    return blocker
+
+
+def _guard_completer(dialog, name_edit):
+    """자동완성 모델을 안전한 것으로 갈아 끼운다. 이미 갈렸으면 False."""
+    completer = name_edit.completer() if name_edit is not None else None
+    if completer is None or isinstance(completer.model(), GuardedFileSystemModel):
+        return False
+    model = GuardedFileSystemModel(dialog)
+    model.setRootPath("")
+    completer.setModel(model)
+    return True
+
+
+def _accept_buttons(dialog):
+    """확정 버튼들(열기·저장). 버튼 상자가 없으면 빈 목록."""
+    box = dialog.findChild(QDialogButtonBox, "buttonBox")
+    if box is None:
+        return []
+    standard = QDialogButtonBox.StandardButton
+    buttons = (box.button(standard.Open), box.button(standard.Save))
+    return [button for button in buttons if button is not None]
+
+
+def _install_bounce(dialog):
+    """마지막 방어 — 막힌 자리에 들어가졌으면 직전 폴더로 되돌린다."""
+    last = {"dir": dialog.directory().absolutePath()}
+
+    def on_entered(path):
+        if safety.may_enter(path):
+            last["dir"] = path
+            return
+        # 되돌리기를 **한 틱 미룬다.** directoryEntered 를 처리하는 도중에
+        # setDirectory 를 부르면 Qt6 이 사이드바 이동 한가운데서 재진입해
+        # 세그폴트한다(PyQt6·PySide6 에서 100% 재현. Qt5 는 멀쩡하다).
+        # 미뤄도 되돌리기는 그대로 되고, 그사이 보이는 것은 한 프레임뿐이다.
+        QTimer.singleShot(0, lambda: _set_directory(dialog, last["dir"]))
+
+    dialog.directoryEntered.connect(on_entered)
 
 

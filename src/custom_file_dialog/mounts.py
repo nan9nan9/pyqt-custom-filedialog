@@ -43,8 +43,12 @@ MOUNTS_TTL = 5.0
 _mounts = {"list": None, "stamp": 0.0}
 
 
-def _abspath(path):
-    """``~`` 를 펴고 절대·정규 경로로. (util.abspath 와 같지만 Qt 를 끌어오지 않는다)
+def abspath(path):
+    """``~`` 를 펴고 절대·정규 경로로. **경로 해석은 여기 하나뿐이다.**
+
+    Qt 를 끌어오지 않으므로 이 계층(마운트 표만 보는 층)에서도 쓸 수 있다.
+    빈 값도 그대로 편다(= 현재 폴더). 빈 값에 None 이 필요하면
+    :func:`custom_file_dialog.util.abspath` 를 쓴다 — 그쪽이 이 함수를 부른다.
 
     ``bytes`` 는 ``os.fsdecode`` 로 푼다. ``str()`` 로 감싸면 ``b'/user'`` 라는
     **글자 그대로의** 이름이 되어, 막아 달라고 준 자리가 조용히 안 막힌다.
@@ -135,7 +139,7 @@ def mount_for(path):
     """
     if not path:
         return None
-    absolute = _abspath(path)
+    absolute = abspath(path)
     best = None
     best_length = -1
     for entry in iter_mounts():
@@ -179,7 +183,7 @@ def is_automount_point(path):
     return (
         bool(mount)
         and mount[1] in AUTOMOUNT_FSTYPES
-        and os.path.normpath(mount[0]) == _abspath(path)
+        and os.path.normpath(mount[0]) == abspath(path)
     )
 
 

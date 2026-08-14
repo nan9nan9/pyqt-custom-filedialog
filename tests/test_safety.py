@@ -2007,8 +2007,8 @@ def test_every_guard_uses_a_shared_decision():
         assert raw not in source, "guard 가 설정을 직접 본다: %s" % raw
 
     # min_depth() 는 **안내 문구를 고를 때만** 쓴다 — 무엇을 막을지 판단하는
-    # 데 쓰면 규칙이 갈라진다. 그래서 _explain 안에만 있어야 한다.
-    notice = inspect.getsource(guard._AcceptBlocker._explain)
+    # 데 쓰면 규칙이 갈라진다. 그래서 문구를 고르는 함수 안에만 있어야 한다.
+    notice = inspect.getsource(guard._block_message)
     assert source.count("min_depth()") == notice.count("min_depth()") > 0
 
     # listing_allowed() 도 한 군데뿐이다 — 자동완성 모델의 **뿌리**(경로가 없어
@@ -2777,3 +2777,88 @@ def test_sidebar_keyboard_move_cannot_open_a_blocked_place(qapp, shallow_tree):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def test_one_check_never_spends_more_than_its_budget(monkeypatch, tmp_path):
+    """확인 한 번이 ``timeout`` **한 몫**만 쓴다.
+
+    프로브와 stat 이 각자 timeout 을 쓰면 합이 두 배가 되어, 이 모듈이 약속한
+    "정해진 시간만 기다린다"가 깨진다. 그 비용은 다이얼로그를 여는 GUI 스레드가
+    그대로 문다 — 응답을 삼키는 마운트 하나가 창 뜨는 시간을 먹었다.
+    """
+    import threading
+
+    from custom_file_dialog import safety
+
+    mount = str(tmp_path / "원격")
+    os.makedirs(mount)
+    monkeypatch.setattr(
+        safety_mounts,
+        "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (mount, "nfs4", "서버:/export")],
+    )
+    release = threading.Event()
+    # 프로브도 stat 도 돌아오지 않는 서버 — 가장 비싼 경우다
+    monkeypatch.setattr(
+        safety_reach, "probe_host", lambda *a, **k: (release.wait(10), True)[1]
+    )
+    monkeypatch.setattr(os, "stat", lambda *a, **k: (release.wait(10), None)[1])
+    safety.clear_cache()
+
+    try:
+        # 1) 프로브부터 안 돌아오는 경우
+        started = time.monotonic()
+        assert safety.is_reachable(os.path.join(mount, "a.csv"), timeout=0.2) is False
+        spent = time.monotonic() - started
+        # 예산 한 몫 + 스레드 뒷정리 여유. 두 몫(0.4s)을 쓰면 여기서 걸린다.
+        assert spent < 0.35, "확인 한 번에 %.3f 초 — 예산(0.2)을 넘었다" % spent
+
+        # 2) 프로브는 시간을 좀 쓰고 통과, stat 이 안 돌아오는 경우.
+        #    stat 이 **남은 예산**이 아니라 처음 예산을 다시 받으면 합이 넘친다.
+        safety.clear_cache()
+        monkeypatch.setattr(
+            safety_reach, "probe_host", lambda *a, **k: (time.sleep(0.15), True)[1]
+        )
+        started = time.monotonic()
+        assert safety.is_reachable(os.path.join(mount, "b.csv"), timeout=0.3) is False
+        spent = time.monotonic() - started
+        assert spent < 0.40, "프로브 뒤 stat 이 예산을 새로 받았다 (%.3f 초)" % spent
+    finally:
+        release.set()
+        safety.clear_cache()
+
+
+def test_probe_share_is_capped(monkeypatch, tmp_path):
+    """프로브 몫은 :data:`PROBE_TIMEOUT` 로 끊고, 남은 예산은 stat 이 쓴다.
+
+    살아 있는 서버의 TCP 연결은 LAN 에서 수 ms 다. 프로브에 예산을 다 주면
+    응답을 삼키는 마운트 하나가 다이얼로그 여는 시간을 통째로 먹는다.
+    """
+    from custom_file_dialog import safety
+
+    mount = str(tmp_path / "원격")
+    os.makedirs(mount)
+    monkeypatch.setattr(
+        safety_mounts,
+        "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (mount, "nfs4", "서버:/export")],
+    )
+    seen = {}
+    monkeypatch.setattr(
+        safety_reach,
+        "probe_host",
+        lambda host, port, wait=None, **k: seen.setdefault("wait", wait) and False,
+    )
+    safety.clear_cache()
+    try:
+        safety.is_reachable(mount, timeout=5.0)
+        assert seen["wait"] == pytest.approx(safety_reach.PROBE_TIMEOUT, abs=0.01)
+        # 예산이 그보다 작으면 그 작은 값을 쓴다(설정을 넘지 않는다)
+        safety.clear_cache()
+        seen.clear()
+        safety.is_reachable(mount, timeout=0.05)
+        assert seen["wait"] == pytest.approx(0.05, abs=0.01)
+    finally:
+        safety.clear_cache()
