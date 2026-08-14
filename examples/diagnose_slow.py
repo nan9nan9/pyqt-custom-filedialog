@@ -41,11 +41,72 @@ def _mount_report():
     auto = [m for m in table if m[1] in mounts.AUTOMOUNT_FSTYPES]
     print("마운트 표: 전체 %d개 · 원격 %d개 · automount %d개"
           % (len(table), len(remote), len(auto)))
+    options = _mount_options()
     for point, fstype, source in (remote + auto)[:12]:
-        print("    %-40s %-10s %s" % (point, fstype, source))
+        print("    %-36s %-9s %s" % (point, fstype, source))
+        flags = options.get(os.path.normpath(point), "")
+        caching = [f for f in flags.split(",")
+                   if f.startswith(("ac", "noac", "actimeo", "lookupcache", "vers", "proto"))]
+        if caching:
+            print("        옵션: %s" % ",".join(caching))
+        if "noac" in flags.split(",") or "actimeo=0" in flags:
+            print("        ** 속성 캐시가 꺼져 있다(noac/actimeo=0). 파일 정보를"
+                  " 물을 때마다 서버까지 간다 — 목록이 느린 가장 흔한 원인이다. **")
     if len(remote) + len(auto) > 12:
         print("    … 외 %d개" % (len(remote) + len(auto) - 12))
     return table
+
+
+def _mount_options():
+    """``마운트지점 -> 옵션문자열``. mountinfo 의 옵션 칸을 그대로 읽는다."""
+    found = {}
+    try:
+        with open(mounts.MOUNTINFO, encoding="utf-8", errors="surrogateescape") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return found
+    for line in lines:
+        fields = line.split()
+        try:
+            separator = fields.index("-")
+        except ValueError:
+            continue
+        if separator < 6 or len(fields) < separator + 4:
+            continue
+        point = os.path.normpath(fields[4])
+        found[point] = fields[5] + "," + fields[separator + 3]
+    return found
+
+
+def _listing_cost(directory):
+    """``ls`` 와 Qt 가 왜 다른지 — 같은 폴더로 직접 재 본다.
+
+    ``ls`` 는 폴더만 읽고(getdents 한 번), Qt 는 크기·종류·시각을 채우려고
+    **항목마다 stat** 한다. 네트워크에서는 그 stat 하나하나가 서버까지 가는
+    왕복이라, 폴더 읽기가 아무리 빨라도 목록은 느리다.
+    """
+    started = time.perf_counter()
+    try:
+        names = os.listdir(directory)
+    except OSError as error:
+        print("    폴더를 읽지 못했다: %s" % error)
+        return
+    read = time.perf_counter() - started
+
+    started = time.perf_counter()
+    for name in names:
+        try:
+            os.lstat(os.path.join(directory, name))
+        except OSError:
+            pass
+    stat_all = time.perf_counter() - started
+
+    print("    항목 %d개 · 폴더만 읽기(ls 가 하는 일) %.0f ms"
+          " · 항목마다 stat(Qt 가 하는 일) %.0f ms"
+          % (len(names), read * 1000, stat_all * 1000))
+    if names and stat_all > 4 * max(read, 0.0005):
+        print("        -> stat 이 %.0f배 비싸다. 목록이 느린 것은 폴더 크기가"
+              " 아니라 **항목마다 서버에 묻는 비용** 이다." % (stat_all / max(read, 1e-6)))
 
 
 def _where(path, table):
@@ -106,6 +167,15 @@ def main():
     names = [sidebar.model().index(r, 0).data() for r in range(rows)]
     print("\n사이드바 %d개: %s" % (rows, names))
 
+    print("\n사이드바가 가리키는 폴더를 직접 재 본다 (ls vs Qt 의 차이):")
+    from custom_file_dialog.constants import PATH_ROLE
+    from custom_file_dialog.util import url_path
+    for row in range(rows):
+        target = url_path(sidebar.model().index(row, 0).data(PATH_ROLE))
+        if target and os.path.isdir(target):
+            print("  %s  (%s)" % (names[row], target))
+            _listing_cost(target)
+
     print("\n%-18s %10s %12s %12s   %s"
           % ("항목", "전체", "우리 코드", "Qt", "간 곳"))
     worst = []
@@ -141,8 +211,10 @@ def main():
             print("    %7.1f ms  %s" % (spent * 1000, where))
 
     print("\n읽는 법:")
-    print("  · 'Qt' 가 대부분이면 -> 그 폴더를 **읽는 것** 자체가 느린 것이다")
-    print("    (네트워크 지연이거나 파일이 아주 많은 폴더). 우리가 줄일 수 없다.")
+    print("  · 'Qt' 가 대부분이면 -> 위의 'ls vs Qt' 줄을 보라. Qt 는 크기·종류·")
+    print("    시각을 채우려고 **항목마다 stat** 한다(실측: 항목당 10회 이상,")
+    print("    오갈 때마다 다시). ls 는 폴더만 읽으므로 빠른 것이 정상이고,")
+    print("    공정한 비교는 `ls -lU` 다. 네트워크에서는 이 stat 이 전부 왕복이다.")
     print("  · '우리 코드' 가 크면 -> 위에 찍힌 함수가 범인이다. 그 줄을 알려 달라.")
     print("  · 어떤 경로를 몇 번 만지는지까지 보려면:")
     print("      strace -f -e trace=%file -o /tmp/cfd.trace \\")
