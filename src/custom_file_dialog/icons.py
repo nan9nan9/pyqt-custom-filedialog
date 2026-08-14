@@ -62,7 +62,12 @@ _drawn = {}
 
 # Qt 기본 아이콘도 마찬가지다 — 같은 종류면 어느 제공자가 묻든 답이 같으므로
 # 제공자마다 따로 들 이유가 없다(그러면 다이얼로그 수만큼 쌓인다).
+#
+# 다만 이쪽은 열쇠가 파일 이름에서 나오므로 **상한이 필요하다.** 날짜·버전이
+# 든 이름(``로그.2024.01.txt``)은 파일마다 다른 확장자 사슬이 되어, 오래 도는
+# 앱이 폴더를 옮겨 다니면 계속 자란다.
 _plain_icons = {}
+MAX_ICON_KEYS = 512
 
 
 def _cached(store, key, make):
@@ -70,6 +75,18 @@ def _cached(store, key, make):
     if icon is None:
         icon = store[key] = make()
     return icon
+
+
+def _color_key(color):
+    """색을 **값**으로 바꾼다 — 캐시 열쇠로 쓰려면 이래야 한다.
+
+    ``str(QColor)`` 를 쓰면 PyQt 에서는 값이 아니라 **객체 주소**가 나온다
+    (``<PyQt5.QtGui.QColor object at 0x…>``). CPython 이 주소를 재사용하므로
+    팔레트에서 색을 뽑아 아이콘을 여러 개 만들면 **먼저 그린 색이 그대로
+    돌아왔다**(실측: PyQt5 5개 중 4개가 틀린 색. PySide 는 str 이 값 표현이라
+    우연히 맞았다). 알파까지 담기게 ``#AARRGGBB`` 로 쓴다.
+    """
+    return QColor(color).name(QColor.NameFormat.HexArgb)
 
 
 def _radius(size, inset):
@@ -96,7 +113,7 @@ def star_icon(color=STAR_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.setBrush(brush)
         painter.drawPolygon(polygon)
 
-    return _cached(_drawn, ("star_icon", str(color), tuple(sizes), inset),
+    return _cached(_drawn, ("star_icon", _color_key(color), tuple(sizes), inset),
                    lambda: _draw(sizes, paint))
 
 
@@ -120,7 +137,7 @@ def clock_icon(color=CLOCK_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.drawLine(QPointF(center, center), _point(center, inner * 0.50, 330))
         painter.drawLine(QPointF(center, center), _point(center, inner * 0.72, 120))
 
-    return _cached(_drawn, ("clock_icon", str(color), tuple(sizes), inset),
+    return _cached(_drawn, ("clock_icon", _color_key(color), tuple(sizes), inset),
                    lambda: _draw(sizes, paint))
 
 
@@ -139,7 +156,7 @@ def home_icon(color=HOME_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.setBrush(brush)
         painter.drawPolygon(polygon)
 
-    return _cached(_drawn, ("home_icon", str(color), tuple(sizes), inset),
+    return _cached(_drawn, ("home_icon", _color_key(color), tuple(sizes), inset),
                    lambda: _draw(sizes, paint))
 
 
@@ -250,7 +267,20 @@ class CategoryIconProvider(QFileIconProvider):
         조회가 네트워크에서 비싸다고 보고 끄는 옵션
         (``DontUseCustomDirectoryIcons``)을 두고 있다.
         """
-        key = (self._kind(info), info.isSymLink(), self._suffix(info))
+        kind = self._kind(info)
+        # **확장자는 종류를 가릴 때만 본다.** Qt 는 뿌리·폴더·특수 파일에서는
+        # 이름을 아예 안 보므로(폴더 60개 -> Qt 아이콘 1가지), 거기에 확장자를
+        # 붙이면 열쇠만 늘고 답은 같다 — 실측으로 항목 494개에 열쇠 298개가
+        # 났는데 Qt 가 준 아이콘은 2가지뿐이었다.
+        suffix = self._suffix(info) if kind in ("file", "other") else ""
+        key = (kind, info.isSymLink(), suffix)
+        if len(_plain_icons) >= MAX_ICON_KEYS:
+            # 상한이 없으면 훑은 파일 수에 비례해 영구히 쌓인다(실측: 항목
+            # 10,000개에 열쇠 10,000개 · +7.8MB. 실제 홈에는 확장자 사슬이
+            # 4,600여 가지 있다). 다 지우고 다시 채운다 — 한 폴더를 나열하는
+            # 동안 같은 종류가 되풀이되는 것이 이 캐시의 목적이고, 그 이득은
+            # 비운 직후에도 그대로다.
+            _plain_icons.clear()
         return _cached(_plain_icons, key, lambda: super(
             CategoryIconProvider, self).icon(info))
 

@@ -101,7 +101,7 @@ class RecentStore(FavoritesStore):
         # 손대기 **전** 개수를 세어 둔다 — 아래 _evict 가 남의 기록을 자르지
         # 않으려면 이 값이 필요하다. remove 뒤에 세면 이미 있던 파일을 다시
         # 고를 때 한 칸씩 줄어든다(지웠다 다시 넣는 방식이라 길이가 같다).
-        stored = len(self.links())
+        stored = self._count()
 
         # 있으면 지우고 다시 만들어 최신으로 끌어올린다. 없을 때의 remove 는
         # 목록 한 번 훑고 끝이라, 미리 있는지 조회하는 것보다 싸다.
@@ -163,6 +163,20 @@ class RecentStore(FavoritesStore):
         self._save_index(index)
 
     # --------------------------------------------------------------- 내부
+    def _count(self):
+        """분류 폴더의 항목 수. **정렬하지 않으므로 lstat 을 하지 않는다.**
+
+        개수만 필요한 자리에서 :meth:`links` 를 부르면 최신순으로 세우려고
+        링크마다 lstat 을 건다. 이 저장소의 기본 위치는 ``~/.config`` — 이
+        라이브러리가 상정하는 **네트워크 홈** 위이고, 부르는 곳이 "확정 직후"
+        라 그 왕복이 그대로 GUI 지연이 된다(실측: 목록 100개일 때 lstat
+        100회가 더 붙었다).
+        """
+        try:
+            return len(os.listdir(self.category_dir(self.name)))
+        except OSError:
+            return 0
+
     def _link_mtime(self, link):
         """링크 자신의 수정 시각(대상이 아니라). 없으면 0."""
         try:

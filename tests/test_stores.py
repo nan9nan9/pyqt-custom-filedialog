@@ -1387,23 +1387,10 @@ def test_icon_cache_matches_qt_for_every_kind(qapp, tmp_path):
                 plain.icon(QFileInfo(path))
             ), (path, order[0])
 
-    # 그러면서도 같은 종류는 재사용한다 — 열쇠가 종류 수만큼만 생긴다.
-    # 캐시는 **프로세스에 하나**라(다이얼로그마다 새로 만들면 PySide 에서
-    # 쌓인다) 이 테스트가 넣은 열쇠만 골라 센다.
-    from custom_file_dialog import icons as icons_module
-
-    provider = CategoryIconProvider(store)
-    for path in paths:
-        provider.icon(QFileInfo(path))
-    (tmp_path / "다른.txt").write_text("y")
-    provider.icon(QFileInfo(str(tmp_path / "다른.txt")))
-    wanted = {
-        (provider._kind(QFileInfo(p)), QFileInfo(p).isSymLink(),
-         provider._suffix(QFileInfo(p)))
-        for p in paths
-    }
-    assert len(wanted) == 6, sorted(wanted)
-    assert wanted <= set(icons_module._plain_icons)
+    # "같은 종류는 한 번만 묻는다"는 test_icon_provider_asks_qt_once_per_kind
+    # 가, "Qt 가 가르는 것은 우리도 가른다"는 test_icon_key_splits_whatever_qt_
+    # splits 가 본다. 여기서 캐시 크기까지 재려 했더니 우리 _suffix 로 기대값을
+    # 만드는 자기참조가 되어 아무것도 못 잡았다 — 그 단언은 뺐다.
 
 
 def test_icon_key_splits_whatever_qt_splits(qapp, tmp_path):
@@ -1515,7 +1502,76 @@ def test_drawn_icons_are_shared_across_places(qapp, tmp_path):
     assert star_icon(color="#111111") is not star_icon()
     assert star_icon(sizes=(16,)) is not star_icon()
 
+    # **QColor 로 줘도** 색마다 제대로 갈려야 한다. 열쇠에 str(color) 를 쓰면
+    # PyQt 에서는 값이 아니라 객체 주소가 나와, 팔레트에서 색을 뽑아 아이콘을
+    # 여러 개 만들면 먼저 그린 색이 그대로 돌아왔다(PyQt5 5개 중 4개가 틀림).
+    from qtpy.QtGui import QColor
+
+    wanted = ["#e53935", "#43a047", "#1e88e5", "#fdd835"]
+    # 별 **한가운데**를 본다 — 가장자리는 안티앨리어싱으로 섞인다
+    drawn = [star_icon(color=QColor(name), sizes=(32,)) for name in wanted]
+    got = [icon.pixmap(32, 32).toImage().pixelColor(16, 16).name() for icon in drawn]
+    assert got == wanted, got
+    # 같은 색을 문자열로 줘도 같은 아이콘이다
+    assert star_icon(color=QColor("#e53935"), sizes=(32,)) is star_icon(
+        color="#e53935", sizes=(32,)
+    )
+
     store = FavoritesStore(base_dir=str(tmp_path / "fav"))
     first, second = Places(favorites=store), Places(favorites=store)
     assert first.home_icon() is second.home_icon()
     assert first.category_icon(store) is second.category_icon(store)
+
+
+def test_hardlink_fallback_when_symlinks_are_unavailable(tmp_path, monkeypatch):
+    """심볼릭 링크를 못 만드는 곳에서는 **하드링크로** 등록된다.
+
+    윈도우 비개발자 모드·FAT32·일부 CIFS 가 그렇다. 이 컨테이너는 심볼릭
+    링크가 늘 되므로 이 갈래는 어떤 테스트도 지나지 않았다 — ``os.link`` 를
+    통째로 없애도 전체 테스트가 통과했다.
+
+    하드링크는 원본과 동등한 경로라 링크에서 원본을 되찾을 수 없다. 그래서
+    인덱스 파일이 그 몫을 한다(:data:`INDEX_FILENAME` 의 존재 이유).
+    """
+    real_symlink = os.symlink
+
+    def no_symlinks(*args, **kwargs):
+        raise OSError(1, "심볼릭 링크를 만들 수 없습니다")
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    target = tmp_path / "설계도.csv"
+    target.write_text("x")
+
+    monkeypatch.setattr(os, "symlink", no_symlinks)
+    link = store.add("설계", str(target))
+
+    assert os.path.exists(link)
+    assert not os.path.islink(link)                  # 심볼릭이 아니라 하드링크
+    assert os.stat(link).st_ino == os.stat(str(target)).st_ino
+
+    # 링크로는 원본을 못 되찾으므로 인덱스가 그 몫을 한다
+    assert store.resolve(link) == str(target)
+    assert store.items("설계") == [str(target)]
+    assert store.contains("설계", str(target))
+
+    # 원본 경로로 지울 수 있고, 원본 자체는 남는다
+    assert store.remove("설계", str(target))
+    assert store.items("설계") == []
+    assert target.exists()
+
+    monkeypatch.setattr(os, "symlink", real_symlink)
+
+
+def test_folder_needs_symlink_or_junction(tmp_path, monkeypatch):
+    """폴더는 하드링크가 안 되므로, 심볼릭 링크가 없으면 알려 주고 실패한다."""
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    folder = tmp_path / "산출물"
+    folder.mkdir()
+
+    monkeypatch.setattr(
+        os, "symlink", lambda *a, **k: (_ for _ in ()).throw(OSError(1, "안 됨"))
+    )
+    with pytest.raises(FavoritesError) as caught:
+        store.add("설계", str(folder))
+    assert "즐겨찾기 링크를 만들지 못했습니다" in str(caught.value)
+    assert store.items("설계") == []

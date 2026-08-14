@@ -1468,6 +1468,13 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 > 멈추면(서버 재부팅 직후·nfsd 먹통) 남은 예산까지 다 씁니다. 실측으로
 > `path_timeout=1.0` 이면 1.0초, `3.0` 이면 3.0초입니다.
 
+**Qt5 는 UTF-8 로케일이 필요합니다.** `LANG=C` / `LC_ALL=C` 로 띄우면 PyQt5·
+PySide2 가 한글 파일 이름을 **아예 보지 못합니다**(`QDir.entryList()` 가 빈
+목록, `QFile.exists()` 가 False). 파이썬 층은 멀쩡해서 유효성 검사는 "있다"고
+하는데 다이얼로그에는 안 보이는 어긋남이 생깁니다. Qt6(PyQt6·PySide6)는
+무관합니다. 실측으로 `LANG=C` 에서 전체 테스트 275건 중 28건이 이 이유로
+깨집니다 — 앱 실행 환경의 로케일을 UTF-8 로 맞춰 주세요.
+
 **차단 경로**(`guarded_roots`) 는 위 표의 통로를 모두 막습니다. Qt 가 C++ 에서 연결해 둔
 `activated` · `accept()` 는 파이썬에서 끊을 수 없어, **그 신호가 나기 전 단계인 입력
 이벤트를 삼키는** 방식을 씁니다. 그래서 프로그램이 직접 `dialog.setDirectory("/user")`

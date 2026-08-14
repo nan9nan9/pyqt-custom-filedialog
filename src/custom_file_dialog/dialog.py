@@ -310,6 +310,14 @@ class CustomFileDialog(QFileDialog):
             icon=favorites_icon,
         ).places()
 
+        # **모드를 먼저 정하고 옵션을 나중에 건다.** Qt5 의 setFileMode 는
+        # ShowDirsOnly 를 `mode == DirectoryOnly` 로 **덮어쓴다**(Qt6 에는 그
+        # 줄이 없다). 옵션을 먼저 걸면 그 비트가 조용히 꺼져서, 폴더 모드인데
+        # 파일이 그대로 나왔다 — PyQt5·PySide2 에서만, 그것도 아무 신호 없이.
+        accept_mode, file_mode = _INSTANCE_MODES[mode]
+        self.setAcceptMode(enum_value("AcceptMode", accept_mode))
+        self.setFileMode(enum_value("FileMode", file_mode))
+
         # 네이티브 창으로는 아래 것들을 하나도 걸 수 없다
         self.setOptions(
             make_options(
@@ -318,9 +326,6 @@ class CustomFileDialog(QFileDialog):
                 extra=options,
             )
         )
-        accept_mode, file_mode = _INSTANCE_MODES[mode]
-        self.setAcceptMode(enum_value("AcceptMode", accept_mode))
-        self.setFileMode(enum_value("FileMode", file_mode))
 
         name_filter = build_filter(filters, add_all_files=add_all_files_filter)
         if name_filter and mode != SelectMode.DIRECTORY:

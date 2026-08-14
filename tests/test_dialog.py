@@ -109,6 +109,36 @@ def test_options_are_accepted_by_qt(qapp):
     assert dlg.options() & qt_compat.option_value("DontUseNativeDialog")
 
 
+def test_show_dirs_only_actually_hides_files(qapp, tmp_path):
+    """폴더 모드에서 파일이 **실제로 안 보인다.**
+
+    값을 조립하는 것만 보면 안 된다 — 라이브러리는 그 값을 다이얼로그에
+    **적용**하고, 그 과정에서 Qt5 의 ``setFileMode`` 가 ``ShowDirsOnly`` 를
+    도로 꺼 버렸다(Qt6 에는 그 줄이 없다). 그래서 PyQt5·PySide2 에서만 폴더
+    선택 창에 파일이 그대로 나왔는데, 값만 재는 테스트는 이것을 못 잡는다.
+    """
+    from qtpy.QtWidgets import QListView
+
+    from custom_file_dialog import CustomFileDialog
+
+    (tmp_path / "폴더A").mkdir()
+    (tmp_path / "문서.txt").write_text("x")
+
+    dialog = CustomFileDialog(None, mode="directory", directory=str(tmp_path))
+    dialog.show()
+    _spin(qapp, 300)
+
+    assert dialog.options() & qt_compat.option_value("ShowDirsOnly")
+    view = dialog.findChild(QListView, "listView")
+    model, root = view.model(), view.rootIndex()
+    shown = sorted(model.index(r, 0, root).data() for r in range(model.rowCount(root)))
+    assert shown == ["폴더A"], shown
+
+    dialog.done(0)
+    dialog.deleteLater()
+    _spin(qapp, 50)
+
+
 def test_cancel_returns_empty(qapp, monkeypatch):
     from qtpy.QtWidgets import QFileDialog
 

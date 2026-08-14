@@ -998,9 +998,17 @@ def test_automount_autodetected(monkeypatch, tmp_path):
         assert not safety.may_stat(str(root / "j"))              # 자식 stat 금지
         assert safety.may_stat(os.path.join(mounted, "a.csv"))   # 붙은 하위는 평소대로
 
-        # 만지는 판정과 safe_* 도 같은 규칙 — 디스크 접근 없이 즉시 False
+        # 만지는 판정도 같은 규칙 — autofs 위는 디스크 접근 없이 즉시 False
         assert not safety.is_reachable(str(root / "j"))
-        assert safety.safe_isdir(str(root / "myaccount")) is False
+
+        # 이미 붙은 하위(nfs4)는 **정책이 막지 않는다.** 예전에는 여기서
+        # safe_isdir 가 False 라고 단정했는데, 그것은 정책이 아니라 지어낸
+        # 호스트가 이 컨테이너에서 DNS 를 못 찾아 난 결과였다(회사망처럼
+        # 짧은 이름이 풀리는 곳에서는 True 가 되어 깨진다). 서버가 살아 있으면
+        # 평소대로 동작하는 것이 맞다 — 프로브를 통제해서 그것을 못박는다.
+        monkeypatch.setattr(safety_reach, "probe_host", lambda *a, **k: True)
+        safety.clear_cache()
+        assert safety.safe_isdir(mounted) is True
     finally:
         safety.clear_cache()
 
@@ -1041,7 +1049,11 @@ def test_safe_call_never_touches_autofs(monkeypatch, tmp_path):
         start = time.time()
         assert safety.safe_exists(os.path.join(mountpoint, "j"), timeout=0.2) is False
         assert not safety.is_reachable(os.path.join(mountpoint, "j"))
-        assert time.time() - start < 0.1        # 기다림 없이 즉시
+        # 기다리지 않고 곧바로 돌아왔는지만 본다. 세 번을 정말 두드렸다면
+        # 제한 시간(0.2초)씩 0.6초가 걸린다 — 그 절반을 경계로 잡는다.
+        # (0.1초로 잡았더니 머신이 바쁠 때 흔들렸다. "안 두드렸다"는 아래
+        #  stat_calls 단언이 이미 못박고 있으므로 여기는 여유를 준다.)
+        assert time.time() - start < 0.3        # 기다림 없이 즉시
         assert touched == []                    # 디스크 접근 0회
         assert safety.pending_checks() == before    # 스레드도 0개
     finally:
@@ -1093,7 +1105,11 @@ def test_hung_mount_spawns_only_one_thread(monkeypatch, tmp_path):
                 safety.safe_isfile(os.path.join(mountpoint, name), timeout=0.2)
                 is False
             )
-        assert time.time() - start < 0.1
+        # 기다리지 않고 곧바로 돌아왔는지만 본다. 세 번을 정말 두드렸다면
+        # 제한 시간(0.2초)씩 0.6초가 걸린다 — 그 절반을 경계로 잡는다.
+        # (0.1초로 잡았더니 머신이 바쁠 때 흔들렸다. "안 두드렸다"는 아래
+        #  stat_calls 단언이 이미 못박고 있으므로 여기는 여유를 준다.)
+        assert time.time() - start < 0.3
         assert len(stat_calls) == 1             # 더 두드리지 않았다
 
         # 멈췄던 스레드가 돌아오면 다시 실제로 확인한다
