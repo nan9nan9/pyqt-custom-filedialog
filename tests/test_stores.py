@@ -1326,3 +1326,66 @@ def test_icon_cache_keeps_symlinks_distinct(qapp, tmp_path):
     # 같은 종류끼리는 여전히 재사용한다 (캐시가 죽지 않았다)
     (tmp_path / "다른.csv").write_text("y")
     assert bitmap(ours, "실파일.csv") == bitmap(ours, "다른.csv")
+
+
+def _icon_blob(icon):
+    """아이콘을 바이트로 — 바인딩마다 다른 QImage 내부 접근을 피한다."""
+    from qtpy.QtCore import QBuffer, QByteArray, QIODevice
+
+    pixmap = icon.pixmap(16, 16)
+    if pixmap.isNull():
+        return b"NULL"
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    pixmap.save(buffer, "PNG")
+    buffer.close()
+    return bytes(data)
+
+
+def test_icon_cache_matches_qt_for_every_kind(qapp, tmp_path):
+    """종류별 캐시가 **어떤 순서로 물어도** Qt 기본과 같은 답을 준다.
+
+    Qt 는 뿌리(디스크) · 폴더 · 파일 · 그 밖(FIFO·소켓 — 빈 아이콘)을 다르게
+    본다. 그것을 한 열쇠로 뭉뚱그리면 **먼저 물어본 것이 뒤엣것을 덮어쓴다.**
+
+    실제로 났던 일: 뿌리 ``/`` 를 폴더와 같은 열쇠로 묶었더니, 모델이 시작
+    폴더의 인덱스를 만들며 루트부터 묻는 바람에 **모든 폴더가 하드디스크
+    모양**이 됐다. FIFO·소켓을 확장자 없는 파일과 묶었을 때는 ``README`` 같은
+    평범한 파일이 아이콘 없이 그려졌다.
+    """
+    from qtpy.QtCore import QFileInfo
+    from qtpy.QtWidgets import QFileIconProvider
+
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    (tmp_path / "폴더A").mkdir()
+    (tmp_path / "메모.txt").write_text("x")
+    (tmp_path / "README").write_text("x")            # 확장자 없는 평범한 파일
+    os.mkfifo(str(tmp_path / "파이프"))
+    os.symlink(str(tmp_path / "메모.txt"), str(tmp_path / "링크.txt"))
+
+    paths = ["/"] + [
+        str(tmp_path / name)
+        for name in ("폴더A", "메모.txt", "README", "파이프", "링크.txt")
+    ]
+    plain = QFileIconProvider()
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+
+    # 어느 것을 먼저 묻든 결과가 같아야 한다
+    for order in (paths, list(reversed(paths))):
+        provider = CategoryIconProvider(store)
+        for path in order:                            # 캐시를 이 순서로 채운다
+            provider.icon(QFileInfo(path))
+        for path in paths:
+            assert _icon_blob(provider.icon(QFileInfo(path))) == _icon_blob(
+                plain.icon(QFileInfo(path))
+            ), (path, order[0])
+
+    # 그러면서도 같은 종류는 재사용한다 — 열쇠가 종류 수만큼만 생긴다
+    provider = CategoryIconProvider(store)
+    for path in paths:
+        provider.icon(QFileInfo(path))
+    (tmp_path / "다른.txt").write_text("y")
+    provider.icon(QFileInfo(str(tmp_path / "다른.txt")))
+    assert len(provider._plain_icons) == 6, sorted(provider._plain_icons)

@@ -197,30 +197,58 @@ class CategoryIconProvider(QFileIconProvider):
         하나하나가 서버 왕복이 된다** (실측: 항목당 4.9ms · 홈 274개에 1.3초).
 
         게다가 Qt 는 화면에 **보이지 않는 항목까지 전부** 훑는다 — 필터로 7개만
-        보이는 폴더에서도 274번 불렸다. 종류가 같으면 아이콘도 같으므로, 폴더
-        여부와 확장자를 열쇠로 한 번만 묻는다(위 274개 -> 실제 질의 10회).
+        보이는 폴더에서도 274번 불렸다. 종류가 같으면 아이콘도 같으므로 한 번만
+        묻는다(위 274개 -> 실제 질의 10회).
 
+        **열쇠는 Qt 가 종류를 가르는 기준 그대로여야 한다.** Qt 는 뿌리(Drive) ·
+        폴더 · 파일 · 그 밖(FIFO · 소켓 · 장치 · 끊긴 링크 — 빈 아이콘)을 다르게
+        보는데, 그것을 뭉뚱그리면 **먼저 물어본 것이 뒤엣것을 덮어쓴다.**
+
+        - 뿌리 ``/`` 를 폴더와 같은 열쇠로 묶었더니, 모델이 시작 폴더의 인덱스를
+          만들며 **루트부터** 묻는 바람에 그 디스크 아이콘이 박혀서 **모든 폴더가
+          하드디스크 모양**이 됐다(4개 바인딩 전부 재현). 윈도우에서는 ``C:/``
+          ``D:/`` 가 전부 이 자리다.
+        - FIFO·소켓을 확장자 없는 파일과 묶었더니, 홈에 흔한 소켓
+          (``.gnupg/S.gpg-agent``)이 먼저 나열되면 ``README``·``Makefile`` 같은
+          평범한 파일이 **아이콘 없이** 그려졌다(반대로도 갈린다).
+
+        심볼릭 링크 여부도 같은 이유로 넣는다 — 즐겨찾기·최근 파일 폴더는 안이
+        **전부 링크**라 빼먹으면 하필 이 라이브러리가 만드는 화면에서 가장 잘
+        보인다. 확장자는 파일일 때만 본다(폴더 이름의 점은 종류와 무관하다).
         점파일(``.bashrc``)은 확장자가 없는 것으로 본다 — ``QFileInfo.suffix()``
         는 ``bashrc`` 를 주지만 그러면 점파일마다 열쇠가 달라져 캐시가 듣지 않는다.
 
-        **심볼릭 링크 여부는 열쇠에 넣는다.** Qt 는 링크에 다른 아이콘을 주는데,
-        이 라이브러리가 만드는 즐겨찾기·최근 파일 폴더는 **안이 전부 링크**라
-        빼먹으면 하필 우리 화면에서 가장 잘 보인다. ``QFileInfo`` 가 이미 답을
-        들고 있어 추가 비용은 없다.
+        ``QFileInfo`` 가 이 답들을 이미 들고 있어(항목을 그리려고 stat 한 결과)
+        추가 비용은 없다.
 
-        맞바꾼 것: 확장자가 없는 파일들이 내용과 무관하게 같은 아이콘을 받고,
+        맞바꾼 것: 확장자가 없는 **파일**들이 내용과 무관하게 같은 아이콘을 받고,
         폴더마다 다른 아이콘을 두는 데스크톱 설정이 무시된다. Qt 자신도 그
         조회가 네트워크에서 비싸다고 보고 끄는 옵션
         (``DontUseCustomDirectoryIcons``)을 두고 있다.
         """
-        name = info.fileName()
-        dot = name.rfind(".")
-        key = (
-            info.isDir(),
-            info.isSymLink(),
-            name[dot + 1:].lower() if dot > 0 else "",
-        )
+        key = (self._kind(info), info.isSymLink(), self._suffix(info))
         icon = self._plain_icons.get(key)
         if icon is None:
             icon = self._plain_icons[key] = super().icon(info)
         return icon
+
+    @staticmethod
+    def _kind(info):
+        """Qt 가 아이콘을 고를 때 가르는 갈래 — 뿌리 · 폴더 · 파일 · 그 밖."""
+        if info.isRoot():
+            return "root"           # Qt 는 여기에 디스크 아이콘을 준다
+        if info.isDir():
+            return "dir"
+        if info.isFile():
+            return "file"
+        return "other"              # FIFO · 소켓 · 장치 · 끊긴 링크 -> 빈 아이콘
+
+    @staticmethod
+    def _suffix(info):
+        """파일일 때의 확장자(소문자). 그 밖에는 빈 문자열."""
+        if not info.isFile():
+            return ""
+        name = info.fileName()
+        dot = name.rfind(".")
+        return name[dot + 1:].lower() if dot > 0 else ""
+
