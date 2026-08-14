@@ -25,6 +25,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 # 소스 그대로 실행할 수 있도록 src 경로 추가 (pip install 한 경우엔 불필요)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -87,6 +88,133 @@ from custom_file_dialog import (  # noqa: E402
 # 즐겨찾기·최근 파일이 들어갈 뿌리 — 실제 앱처럼 ~/.config 아래를 쓴다.
 # 데모 데이터는 임시 폴더를 가리키므로 닫을 때 뿌리째 지운다.
 DEMO_STORAGE = os.path.expanduser("~/.config/custom-file-dialog-demo")
+
+# ---------------------------------------------------------------- 클릭 측정
+# 사이드바를 누를 때마다 **무엇이 얼마나 걸렸는지**를 아래 로그에 찍는다.
+# 느리다는 보고를 받으면 이 줄을 그대로 알려 주면 된다.
+#
+# 우리 코드 쪽은 자주 불리는 셋을 감싸서 "몇 번 · 몇 ms" 로 센다. 나머지 시간은
+# 전부 Qt 몫이다 — 폴더로 옮기고 목록을 채우는 일.
+_TALLY = {}
+
+
+def _counted(name, func):
+    """호출 수와 걸린 시간을 :data:`_TALLY` 에 쌓는 껍데기."""
+
+    def wrapper(*args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            slot = _TALLY.setdefault(name, [0, 0.0])
+            slot[0] += 1
+            slot[1] += time.perf_counter() - started
+
+    return wrapper
+
+
+def _install_counters():
+    """자주 불리는 자리 몇 곳을 세도록 감싼다 (데모에서만)."""
+    from custom_file_dialog import icons as icons_module
+    from custom_file_dialog import places as places_module
+
+    icons_module.CategoryIconProvider.icon = _counted(
+        "icon()", icons_module.CategoryIconProvider.icon
+    )
+    places_module.Places.link_target = _counted(
+        "link_target()", places_module.Places.link_target
+    )
+    safety.may_enter = _counted("may_enter()", safety.may_enter)
+
+
+def _environment_line():
+    """홈·저장소가 로컬인지 네트워크인지 한 줄로 — 측정값과 함께 붙이면 좋다."""
+    from custom_file_dialog import mounts
+
+    def where(path):
+        mount = mounts.mount_for(path)
+        if mount is None:
+            return "?"
+        if mount[1] in mounts.REMOTE_FSTYPES:
+            return "원격(%s)" % mount[1]
+        if mount[1] in mounts.AUTOMOUNT_FSTYPES:
+            return "automount"
+        return "로컬(%s)" % mount[1]
+
+    return "[환경] 홈 %s · 저장소 %s · 원격 마운트 %d개 · automount %d개" % (
+        where(os.path.expanduser("~")),
+        where(DEMO_STORAGE),
+        sum(1 for m in mounts.iter_mounts() if m[1] in mounts.REMOTE_FSTYPES),
+        sum(1 for m in mounts.iter_mounts() if m[1] in mounts.AUTOMOUNT_FSTYPES),
+    )
+
+
+def _watch_sidebar(dialog, append):
+    """사이드바 클릭 한 번을 단계별로 재서 로그에 한 줄씩 남긴다.
+
+    누른 순간부터 재고, Qt 가 이동을 알린 시점(``directoryEntered``)과 목록이
+    더 이상 늘지 않는 시점을 나눠 찍는다. 목록 채우기는 Qt 가 다른 스레드에서
+    하므로 마지막 항목이 들어온 뒤 조금 기다렸다가 "끝"으로 본다.
+    """
+    from qtpy.QtCore import QEvent, QObject, QTimer
+    from qtpy.QtWidgets import QListView
+
+    sidebar = dialog.findChild(QListView, "sidebar")
+    view = dialog.findChild(QListView, "listView")
+    if sidebar is None or view is None:
+        return None
+
+    state = {"name": None, "press": 0.0, "entered": 0.0, "last": 0.0, "timer": None}
+
+    def report():
+        if state["name"] is None:
+            return
+        # **마지막 변화 시각**까지만 센다 — 아래 settle() 이 조용해질 때까지
+        # 기다린 시간은 측정값이 아니라 판정에 쓴 여유다.
+        done = state["last"]
+        move = (state["entered"] - state["press"]) if state["entered"] else 0.0
+        fill = max(0.0, done - state["entered"]) if state["entered"] else 0.0
+        ours = sum(spent for _n, spent in _TALLY.values())
+        detail = " · ".join(
+            "%s %d회 %.1fms" % (name, count, spent * 1000)
+            for name, (count, spent) in sorted(_TALLY.items())
+        ) or "(우리 코드 호출 없음)"
+        append("[사이드바] %s -> %s" % (state["name"], dialog.directory().absolutePath()))
+        append("    전체 %.0fms | 폴더 이동 %.0fms | 목록 채움 %.0fms | 우리 코드 %.1fms"
+               % ((done - state["press"]) * 1000, move * 1000, fill * 1000, ours * 1000))
+        append("    %s" % detail)
+        state["name"] = None
+
+    def settle():
+        """마지막 변화 뒤 250ms 동안 조용하면 다 채워진 것으로 본다."""
+        state["last"] = time.perf_counter()
+        if state["timer"] is not None:
+            state["timer"].stop()
+        timer = state["timer"] = QTimer(dialog)
+        timer.setSingleShot(True)
+        timer.timeout.connect(report)
+        timer.start(250)
+
+    class Press(QObject):
+        def eventFilter(self, obj, event):      # noqa: N802 (Qt 시그니처)
+            if event.type() == QEvent.Type.MouseButtonPress:
+                index = sidebar.indexAt(event.pos())
+                if index.isValid():
+                    _TALLY.clear()
+                    state.update(name=index.data(), press=time.perf_counter(),
+                                 entered=0.0)
+            return False
+
+    watcher = Press(dialog)
+    sidebar.viewport().installEventFilter(watcher)
+    dialog.directoryEntered.connect(
+        lambda _p: (state.update(entered=time.perf_counter()), settle())
+    )
+    model = view.model()
+    if model is not None:
+        model.rowsInserted.connect(lambda *_a: settle())
+    return watcher
+
 
 # 버튼 하나 = 모드 하나. settings_key 를 따로 주어 각자 시작 위치를 기억한다.
 MODES = [
@@ -248,6 +376,7 @@ def build_window(tree, append):
             settings_key=key if remembers else None,
         )
 
+        watcher = _watch_sidebar(dialog, append)     # 사이드바 클릭 측정
         append("[열기] %s — 시작 폴더 %s" % (label, dialog.directory().absolutePath()))
         run = getattr(dialog, "exec_", None) or dialog.exec
         if not run():
@@ -284,11 +413,17 @@ def main():
     # settings_key 를 쓰는 자리들이 공유할 QSettings 정보
     configure_settings("myaccount", "custom-file-dialog-demo")
 
+    _install_counters()          # 사이드바 클릭 측정용 (데모에서만)
     tree = build_playground()
 
     log = QPlainTextEdit()
     log.setReadOnly(True)
     log.setMaximumBlockCount(300)
+    log.appendPlainText(_environment_line())
+    log.appendPlainText(
+        "사이드바 항목을 누를 때마다 걸린 시간이 여기 찍힌다"
+        " (느리면 이 줄들을 그대로 알려 주면 된다)."
+    )
 
     panel, apply_safety, refresh = build_window(tree, log.appendPlainText)
 
