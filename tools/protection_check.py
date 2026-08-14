@@ -1,7 +1,7 @@
 """보호가 정말 잠겨 있는지 확인한다 — 핵심 판정에 일부러 결함을 심어 본다.
 
     python tools/protection_check.py            전부
-    python tools/protection_check.py 아이콘      이름에 그 말이 든 것만
+    python tools/protection_check.py icons.py   그 파일 것만
 
 이 라이브러리가 지키는 것들(automount 를 건드리지 않기 · 남의 기록을 지우지
 않기 · 죽은 마운트에서 멈추지 않기 …)은 규칙이 여러 통로에 걸쳐 있어서,
@@ -15,7 +15,9 @@
 맞춰 이 표를 고치면 된다(보호가 사라진 것인지 옮겨진 것인지 함께 확인할 것).
 """
 
+import atexit
 import pathlib
+import signal
 import subprocess
 import sys
 
@@ -172,10 +174,8 @@ CASES = [   (   'history 자르는 기준',
         'does_not_restat'),
     (   '종류별 캐시',
         'icons.py',
-        '        icon = self._plain_icons.get(key)\n'
-        '        if icon is None:\n'
-        '            icon = self._plain_icons[key] = super().icon(info)\n'
-        '        return icon',
+        '        return _cached(_plain_icons, key, lambda: super(\n'
+        '            CategoryIconProvider, self).icon(info))',
         '        return super().icon(info)',
         'asks_qt_once_per_kind'),
     (   '링크 표시 유지',
@@ -183,6 +183,11 @@ CASES = [   (   'history 자르는 기준',
         'key = (self._kind(info), info.isSymLink(), self._suffix(info))',
         'key = (self._kind(info), self._suffix(info))',
         'symlinks_distinct'),
+    (   '확장자를 종류 무관하게',
+        'icons.py',
+        '        return name[dot + 1:] if dot > 0 else ""',
+        '        return name[dot + 1:].lower() if info.isFile() and dot > 0 else ""',
+        'splits_whatever_qt_splits'),
     (   '뿌리를 폴더와 구분',
         'icons.py',
         '        if info.isRoot():\n            return "root"',
@@ -200,9 +205,19 @@ CASES = [   (   'history 자르는 기준',
         'probe_budget_follows'),
     (   '점파일 묶기',
         'icons.py',
-        '        return name[dot + 1:].lower() if dot > 0 else ""',
-        '        return info.suffix().lower()',
+        '        return name[dot + 1:] if dot > 0 else ""',
+        '        return info.suffix()',
         'asks_qt_once_per_kind'),
+    (   '공유 최근목록 보호',
+        'recent.py',
+        '        limit = max(self.max_items, keep)',
+        '        limit = self.max_items',
+        'shared_recent_store_is_not_trimmed'),
+    (   '아이콘 한 벌만 그리기',
+        'icons.py',
+        '    icon = store.get(key)\n    if icon is None:\n        icon = store[key] = make()\n    return icon',
+        '    return make()',
+        'drawn_icons_are_shared'),
     (   '사이드바 차단 설치',
         'guard.py',
         '_watch(sidebar, _SidebarBlocker(sidebar, parent=dialog), installed)',
@@ -238,6 +253,7 @@ def run_case(label, filename, good, bad, selector):
     original = path.read_text(encoding="utf-8")
     if good not in original:
         return "원문 없음"
+    _patched[path] = original           # 시그널로 죽어도 되돌릴 수 있게 남긴다
     path.write_text(original.replace(good, bad, 1), encoding="utf-8")
     try:
         done = subprocess.run(
@@ -245,23 +261,75 @@ def run_case(label, filename, good, bad, selector):
             capture_output=True, text=True, timeout=900,
         )
     finally:
-        path.write_text(original, encoding="utf-8")     # 반드시 되돌린다
-    return "잡음" if done.returncode else "놓침"
+        _restore_all()
+    return _verdict(done.returncode)
+
+
+# pytest 종료 코드 (docs: "Exit codes")
+_PASSED, _FAILED, _INTERRUPTED, _INTERNAL, _USAGE, _NO_TESTS = range(6)
+
+
+def _verdict(code):
+    """종료 코드를 판정으로. **"고른 테스트가 없다"를 성공으로 세면 안 된다.**
+
+    테스트 이름이 바뀌면 pytest 는 아무것도 못 고르고 5 로 끝나는데, 그것을
+    "0 이 아니니 잡았다"로 세면 **결함을 심지 않아도 통과**한다. 실제로 이
+    저장소에서 테스트 이름이 한 번 바뀐 적이 있어(``test_probe_share_is_capped``
+    -> ``test_probe_budget_follows_the_timeout``) 그대로였다면 도구가 거짓말을
+    했을 자리다.
+    """
+    if code == _FAILED:
+        return "잡음"
+    if code == _PASSED:
+        return "놓침"
+    if code == _NO_TESTS:
+        return "테스트 없음"
+    return "확인 불가(%d)" % code
+
+
+# 결함을 심어 둔 파일 -> 원본. 시그널로 죽을 때 되돌리는 데 쓴다.
+_patched = {}
+
+
+def _restore_all():
+    while _patched:
+        path, original = _patched.popitem()
+        path.write_text(original, encoding="utf-8")
+
+
+def _on_signal(signum, _frame):
+    """SIGTERM·SIGHUP 등으로 죽어도 **소스를 되돌리고** 나간다.
+
+    ``finally`` 는 예외만 받는다. 터미널을 닫거나(SIGHUP) SSH 가 끊기거나
+    ``timeout``/``pkill`` 을 만나면 결함이 심긴 채 남는데, 하필 남는 것이
+    문법도 멀쩡하고 테스트 하나만 잡는 조용한 결함이라 그대로 커밋될 수 있다.
+    (``SIGKILL`` 은 잡을 수 없다 — 그때는 ``git status`` 로 확인할 것.)
+    """
+    _restore_all()
+    print("\n신호 %d 로 중단 — 심어 둔 결함을 되돌렸다." % signum)
+    sys.exit(130)
 
 
 def main(argv):
+    for name in ("SIGTERM", "SIGHUP", "SIGINT"):
+        handler = getattr(signal, name, None)
+        if handler is not None:
+            signal.signal(handler, _on_signal)
+    atexit.register(_restore_all)
+
     keep = argv[1] if len(argv) > 1 else ""
     cases = [c for c in CASES if keep in c[0] or keep in c[1]]
     if not cases:
-        print("고른 것이 없다: %r" % keep)
+        print("고른 것이 없다: %r  (라벨이나 파일 이름의 일부를 준다 — 예: icons.py)"
+              % keep)
         return 2
 
     bad = []
     for label, filename, good, seed, selector in cases:
         verdict = run_case(label, filename, good, seed, selector)
-        print("%-9s %-26s %-14s %s" % (verdict, label, filename, selector))
+        print("%-13s %-26s %-14s %s" % (verdict, label, filename, selector))
         if verdict != "잡음":
-            bad.append(label)
+            bad.append("%s(%s)" % (label, verdict))
 
     print("\n%d/%d 잡음" % (len(cases) - len(bad), len(cases)))
     if bad:

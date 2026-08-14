@@ -98,12 +98,17 @@ class RecentStore(FavoritesStore):
         if not safety.safe_isfile(target) or self.is_inside(target):
             return None
 
+        # 손대기 **전** 개수를 세어 둔다 — 아래 _evict 가 남의 기록을 자르지
+        # 않으려면 이 값이 필요하다. remove 뒤에 세면 이미 있던 파일을 다시
+        # 고를 때 한 칸씩 줄어든다(지웠다 다시 넣는 방식이라 길이가 같다).
+        stored = len(self.links())
+
         # 있으면 지우고 다시 만들어 최신으로 끌어올린다. 없을 때의 remove 는
         # 목록 한 번 훑고 끝이라, 미리 있는지 조회하는 것보다 싸다.
         self.remove(self.name, target)
 
         link = self.add(self.name, target)
-        self._evict()
+        self._evict(keep=stored)
         return link
 
     def record_all(self, paths):
@@ -165,13 +170,28 @@ class RecentStore(FavoritesStore):
         except OSError:
             return 0.0
 
-    def _evict(self):
-        """개수 제한을 넘긴 오래된 항목을 지운다."""
+    def _evict(self, keep=0):
+        """개수 제한을 넘긴 오래된 항목을 지운다.
+
+        Args:
+            keep: **이미 들어 있던** 개수. 내 몫보다 많이 있으면 그만큼은
+                남긴다 — 같은 폴더를 개수가 다른 곳이 함께 쓸 수 있기 때문이다.
+                ``recent_files=True`` 로 자동 생성하면 모두 같은 기본 위치를
+                가리키므로, 30개짜리가 쌓아 둔 목록을 20개짜리가 한 번 기록하는
+                순간 링크 10개가 **디스크에서 지워졌다**(4개 바인딩 전부 재현).
+                :meth:`custom_file_dialog.history.PathHistory.add` 와
+                :meth:`custom_file_dialog.places.PlacesOptions.update` 가 이미
+                같은 규칙을 지키는데 정작 자르는 이 자리에만 빠져 있었다.
+
+                :meth:`set_max_items` 처럼 **의도적으로 줄이는** 호출은 이 값을
+                주지 않는다(0) — 그때는 정말 줄이는 것이 맞다.
+        """
+        limit = max(self.max_items, keep)
         links = self.links()
-        if len(links) <= self.max_items:
+        if len(links) <= limit:
             return
         index = self._load_index()
-        for link in links[self.max_items :]:
+        for link in links[limit:]:
             index.pop(os.path.normpath(link), None)
             self._unlink(link)
         self._save_index(index)

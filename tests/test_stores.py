@@ -1247,7 +1247,12 @@ def test_icon_provider_asks_qt_once_per_kind(qapp, tmp_path, monkeypatch):
     from qtpy.QtCore import QFileInfo
     from qtpy.QtWidgets import QFileIconProvider
 
+    from custom_file_dialog import icons as icons_module
     from custom_file_dialog.icons import CategoryIconProvider
+
+    # 캐시는 **프로세스에 하나**다(다이얼로그마다 새로 만들면 PySide 에서
+    # 쌓인다). "종류마다 한 번만 묻는다"를 재려면 비운 상태에서 시작해야 한다.
+    monkeypatch.setattr(icons_module, "_plain_icons", {})
 
     names = []
     for index in range(5):
@@ -1382,10 +1387,135 @@ def test_icon_cache_matches_qt_for_every_kind(qapp, tmp_path):
                 plain.icon(QFileInfo(path))
             ), (path, order[0])
 
-    # 그러면서도 같은 종류는 재사용한다 — 열쇠가 종류 수만큼만 생긴다
+    # 그러면서도 같은 종류는 재사용한다 — 열쇠가 종류 수만큼만 생긴다.
+    # 캐시는 **프로세스에 하나**라(다이얼로그마다 새로 만들면 PySide 에서
+    # 쌓인다) 이 테스트가 넣은 열쇠만 골라 센다.
+    from custom_file_dialog import icons as icons_module
+
     provider = CategoryIconProvider(store)
     for path in paths:
         provider.icon(QFileInfo(path))
     (tmp_path / "다른.txt").write_text("y")
     provider.icon(QFileInfo(str(tmp_path / "다른.txt")))
-    assert len(provider._plain_icons) == 6, sorted(provider._plain_icons)
+    wanted = {
+        (provider._kind(QFileInfo(p)), QFileInfo(p).isSymLink(),
+         provider._suffix(QFileInfo(p)))
+        for p in paths
+    }
+    assert len(wanted) == 6, sorted(wanted)
+    assert wanted <= set(icons_module._plain_icons)
+
+
+def test_icon_key_splits_whatever_qt_splits(qapp, tmp_path):
+    """Qt 가 **다른 종류로 보는 것**은 캐시 열쇠도 갈라야 한다.
+
+    아이콘 그림으로 비교하면 안 된다 — 아이콘 테마에 그 종류의 그림이 없으면
+    Qt 가 전부 같은 폴백을 주어 **결함이 있어도 통과**한다(실제로 이 환경이
+    그렇다). 그래서 Qt 가 종류를 정하는 근거(``QMimeDatabase``)와 우리 열쇠를
+    직접 맞춰 본다.
+
+    실제로 났던 일: 확장자를 **파일일 때만** 봤더니 끊긴 링크가 확장자와 무관
+    하게 한 칸에 묶여, 먼저 물어본 쪽 아이콘을 서로 덮어썼다. 분류 폴더는 안이
+    전부 링크이고 대상이 지워지면 끊긴 링크가 되므로 이 화면에서 바로 드러난다.
+    """
+    from qtpy.QtCore import QFileInfo, QMimeDatabase
+
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    (tmp_path / "폴더").mkdir()
+    os.mkfifo(str(tmp_path / "파이프"))
+    for name in ("글.txt", "그림.png", "묶음.tar.gz", "그냥.gz", "소스.c", "소스.C"):
+        (tmp_path / name).write_text("x")
+    for name in ("끊긴.txt", "끊긴.png"):                 # 대상이 없는 링크
+        os.symlink(str(tmp_path / "없음"), str(tmp_path / name))
+
+    names = [
+        "폴더", "파이프", "글.txt", "그림.png", "묶음.tar.gz", "그냥.gz",
+        "소스.c", "소스.C", "끊긴.txt", "끊긴.png", "없는것.txt", "없는것.png",
+    ]
+    database = QMimeDatabase()
+    provider = CategoryIconProvider(FavoritesStore(base_dir=str(tmp_path / "fav")))
+
+    seen = {}
+    for name in names:
+        info = QFileInfo(str(tmp_path / name))
+        key = (provider._kind(info), info.isSymLink(), provider._suffix(info))
+        seen.setdefault(key, set()).add(database.mimeTypeForFile(info).name())
+
+    mixed = {key: kinds for key, kinds in seen.items() if len(kinds) > 1}
+    assert not mixed, "한 열쇠에 Qt 종류가 여럿 묶였다: %s" % mixed
+
+    # 그러면서도 같은 종류는 한 칸에 모인다 — 열쇠가 이름마다 갈리면 캐시가 죽는다
+    for extra in range(5):
+        (tmp_path / ("추가%d.txt" % extra)).write_text("x")
+    keys = {
+        (provider._kind(QFileInfo(str(tmp_path / ("추가%d.txt" % i)))),
+         False,
+         provider._suffix(QFileInfo(str(tmp_path / ("추가%d.txt" % i)))))
+        for i in range(5)
+    }
+    assert len(keys) == 1
+
+
+def test_shared_recent_store_is_not_trimmed_by_a_smaller_widget(tmp_path):
+    """개수가 다른 두 곳이 **같은 기본 위치**를 써도 큰 쪽 목록이 안 줄어든다.
+
+    ``recent_files=True`` 로 자동 생성하면 모두 같은 폴더를 가리킨다. 작은 쪽이
+    한 번 기록하는 순간 ``_evict`` 가 자기 기준으로 잘라 링크를 **디스크에서
+    지웠다**(30개 -> 20개, 4개 바인딩 전부 재현). 같은 규칙이
+    :meth:`PathHistory.add` 와 ``PlacesOptions.update`` 에는 이미 있었는데
+    정작 자르는 자리에만 빠져 있었다.
+    """
+    shared = str(tmp_path / "recent")
+    big = RecentStore(base_dir=shared, max_items=30)
+    small = RecentStore(base_dir=shared, max_items=5)
+    assert big.base_dir == small.base_dir
+
+    paths = []
+    for index in range(30):
+        path = tmp_path / ("f%02d.csv" % index)
+        path.write_text("x")
+        paths.append(str(path))
+        big.record(str(path))
+    assert len(big.items()) == 30
+
+    small.record(paths[10])                     # 이미 있는 것을 다시 골라도
+    assert len(big.items()) == 30, "재기록만으로 줄었다"
+    small.record(paths[0])
+    assert len(big.items()) == 30
+
+    newer = tmp_path / "새것.csv"                # 새 파일이면 맨 앞으로, 개수는 유지
+    newer.write_text("x")
+    small.record(str(newer))
+    assert len(big.items()) == 30
+    assert big.items()[0] == str(newer)
+    assert os.path.exists(big.items()[-1])      # 밀려난 것도 원본은 남는다
+
+    # 의도적으로 줄이는 것은 그대로 동작해야 한다
+    big.set_max_items(3)
+    assert len(big.items()) == 3
+
+
+def test_drawn_icons_are_shared_across_places(qapp, tmp_path):
+    """같은 아이콘을 **다이얼로그마다 새로 그리지 않는다.**
+
+    별표·시계·집은 상태가 없어 프로세스에 하나면 된다. 캐시가 Places 인스턴스에
+    묶여 있었더니 다이얼로그를 띄울 때마다 QIcon 5벌(픽스맵 25장)이 새로
+    그려졌고, PyQt 는 회수하지만 **PySide 는 못 해서** 반복해 여는 앱에서 그대로
+    쌓였다(실측: PySide2 회당 452KB · QIcon +9개 -> 고친 뒤 18.6KB · +0개).
+    """
+    from custom_file_dialog import Places
+    from custom_file_dialog.icons import clock_icon, home_icon, star_icon
+
+    assert star_icon() is star_icon()
+    assert home_icon() is home_icon()
+    assert clock_icon() is clock_icon()
+    assert star_icon() is not clock_icon()
+    # 인자가 다르면 다른 아이콘이다 — 캐시가 전부를 뭉뚱그리지 않는다
+    assert star_icon(color="#111111") is not star_icon()
+    assert star_icon(sizes=(16,)) is not star_icon()
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    first, second = Places(favorites=store), Places(favorites=store)
+    assert first.home_icon() is second.home_icon()
+    assert first.category_icon(store) is second.category_icon(store)

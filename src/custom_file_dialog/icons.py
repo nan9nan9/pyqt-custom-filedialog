@@ -50,6 +50,28 @@ def _draw(sizes, paint):
     return icon
 
 
+# 같은 모양·색·크기의 아이콘은 **프로세스에 하나만** 둔다.
+#
+# 이 아이콘들은 상태가 없어 다이얼로그마다 새로 그릴 이유가 없는데, 캐시가
+# Places 인스턴스에 묶여 있어서 다이얼로그를 띄울 때마다 QIcon 5벌(픽스맵
+# 25장)이 새로 그려졌다. PyQt 는 그것을 회수하지만 **PySide 는 못 한다** —
+# 다이얼로그를 반복해 여는 앱에서 그대로 쌓였다(실측: PySide2 에서 회당
+# 452KB · QIcon +9개, 50회에 22MB. 같은 조건에서 PyQt5 는 0.2KB).
+# 그리는 비용도 매번 들었다(다이얼로그 생성 42.6ms 중 5벌).
+_drawn = {}
+
+# Qt 기본 아이콘도 마찬가지다 — 같은 종류면 어느 제공자가 묻든 답이 같으므로
+# 제공자마다 따로 들 이유가 없다(그러면 다이얼로그 수만큼 쌓인다).
+_plain_icons = {}
+
+
+def _cached(store, key, make):
+    icon = store.get(key)
+    if icon is None:
+        icon = store[key] = make()
+    return icon
+
+
 def _radius(size, inset):
     return max(1.0, size / 2.0 * 0.94 - inset)
 
@@ -74,7 +96,8 @@ def star_icon(color=STAR_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.setBrush(brush)
         painter.drawPolygon(polygon)
 
-    return _draw(sizes, paint)
+    return _cached(_drawn, ("star_icon", str(color), tuple(sizes), inset),
+                   lambda: _draw(sizes, paint))
 
 
 def clock_icon(color=CLOCK_COLOR, sizes=ICON_SIZES, inset=INSET):
@@ -97,7 +120,8 @@ def clock_icon(color=CLOCK_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.drawLine(QPointF(center, center), _point(center, inner * 0.50, 330))
         painter.drawLine(QPointF(center, center), _point(center, inner * 0.72, 120))
 
-    return _draw(sizes, paint)
+    return _cached(_drawn, ("clock_icon", str(color), tuple(sizes), inset),
+                   lambda: _draw(sizes, paint))
 
 
 def home_icon(color=HOME_COLOR, sizes=ICON_SIZES, inset=INSET):
@@ -115,7 +139,8 @@ def home_icon(color=HOME_COLOR, sizes=ICON_SIZES, inset=INSET):
         painter.setBrush(brush)
         painter.drawPolygon(polygon)
 
-    return _draw(sizes, paint)
+    return _cached(_drawn, ("home_icon", str(color), tuple(sizes), inset),
+                   lambda: _draw(sizes, paint))
 
 
 def standard_icon(widget, name):
@@ -147,7 +172,6 @@ class CategoryIconProvider(QFileIconProvider):
         self._entries = []          # [(저장소, 아이콘 또는 None)]
         self._bases = set()         # 저장소 뿌리들 — "/" 구분자로 통일한 절대 경로
         self._star = None
-        self._plain_icons = {}      # (폴더인가, 확장자) -> Qt 기본 아이콘
         if store is not None:
             self.add_store(store, icon)
 
@@ -214,9 +238,9 @@ class CategoryIconProvider(QFileIconProvider):
 
         심볼릭 링크 여부도 같은 이유로 넣는다 — 즐겨찾기·최근 파일 폴더는 안이
         **전부 링크**라 빼먹으면 하필 이 라이브러리가 만드는 화면에서 가장 잘
-        보인다. 확장자는 파일일 때만 본다(폴더 이름의 점은 종류와 무관하다).
-        점파일(``.bashrc``)은 확장자가 없는 것으로 본다 — ``QFileInfo.suffix()``
-        는 ``bashrc`` 를 주지만 그러면 점파일마다 열쇠가 달라져 캐시가 듣지 않는다.
+        보인다. 확장자를 뽑는 규칙은 :meth:`_suffix` 에 적어 두었다.
+        점파일(``.bashrc``)은 확장자가 없는 것으로 본다 — 맨 앞 점을 확장자로
+        보면 점파일마다 열쇠가 달라져 캐시가 듣지 않는다.
 
         ``QFileInfo`` 가 이 답들을 이미 들고 있어(항목을 그리려고 stat 한 결과)
         추가 비용은 없다.
@@ -227,10 +251,8 @@ class CategoryIconProvider(QFileIconProvider):
         (``DontUseCustomDirectoryIcons``)을 두고 있다.
         """
         key = (self._kind(info), info.isSymLink(), self._suffix(info))
-        icon = self._plain_icons.get(key)
-        if icon is None:
-            icon = self._plain_icons[key] = super().icon(info)
-        return icon
+        return _cached(_plain_icons, key, lambda: super(
+            CategoryIconProvider, self).icon(info))
 
     @staticmethod
     def _kind(info):
@@ -245,10 +267,25 @@ class CategoryIconProvider(QFileIconProvider):
 
     @staticmethod
     def _suffix(info):
-        """파일일 때의 확장자(소문자). 그 밖에는 빈 문자열."""
-        if not info.isFile():
-            return ""
+        """이름에서 본 확장자 — **첫 점 뒤 전부**, 대소문자 그대로.
+
+        세 가지가 다 이유가 있다(전부 실측으로 확인했다).
+
+        - **파일이 아닐 때도 본다.** Qt 는 끊긴 링크와 없는 경로도 이름으로
+          종류를 가린다(``끊긴.txt`` -> text/plain, ``끊긴.png`` -> image/png).
+          파일일 때만 보면 그 둘이 한 칸에 묶여 먼저 물어본 쪽 아이콘을 받는다.
+          즐겨찾기·최근 파일 분류 폴더는 안이 전부 링크이고 대상이 지워지면
+          끊긴 링크가 되므로, 하필 이 라이브러리가 만드는 화면에서 드러난다.
+        - **첫 점 뒤 전부**를 본다. 마지막 점만 보면 ``묶음.tar.gz`` 와
+          ``그냥.gz`` 가 같은 칸인데 Qt 는 다르게 본다
+          (x-compressed-tar vs gzip).
+        - **소문자로 바꾸지 않는다.** ``소스.c``(text/x-csrc) 와
+          ``소스.C``(text/x-c++src) 는 Qt 에서 다른 종류다.
+
+        더 잘게 갈리는 대신(실측: 항목 310개에서 열쇠 16개 -> 22개) 틀린
+        아이콘이 사라진다(틀린 열쇠 3개 -> 0개).
+        """
         name = info.fileName()
-        dot = name.rfind(".")
-        return name[dot + 1:].lower() if dot > 0 else ""
+        dot = name.find(".", 1)         # 점파일의 맨 앞 점은 확장자가 아니다
+        return name[dot + 1:] if dot > 0 else ""
 
