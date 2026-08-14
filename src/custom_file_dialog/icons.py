@@ -176,7 +176,12 @@ class CategoryIconProvider(QFileIconProvider):
         if isinstance(arg, QFileInfo):
             path = arg.absoluteFilePath()       # Qt 는 늘 "/" 구분자를 쓴다
             if path.rsplit("/", 1)[0] in self._bases:
+                # 폴더인지는 **Qt 가 이미 안다** — 항목을 그리려고 stat 해서
+                # 채워 둔 QFileInfo 를 들고 우리를 부르기 때문이다. 그 답을
+                # 넘겨 주면 저장소 쪽이 같은 stat 을 다시 하지 않는다
+                # (네트워크 저장소에서는 그 왕복이 그대로 목록 지연이다).
+                is_dir = arg.isDir()
                 for store, icon in self._entries:
-                    if store.is_category_dir(path):
+                    if store.is_category_dir(path, is_dir=is_dir):
                         return icon if icon is not None else self.star()
         return super().icon(arg)

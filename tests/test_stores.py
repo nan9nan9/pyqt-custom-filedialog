@@ -1194,3 +1194,42 @@ def test_record_recent_resolves_links_from_other_stores(tmp_path):
     favorites.remove("설계", str(target))
     assert recent.items() == [str(target)]
     assert os.path.exists(recent.items()[0])
+
+
+def test_icon_provider_does_not_restat_what_qt_knows(qapp, tmp_path, monkeypatch):
+    """아이콘 제공자가 **Qt 가 이미 아는 것**을 다시 stat 하지 않는다.
+
+    Qt 는 항목을 그리려고 이미 stat 해서 채워 둔 QFileInfo 를 들고 우리를
+    부른다. 거기서 또 os.path.isdir 을 하면 네트워크 저장소에서는 항목마다
+    왕복이 한 번 더 생기고, 그게 그대로 목록 지연이 된다.
+    """
+    from qtpy.QtCore import QFileInfo
+
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    target = tmp_path / "설계도.csv"
+    target.write_text("x")
+    store.add("설계", str(target))
+    category = store.category_dir("설계")
+
+    provider = CategoryIconProvider(store)
+
+    touched = []
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(
+        os.path, "isdir", lambda p: (touched.append(p), real_isdir(p))[1]
+    )
+
+    # 분류 폴더 — 전용 아이콘이 나오고, 그 판정에 stat 을 쓰지 않는다
+    icon = provider.icon(QFileInfo(category))
+    assert not icon.isNull()
+    assert touched == [], "Qt 가 아는 답을 두고 다시 stat 했다: %s" % touched
+
+    # 저장소 밖 항목도 그대로 (여기는 원래 파일시스템을 안 만진다)
+    provider.icon(QFileInfo(str(target)))
+    assert touched == []
+
+    # 저장소가 직접 물으면(폴더인지 모르는 호출자) 예전대로 확인한다
+    assert store.is_category_dir(category) is True
+    assert touched == [category]

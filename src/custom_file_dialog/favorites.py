@@ -269,20 +269,35 @@ class FavoritesStore:
         """분류 폴더의 경로(없어도 경로만 계산해서 반환)."""
         return os.path.join(self.base_dir, _safe_name(category))
 
-    def is_category_dir(self, path):
+    def is_category_dir(self, path, is_dir=None):
         """주어진 경로가 이 저장소의 분류 폴더인지 여부.
 
         아이콘을 씌우거나 메뉴를 띄울 대상을 고를 때 쓴다. 아이콘 제공자가
         **파일 목록의 항목마다** 부르므로, 문자열 비교(부모가 base_dir 인가)로
         먼저 거른 뒤에만 파일시스템을 만진다. 저장소 밖 경로 — 대부분의 경우 —
         는 시스템 콜 없이 끝나고, 죽은 마운트의 항목을 그리다 멈추는 일도 없다.
+
+        Args:
+            is_dir: 폴더인지 **이미 아는** 호출자가 그 답을 넘기면 여기서
+                다시 확인하지 않는다. 아이콘 제공자가 그런 경우다 — Qt 가
+                항목을 그리려고 이미 stat 해서 채워 둔 ``QFileInfo`` 를 들고
+                우리를 부른다. 같은 stat 을 두 번 하면 네트워크 저장소에서
+                그 왕복이 그대로 목록 지연이 된다.
         """
         absolute = abspath(path)
         if absolute is None:
             return False
-        if os.path.dirname(absolute) != os.path.normpath(self.base_dir):
+        if os.path.dirname(absolute) != self._normal_base():
             return False
-        return os.path.isdir(absolute)
+        return os.path.isdir(absolute) if is_dir is None else bool(is_dir)
+
+    def _normal_base(self):
+        """정규화한 ``base_dir`` (항목마다 다시 계산하지 않게 기억해 둔다)."""
+        cached = getattr(self, "_normal_base_cache", None)
+        if cached is None or cached[0] != self.base_dir:
+            cached = (self.base_dir, os.path.normpath(self.base_dir))
+            self._normal_base_cache = cached
+        return cached[1]
 
     def add_category(self, category):
         """분류 폴더를 만들고 경로를 반환한다(이미 있으면 그대로)."""
