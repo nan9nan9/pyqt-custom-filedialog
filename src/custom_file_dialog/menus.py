@@ -53,9 +53,6 @@ def _writable(path):
     """쓰기 가능 여부 — ``QFileInfo.isWritable`` 대신 safe_call 로 감쌀 수 있는 형태."""
     return os.access(path, os.W_OK)
 
-# 예전 이름 — 외부/테스트가 이 이름으로 import 한다 (값은 PATH_ROLE 하나다)
-URL_ROLE = PATH_ROLE
-
 # 파일 목록 우클릭 메뉴에서 쓰는 Qt 기본 액션들 (objectName)
 QT_ITEM_ACTIONS = ("qt_rename_action", "qt_delete_action")
 QT_COMMON_ACTIONS = ("qt_show_hidden_action", "qt_new_folder_action")
@@ -227,7 +224,7 @@ class FavoritesMenus(QObject):
             menu.addSeparator()
         elif (
             path
-            and self._places.favorites_store() is not None
+            and self._places.favorites is not None
             and not self._places.is_inside(path)
         ):
             # 1b) 그 밖의 파일·폴더 -> 즐겨찾기에 추가.
@@ -249,7 +246,7 @@ class FavoritesMenus(QObject):
         return None if menu.isEmpty() else menu
 
     def _add_favorite_submenu(self, menu, path):
-        store = self._places.favorites_store()
+        store = self._places.favorites
         # addMenu("문자열") 이 돌려주는 QMenu 는 PySide6 에서 파이썬 쪽 참조가
         # 남지 않아 곧바로 수거될 수 있다. 부모를 지정해 직접 만들어 붙인다.
         submenu = QMenu("즐겨찾기에 추가", menu)
@@ -334,7 +331,7 @@ class FavoritesMenus(QObject):
         저장소 안(분류 폴더 · 최근 파일 폴더)의 경로는 등록하지 않는다 —
         메뉴에 항목을 띄우지 않지만, 코드에서 직접 부를 때도 막는다.
         """
-        store = self._places.favorites_store()
+        store = self._places.favorites
         if store is None or not path or self._places.is_inside(path):
             return False
 

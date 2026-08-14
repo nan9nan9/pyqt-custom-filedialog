@@ -189,7 +189,7 @@ def test_sidebar_dialog_returns_selection(qapp, monkeypatch, tmp_path):
     paths, chosen = dialog_module.exec_file_dialog(
         mode=SelectMode.SAVE_FILE,
         directory=str(target),
-        name_filter="CSV (*.csv);;모든 파일 (*)",
+        filters="CSV (*.csv);;모든 파일 (*)",
         places=Places(sidebar_urls=[str(tmp_path)]),
     )
     assert paths == [str(target) + ".csv"]
@@ -530,7 +530,7 @@ def test_sidebar_category_icons_survive_provider_swap(qapp, tmp_path):
         return result
 
     places = dialog.places()
-    star = places.category_icon(places.favorites_store()).availableSizes()
+    star = places.category_icon(places.favorites).availableSizes()
     clock = places.category_icon(places.recent).availableSizes()
 
     first = drawn_sizes()

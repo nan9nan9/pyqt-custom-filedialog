@@ -55,8 +55,6 @@ def exec_file_dialog(
     sidebar_width=None,
     settings_key=None,
     path_timeout=safety.DEFAULT_TIMEOUT,
-    name_filter=None,
-    extra_options=None,
 ):
     """다이얼로그를 띄우고 ``(경로 리스트, 선택된 필터)`` 를 돌려준다.
 
@@ -77,16 +75,11 @@ def exec_file_dialog(
             ``DontUseNativeDialog`` 를 켜서 Qt 자체 창으로 연다. 꾸밀 것을 하나라도
             주면 (``places`` · ``favorites`` · ``recent`` · ``sidebar_urls`` …)
             이 설정과 무관하게 :class:`CustomFileDialog` 로 전환된다.
-        name_filter: ``filters`` 의 예전 이름. 둘 다 주면 ``filters`` 가 이긴다.
-        extra_options: ``options`` 의 예전 이름.
-
         나머지 인자는 :class:`CustomFileDialog` 와 같다.
 
     Returns:
         ``(paths, selected_filter)`` 튜플. 취소하면 ``([], selected_filter)``.
     """
-    filters = filters if filters is not None else name_filter
-    options = options if options is not None else extra_options
     selected_filter = selected_filter or ""
 
     # 사이드바·아이콘·링크 추적은 Qt 위젯을 직접 건드려야 해서 네이티브 창으로는

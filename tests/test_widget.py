@@ -555,8 +555,6 @@ def test_drop_never_invents_a_parent_path(tmp_path):
     assert acceptable_paths(
         [str(folder)], SelectMode.DIRECTORY, real_isdir, real_isfile
     ) == [str(folder)]
-    # isfile 을 안 주면 예전 동작(폴더가 아니면 파일)
-    assert acceptable_paths([blocked], SelectMode.DIRECTORY, isdir) == [str(tmp_path)]
 
 
 def test_drop_rejects_unverifiable_folder_in_file_mode(tmp_path):

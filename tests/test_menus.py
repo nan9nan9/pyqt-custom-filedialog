@@ -247,7 +247,7 @@ def test_remove_entry_menu_without_favorites(qapp, tmp_path):
     recent.record(design)
 
     dialog, menus = _menu_dialog(recent, recent.category_dir(recent.name))
-    assert menus._places.favorites_store() is None
+    assert menus._places.favorites is None
     dialog.show()
     _spin(qapp, 400)
 
@@ -427,7 +427,7 @@ def test_sidebar_menu_keeps_computer_entry(qapp, tmp_path):
     from qtpy.QtWidgets import QFileDialog, QListView
 
     from custom_file_dialog import FavoritesMenus
-    from custom_file_dialog.menus import URL_ROLE
+    from custom_file_dialog.constants import PATH_ROLE as URL_ROLE
 
     store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
     design, _report, _output = _make_tree(tmp_path)

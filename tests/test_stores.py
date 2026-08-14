@@ -863,16 +863,6 @@ def test_places_options_update_is_all_or_nothing(tmp_path):
     assert options.icon is False and options.places() is not before
 
 
-def test_from_options_keeps_old_signature(tmp_path):
-    """예전 이름은 위치 인자로 부르던 코드도 계속 받아 준다."""
-    from custom_file_dialog import Places
-
-    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
-    places = Places.from_options(store)              # 위치 인자
-    assert places.favorites_store() is store
-    assert Places.from_options(favorites=store).favorites_store() is store
-
-
 def test_remove_by_name_does_not_match_cwd_paths(tmp_path, monkeypatch):
     """이름으로 지울 때 현재 작업 디렉터리 기준 경로로 오해하지 않는다.
 
@@ -964,41 +954,6 @@ def test_record_all_keeps_going_after_a_bad_name(tmp_path):
     links = recent.record_all([first, str(odd), last])
     assert len(links) == 3, links
     assert set(recent.items()) == {first, str(odd), last}
-
-
-def test_existing_recent_dir_is_kept_after_rule_change(tmp_path):
-    """규칙이 바뀌어도 **이미 쌓인** 최근 목록은 계속 쓴다.
-
-    configure_favorites 만 쓰던 앱은 그동안 "즐겨찾기 폴더의 부모/recent" 를
-    써 왔다. 새 규칙(저장소 뿌리 아래)만 보면 그 목록이 하루아침에 빈 것처럼
-    보이고, 옛 폴더는 고아가 된다.
-    """
-    from custom_file_dialog import configure_favorites, configure_storage
-    from custom_file_dialog.recent import default_recent_dir, legacy_recent_dir
-
-    favorites_dir = tmp_path / "앱데이터" / "favorites"
-    favorites_dir.mkdir(parents=True)
-    try:
-        configure_storage(str(tmp_path / "뿌리"))
-        configure_favorites(str(favorites_dir))
-
-        # 옛 자리에 목록이 없으면 새 규칙대로
-        assert default_recent_dir() == os.path.join(
-            os.path.normpath(str(tmp_path / "뿌리")), "recent"
-        )
-
-        # 이름만 같은 **남의 폴더**는 뺏지 않는다(우리 표식이 없다)
-        old_dir = legacy_recent_dir()
-        os.makedirs(old_dir)
-        assert default_recent_dir() != old_dir
-
-        # 우리가 쌓아 둔 저장소면 그것을 계속 쓴다
-        os.makedirs(os.path.join(old_dir, "최근 파일"))
-        assert default_recent_dir() == old_dir
-        assert RecentStore().base_dir == os.path.normpath(old_dir)
-    finally:
-        configure_favorites(None)
-        configure_storage(None)
 
 
 def test_renamed_link_resolves_to_its_own_target(tmp_path):

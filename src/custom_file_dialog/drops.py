@@ -21,7 +21,7 @@ from .constants import SelectMode, is_multi_mode
 from .util import url_path
 
 
-def acceptable_paths(urls, mode, isdir, isfile=None):
+def acceptable_paths(urls, mode, isdir, isfile):
     """드래그된 URL 목록에서 그 모드가 받을 경로만 골라 낸다.
 
     Args:
@@ -29,8 +29,9 @@ def acceptable_paths(urls, mode, isdir, isfile=None):
         mode: :class:`~custom_file_dialog.constants.SelectMode` 값.
         isdir: 폴더인지 판정할 함수 — 보통
             :func:`~custom_file_dialog.validators.isdir_check` 가 만들어 준 것.
-        isfile: 파일인지 판정할 함수. 폴더 모드에서 **부모로 바꿔 받을지**를
-            정할 때만 쓴다. 주지 않으면 예전처럼 "폴더가 아니면 파일"로 본다.
+        isfile: 파일인지 판정할 함수 (:func:`~custom_file_dialog.validators.isfile_check`).
+            **필수다.** "폴더가 아니다"만으로는 파일인지 확인 못 한 것인지
+            구분할 수 없다.
 
     Returns:
         받을 수 있는 경로 리스트(없으면 빈 리스트).
@@ -51,11 +52,11 @@ def _accept(path, wants_dir, isdir, isfile):
         return path if wants_dir else None      # 파일 모드에 폴더는 안 받는다
 
     # 여기서의 "폴더가 아니다"는 **"확인하지 못했다"일 수도 있다** — 죽은
-    # 원격 · automount 위 · 차단 경로에서 safe_* 는 둘 다 False 다. 확인 수단이
-    # 있는데 파일도 아니라면 버린다. 폴더 모드에서 부모로 바꾸면 사용자가
-    # 떨어뜨린 적 없는 폴더가 입력창에 들어가 앱이 거기에 산출물을 쓰고,
-    # 파일 모드에서는 폴더가 그대로 파일 칸에 들어간다.
-    if isfile is not None and not isfile(path):
+    # 원격 · automount 위 · 차단 경로에서 safe_* 는 둘 다 False 다. 그래서
+    # 파일이 **맞다**고 확인될 때만 받는다. 폴더 모드에서 부모로 바꾸면
+    # 사용자가 떨어뜨린 적 없는 폴더가 입력창에 들어가 앱이 거기에 산출물을
+    # 쓰고, 파일 모드에서는 폴더가 그대로 파일 칸에 들어간다.
+    if not isfile(path):
         return None
     if not wants_dir:
         return path

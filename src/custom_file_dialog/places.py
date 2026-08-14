@@ -136,31 +136,6 @@ class Places:
         self._home_icon = None
         self._category_icons = {}       # id(저장소) -> 아이콘 (처음 쓸 때 그린다)
 
-    @classmethod
-    def from_options(
-        cls,
-        favorites=None,
-        recent=None,
-        recent_max=None,
-        sidebar_urls=None,
-        fixed_urls=None,
-        icon=True,
-    ):
-        """생성자 인자를 그대로 받아 :class:`Places` 를 만든다(예전 이름).
-
-        규칙은 :class:`PlacesOptions` 하나에 모여 있다 — 이 이름은 그쪽으로
-        넘겨 주기만 한다. **인자 이름과 순서는 예전 그대로**여서 위치 인자로
-        부르던 코드도 계속 동작한다.
-        """
-        return PlacesOptions(
-            favorites=favorites,
-            recent=recent,
-            recent_max=recent_max,
-            sidebar_urls=sidebar_urls,
-            fixed_urls=fixed_urls,
-            icon=icon,
-        ).places()
-
     def __bool__(self):
         """사이드바를 **손댈 것이 있는지** — 네이티브 창을 쓸 수 없다는 뜻이다.
 
@@ -180,9 +155,6 @@ class Places:
         """최근 파일 → 즐겨찾기 순서의 저장소 목록(없는 것은 빠진다)."""
         return [s for s in (self.recent, self.favorites) if s is not None]
 
-    def favorites_store(self):
-        """즐겨찾기 저장소(없으면 None)."""
-        return self.favorites
 
     def category_store(self, path):
         """그 경로가 **분류 폴더 자체**인 저장소(아니면 None)."""

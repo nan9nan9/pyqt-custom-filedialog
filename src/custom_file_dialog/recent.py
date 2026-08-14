@@ -14,13 +14,11 @@ import os
 
 from . import safety
 from .favorites import (
-    INDEX_FILENAME,
     FavoritesError,
     FavoritesStore,
     _safe_name,
     default_storage_dir,
 )
-from .favorites import default_base_dir as favorites_base_dir
 from .util import abspath
 
 # 사이드바에 표시될 이름(= 분류 폴더 이름)
@@ -33,50 +31,9 @@ DEFAULT_RECENT_MAX = 20
 DEFAULT_RECENT_DIRNAME = "recent"
 
 
-def legacy_recent_dir():
-    """예전 규칙으로 계산한 최근 파일 폴더 (즐겨찾기 폴더의 **부모** 아래).
-
-    :func:`~custom_file_dialog.favorites.configure_favorites` 로 즐겨찾기만
-    옮겨 놓은 앱이 그동안 써 온 자리다.
-    """
-    return os.path.join(
-        os.path.dirname(favorites_base_dir()), DEFAULT_RECENT_DIRNAME
-    )
-
-
-def _looks_like_our_store(directory):
-    """그 폴더가 **우리가 만든** 최근 파일 저장소인지.
-
-    이름이 같다고 아무 폴더나 쓰면 안 된다 — 사용자가 홈에 만들어 둔 ``recent``
-    를 뺏어 그 안에 분류 폴더를 만들어 버린다. 우리 저장소에는 링크 -> 원본
-    매핑 파일이나 분류 폴더가 있다.
-    """
-    if not os.path.isdir(directory):
-        return False
-    if os.path.exists(os.path.join(directory, INDEX_FILENAME)):
-        return True
-    return os.path.isdir(os.path.join(directory, DEFAULT_RECENT_NAME))
-
-
 def default_recent_dir():
-    """최근 파일 폴더의 기본 위치 — 저장소 뿌리 아래의 ``recent``.
-
-    예전에는 "즐겨찾기 폴더의 **부모** 아래"로 계산했다. 그러면
-    :func:`~custom_file_dialog.favorites.configure_favorites` 로 즐겨찾기만
-    옮겨 놨을 때 그 부모가 홈이 되어, 사용자 홈에 ``recent/`` 가 덜렁
-    만들어졌다(``configure_storage`` 의 계약과도 어긋난다).
-
-    다만 **그 자리에 이미 목록이 쌓여 있으면 그것을 계속 쓴다.** 규칙을 바꿨다고
-    사용자의 최근 목록이 하루아침에 빈 것처럼 보이면 안 된다. 새로 시작하는
-    앱은 새 규칙대로 저장소 뿌리 아래에 만든다.
-    """
-    fresh = os.path.join(default_storage_dir(), DEFAULT_RECENT_DIRNAME)
-    if os.path.isdir(fresh):
-        return fresh
-    legacy = legacy_recent_dir()
-    if legacy != fresh and _looks_like_our_store(legacy):
-        return legacy
-    return fresh
+    """최근 파일 폴더의 기본 위치 — 저장소 뿌리 아래의 ``recent``."""
+    return os.path.join(default_storage_dir(), DEFAULT_RECENT_DIRNAME)
 
 
 class RecentStore(FavoritesStore):

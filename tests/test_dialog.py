@@ -224,7 +224,7 @@ def test_custom_file_dialog_stores_can_be_true(qapp, tmp_path, monkeypatch):
     try:
         dialog = CustomFileDialog(None, mode="open_file", favorites=True, recent=True)
         places = dialog.places()
-        assert isinstance(places.favorites_store(), FavoritesStore)
+        assert isinstance(places.favorites, FavoritesStore)
         assert isinstance(places.recent, RecentStore)
 
         # 개수도 지정할 수 있다
@@ -237,13 +237,13 @@ def test_custom_file_dialog_stores_can_be_true(qapp, tmp_path, monkeypatch):
         assert (
             CustomFileDialog(None, mode="open_file", favorites=store)
             .places()
-            .favorites_store()
+            .favorites
             is store
         )
 
         # 안 주면 없다
         empty = CustomFileDialog(None, mode="open_file").places()
-        assert empty.favorites_store() is None
+        assert empty.favorites is None
         assert empty.recent is None
     finally:
         configure_favorites(None)
@@ -335,7 +335,7 @@ def test_custom_file_dialog_resolves_links(qapp, tmp_path):
     _run(dialog)
 
     assert dialog.selectedFiles() == [design]        # 링크가 아니라 원본
-    assert dialog.places().favorites_store() is store
+    assert dialog.places().favorites is store
 
 
 def test_custom_file_dialog_sidebar_and_settings_key(qapp, tmp_path, monkeypatch):
@@ -434,9 +434,6 @@ def test_exec_file_dialog_accepts_pythonic_filters(qapp, monkeypatch):
         "CSV (*.csv);;모든 파일 (*)"
     )
 
-    # 예전 이름 name_filter 도 그대로 받는다 (둘 다 주면 filters 가 이긴다)
-    assert run(name_filter=[("CSV", ["csv"])]) == "CSV (*.csv)"
-    assert run(filters=[("A", ["a"])], name_filter=[("B", ["b"])]) == "A (*.a)"
 
 
 def test_widget_filter_not_double_appended(qapp, monkeypatch):
