@@ -1233,3 +1233,60 @@ def test_icon_provider_does_not_restat_what_qt_knows(qapp, tmp_path, monkeypatch
     # 저장소가 직접 물으면(폴더인지 모르는 호출자) 예전대로 확인한다
     assert store.is_category_dir(category) is True
     assert touched == [category]
+
+
+def test_icon_provider_asks_qt_once_per_kind(qapp, tmp_path, monkeypatch):
+    """Qt 기본 아이콘은 **종류마다 한 번만** 묻는다.
+
+    Qt 는 아이콘을 고르려고 종류를 알아내고 아이콘 테마 폴더(``~/.icons`` ·
+    ``~/.local/share/icons``)를 뒤진다. 홈이 네트워크에 있으면 그 조회가 항목
+    하나하나마다 서버 왕복이 된다 — 실측으로 항목당 4.9ms, 홈 274개에 1.3초가
+    나왔다. 게다가 Qt 는 **화면에 안 보이는 항목까지 전부** 훑는다(필터로 7개만
+    보이는 폴더에서도 274번 불렸다).
+    """
+    from qtpy.QtCore import QFileInfo
+    from qtpy.QtWidgets import QFileIconProvider
+
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    names = []
+    for index in range(5):
+        names.append(".설정%d" % index)            # 점파일 — 확장자 없음으로 본다
+        names.append("실행파일%d" % index)          # 확장자 없음
+        names.append("자료%d.csv" % index)
+        names.append("자료%d.png" % index)
+    for index in range(5):
+        (tmp_path / ("폴더%d" % index)).mkdir()
+        names.append("폴더%d" % index)
+    for name in names:
+        path = tmp_path / name
+        if not path.exists():
+            path.write_text("x")
+
+    asked = []
+    real = QFileIconProvider.icon
+    monkeypatch.setattr(
+        QFileIconProvider,
+        "icon",
+        lambda self, arg: (asked.append(arg), real(self, arg))[1],
+    )
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    provider = CategoryIconProvider(store)
+    for name in names:
+        provider.icon(QFileInfo(str(tmp_path / name)))
+
+    # 종류는 다섯 가지뿐이다: 폴더 · 확장자 없음(점파일 포함) · csv · png
+    assert len(asked) == 4, [
+        a.fileName() for a in asked if isinstance(a, QFileInfo)
+    ]
+    assert len(names) == 25                         # 항목은 25개인데 4번만 물었다
+
+    # 종류가 다르면 아이콘도 다르다 — 캐시가 전부를 뭉뚱그리지 않는다
+    folder = provider.icon(QFileInfo(str(tmp_path / "폴더0")))
+    csv = provider.icon(QFileInfo(str(tmp_path / "자료0.csv")))
+    assert folder.cacheKey() != csv.cacheKey()
+    # 같은 종류면 **같은 아이콘 객체**를 그대로 준다
+    assert provider.icon(QFileInfo(str(tmp_path / "자료1.csv"))).cacheKey() == (
+        csv.cacheKey()
+    )
