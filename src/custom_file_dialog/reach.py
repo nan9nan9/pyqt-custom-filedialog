@@ -50,11 +50,21 @@ SERVER_PORTS = {
 DEFAULT_TIMEOUT = 1.0       # 한 번의 확인에 기다릴 최대 시간(초)
 DEFAULT_TTL = 30.0          # 판정 결과를 재사용할 시간(초)
 
-# 서버 소켓 프로브에만 쓰는 상한(초). 살아 있는 서버의 TCP 연결은 LAN 에서 수
-# ms 라, 이보다 오래 걸리면 그 서버에 기대면 안 되는 상태로 본다. 전체 예산을
-# 프로브에 다 주면 응답을 삼키는 마운트 하나가 다이얼로그 여는 시간을 통째로
-# 먹는다 — 나머지 예산은 실제 stat 몫으로 남긴다.
+# 서버 소켓 프로브에 줄 최소 시간(초)과 예산 비율. 살아 있는 서버의 TCP 연결은
+# LAN 에서 수 ms 라, 전체 예산을 프로브에 다 주면 응답을 삼키는 마운트 하나가
+# 다이얼로그 여는 시간을 통째로 먹는다 — 나머지는 실제 stat 몫으로 남긴다.
+#
+# 다만 **상한을 고정하면 안 된다.** 그러면 ``timeout`` 을 아무리 늘려도 연결이
+# 그보다 느린 서버는 영원히 "죽음"으로 판정되어, 넉넉히 잡으라는 안내가 이
+# 단계에서만 거짓이 된다(WAN·VPN·부하 걸린 서버). 예산에 비례해 늘리되 최소값을
+# 보장한다: timeout=1.0 -> 0.25s, timeout=3.0 -> 0.75s, timeout=0.1 -> 0.1s.
 PROBE_TIMEOUT = 0.25
+PROBE_SHARE = 0.25          # 전체 예산 중 프로브 몫
+
+
+def probe_budget(wait):
+    """``wait`` 초 예산에서 서버 프로브에 줄 몫."""
+    return min(wait, max(PROBE_TIMEOUT, wait * PROBE_SHARE))
 
 # 동시에 멈춰 있어도 되는 확인 스레드 수의 상한. 멈춘 스레드는 D 상태라 죽일
 # 수 없으므로, 늘지 않게 하는 방법은 새로 만들지 않는 것뿐이다. 묶음 키가
@@ -344,11 +354,11 @@ def self_check(mountpoint, source, timeout=None, fstype=None):
     if port is not None:
         host = server_of(source, fstype)
         if host:
-            # 프로브 몫은 짧게 끊는다(:data:`PROBE_TIMEOUT`). TCP 연결은 살아
+            # 프로브 몫은 짧게 끊는다(:func:`probe_budget`). TCP 연결은 살아
             # 있는 서버라면 LAN 에서 수 ms 라, 여기에 예산을 다 주면 **응답을
             # 삼키는 서버 하나가 다이얼로그 여는 시간을 통째로 먹는다**
             # (실측: 그런 마운트 하나에 1초. 살아 있는 서버는 2ms).
-            share = min(_remaining(deadline), PROBE_TIMEOUT)
+            share = min(_remaining(deadline), probe_budget(wait))
             if share <= 0:
                 return False
             finished, reachable = call_with_timeout(

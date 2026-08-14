@@ -1290,3 +1290,39 @@ def test_icon_provider_asks_qt_once_per_kind(qapp, tmp_path, monkeypatch):
     assert provider.icon(QFileInfo(str(tmp_path / "자료1.csv"))).cacheKey() == (
         csv.cacheKey()
     )
+
+
+def test_icon_cache_keeps_symlinks_distinct(qapp, tmp_path):
+    """종류별 캐시가 **심볼릭 링크 표시를 지우지 않는다.**
+
+    Qt 는 링크에 다른 아이콘을 준다. 즐겨찾기·최근 파일 폴더는 안이 전부
+    링크라, 열쇠에서 링크 여부를 빼먹으면 하필 이 라이브러리가 만드는 화면에서
+    가장 잘 보인다(분류 안의 링크가 실제 파일처럼 보인다).
+    """
+    from qtpy.QtCore import QFileInfo
+    from qtpy.QtWidgets import QFileIconProvider
+
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    real_dir = tmp_path / "실폴더"
+    real_dir.mkdir()
+    real_file = tmp_path / "실파일.csv"
+    real_file.write_text("x")
+    os.symlink(str(real_dir), str(tmp_path / "폴더링크"))
+    os.symlink(str(real_file), str(tmp_path / "파일링크.csv"))
+
+    def bitmap(provider, name):
+        return provider.icon(QFileInfo(str(tmp_path / name))).pixmap(16, 16).toImage()
+
+    store = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    ours = CategoryIconProvider(store)
+    plain = QFileIconProvider()
+
+    for real, link in (("실폴더", "폴더링크"), ("실파일.csv", "파일링크.csv")):
+        # 우리 판정이 Qt 기본과 같은 답을 준다 (다르면 링크 표시가 사라진 것)
+        assert (bitmap(plain, real) == bitmap(plain, link)) is False, real
+        assert (bitmap(ours, real) == bitmap(ours, link)) is False, real
+
+    # 같은 종류끼리는 여전히 재사용한다 (캐시가 죽지 않았다)
+    (tmp_path / "다른.csv").write_text("y")
+    assert bitmap(ours, "실파일.csv") == bitmap(ours, "다른.csv")

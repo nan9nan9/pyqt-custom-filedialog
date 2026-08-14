@@ -15,11 +15,15 @@ Qt 쪽이 대부분이면 그 폴더를 읽는 것 자체가 느린 것이고(�
 파일 수), 우리 코드 쪽이 크면 어느 함수인지까지 찍어 준다.
 
 데모의 "안전장치" 체크박스와 같은 설정으로 재려면 ``--safety`` 를 붙인다.
+
+잴 때 쓰는 임시 저장소와 작업 폴더는 **끝나면 지운다** — 홈이 네트워크인
+환경에서 쓰는 도구라 홈에 흔적을 남기지 않는다.
 """
 
 import cProfile
 import os
 import pstats
+import shutil
 import sys
 import tempfile
 import time
@@ -222,6 +226,8 @@ def main():
     print("      awk -F'\"' '{print $2}' /tmp/cfd.trace | sort | uniq -c | sort -rn | head -20")
 
     dialog.done(0)
+    shutil.rmtree(storage, ignore_errors=True)      # 홈에 흔적을 남기지 않는다
+    shutil.rmtree(work, ignore_errors=True)
 
 
 def _our_share(profile):

@@ -2829,13 +2829,20 @@ def test_one_check_never_spends_more_than_its_budget(monkeypatch, tmp_path):
         safety.clear_cache()
 
 
-def test_probe_share_is_capped(monkeypatch, tmp_path):
-    """프로브 몫은 :data:`PROBE_TIMEOUT` 로 끊고, 남은 예산은 stat 이 쓴다.
+def test_probe_budget_follows_the_timeout(monkeypatch, tmp_path):
+    """프로브 몫이 ``path_timeout`` 을 따라 늘어난다.
 
-    살아 있는 서버의 TCP 연결은 LAN 에서 수 ms 다. 프로브에 예산을 다 주면
-    응답을 삼키는 마운트 하나가 다이얼로그 여는 시간을 통째로 먹는다.
+    상한을 고정하면 timeout 을 아무리 늘려도 연결이 그보다 느린 **살아 있는**
+    서버는 영영 "죽음"으로 판정된다(WAN·VPN·부하). 그러면 "넉넉히 잡으세요"
+    라는 안내가 이 단계에서만 거짓이 된다.
     """
     from custom_file_dialog import safety
+
+    assert safety_reach.probe_budget(1.0) == pytest.approx(0.25)
+    assert safety_reach.probe_budget(3.0) == pytest.approx(0.75)
+    # 예산이 최소값보다 작으면 그 작은 값을 쓴다 — 설정을 넘지 않는다
+    assert safety_reach.probe_budget(0.1) == pytest.approx(0.1)
+    assert safety_reach.probe_budget(0.05) == pytest.approx(0.05)
 
     mount = str(tmp_path / "원격")
     os.makedirs(mount)
@@ -2845,20 +2852,19 @@ def test_probe_share_is_capped(monkeypatch, tmp_path):
         lambda refresh=False: [("/", "ext4", "/dev/sda1"),
                                (mount, "nfs4", "서버:/export")],
     )
-    seen = {}
+    seen = []
     monkeypatch.setattr(
         safety_reach,
         "probe_host",
-        lambda host, port, wait=None, **k: seen.setdefault("wait", wait) and False,
+        lambda host, port, wait=None, **k: seen.append(wait) or True,
     )
     safety.clear_cache()
     try:
-        safety.is_reachable(mount, timeout=5.0)
-        assert seen["wait"] == pytest.approx(safety_reach.PROBE_TIMEOUT, abs=0.01)
-        # 예산이 그보다 작으면 그 작은 값을 쓴다(설정을 넘지 않는다)
+        # 연결이 0.4초 걸리는 서버: 기본 예산으로는 못 기다리지만 넉넉히 주면 된다
+        safety.is_reachable(mount, timeout=1.0)
         safety.clear_cache()
-        seen.clear()
-        safety.is_reachable(mount, timeout=0.05)
-        assert seen["wait"] == pytest.approx(0.05, abs=0.01)
+        safety.is_reachable(mount, timeout=3.0)
+        assert seen[0] == pytest.approx(0.25)
+        assert seen[1] == pytest.approx(0.75)
     finally:
         safety.clear_cache()

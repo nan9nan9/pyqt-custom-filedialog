@@ -203,6 +203,11 @@ class CategoryIconProvider(QFileIconProvider):
         점파일(``.bashrc``)은 확장자가 없는 것으로 본다 — ``QFileInfo.suffix()``
         는 ``bashrc`` 를 주지만 그러면 점파일마다 열쇠가 달라져 캐시가 듣지 않는다.
 
+        **심볼릭 링크 여부는 열쇠에 넣는다.** Qt 는 링크에 다른 아이콘을 주는데,
+        이 라이브러리가 만드는 즐겨찾기·최근 파일 폴더는 **안이 전부 링크**라
+        빼먹으면 하필 우리 화면에서 가장 잘 보인다. ``QFileInfo`` 가 이미 답을
+        들고 있어 추가 비용은 없다.
+
         맞바꾼 것: 확장자가 없는 파일들이 내용과 무관하게 같은 아이콘을 받고,
         폴더마다 다른 아이콘을 두는 데스크톱 설정이 무시된다. Qt 자신도 그
         조회가 네트워크에서 비싸다고 보고 끄는 옵션
@@ -210,7 +215,11 @@ class CategoryIconProvider(QFileIconProvider):
         """
         name = info.fileName()
         dot = name.rfind(".")
-        key = (info.isDir(), name[dot + 1:].lower() if dot > 0 else "")
+        key = (
+            info.isDir(),
+            info.isSymLink(),
+            name[dot + 1:].lower() if dot > 0 else "",
+        )
         icon = self._plain_icons.get(key)
         if icon is None:
             icon = self._plain_icons[key] = super().icon(info)
