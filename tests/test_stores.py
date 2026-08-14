@@ -710,12 +710,17 @@ def test_favorites_reject_store_internal_paths(tmp_path):
     assert store.categories() == ["설계"]            # 분류가 새로 생기지도 않는다
 
 
-def test_icon_provider_only_inside_stores(qapp, tmp_path):
-    """분류 아이콘 제공자는 저장소 폴더를 볼 때만 걸려 있다.
+def test_icon_provider_is_never_swapped(qapp, tmp_path):
+    """아이콘 제공자를 **폴더를 옮길 때마다 갈아 끼우지 않는다.**
 
-    제공자는 목록의 **항목마다** 파이썬으로 불려서, 항목이 수천 개인 폴더(홈)
-    에서는 그것만으로 GUI 가 100ms 단위로 멈춘다(실측 190ms -> 103ms). 분류
-    아이콘이 필요한 자리는 저장소 안뿐이다.
+    ``setIconProvider`` 는 모델이 그때까지 기억한 **모든 노드**를 다시 훑으며
+    노드마다 QFileInfo 를 만든다(= stat). 실측: 폴더 40개를 둘러본 뒤 교체
+    한 번에 icon() 1,751회 · 18.5ms(로컬 ext4). 네트워크 홈에서는 그 stat 이
+    전부 서버 왕복이라 교체 한 번이 초 단위가 되고, 저장소를 드나들 때마다
+    그 값을 문다 — 즐겨찾기·최근 파일을 눌렀을 때 가장 느렸던 이유다.
+
+    한 번만 걸어 두면 항목마다 도는 파이썬 판정이 남지만, 그것은 문자열 비교
+    하나라 나열 한 번의 비용일 뿐이고 **오갈 때마다 늘지 않는다.**
     """
     from qtpy.QtWidgets import QListView
 
@@ -726,23 +731,37 @@ def test_icon_provider_only_inside_stores(qapp, tmp_path):
     store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
     store.add("설계", design)
 
-    dialog = CustomFileDialog(
+    class Counting(CustomFileDialog):
+        """setIconProvider 가 **몇 번** 불리는지 센다.
+
+        같은 제공자를 다시 걸어도 비용은 그대로 든다(모델이 노드 트리를 다시
+        훑는다). 그래서 "무엇이 걸렸나"가 아니라 **몇 번 걸었나**를 본다.
+        """
+
+        def __init__(self, *args, **kwargs):
+            self.installs = 0
+            super().__init__(*args, **kwargs)
+
+        def setIconProvider(self, provider):      # noqa: N802 (Qt 시그니처)
+            self.installs += 1
+            super().setIconProvider(provider)
+
+    dialog = Counting(
         None, mode="open_file", directory=os.path.dirname(design), favorites=store
     )
     dialog.show()
     _spin(qapp, 300)
 
-    # 평범한 폴더 -> 기본 제공자
-    assert not isinstance(dialog.iconProvider(), CategoryIconProvider)
+    provider = dialog.iconProvider()
+    assert isinstance(provider, CategoryIconProvider)
+    assert dialog.installs == 1                       # 만들 때 한 번뿐
 
-    # 저장소 안으로 들어가면 분류 아이콘 제공자가 걸린다
-    dialog.setDirectory(store.base_dir)
-    dialog.directoryEntered.emit(store.base_dir)      # 사용자 이동과 같은 신호
-    assert isinstance(dialog.iconProvider(), CategoryIconProvider)
-
-    dialog.setDirectory(str(tmp_path))
-    dialog.directoryEntered.emit(str(tmp_path))
-    assert not isinstance(dialog.iconProvider(), CategoryIconProvider)
+    for where in (store.base_dir, str(tmp_path), store.category_dir("설계"),
+                  os.path.dirname(design)):
+        dialog.setDirectory(where)
+        dialog.directoryEntered.emit(where)           # 사용자 이동과 같은 신호
+        assert dialog.iconProvider() is provider, where
+    assert dialog.installs == 1, "폴더를 옮길 때 제공자를 다시 걸었다"
 
     # 사이드바의 분류 아이콘은 제공자와 **무관하게** 유지된다 — 델리게이트가
     # 그리기 직전에 씌우기 때문이다(제공자에 맡기면 QUrlModel 이 파일시스템

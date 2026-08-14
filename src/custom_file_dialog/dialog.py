@@ -195,24 +195,6 @@ def _run_dialog(
     return ([path] if path else []), (chosen or selected_filter)
 
 
-# Qt 기본 아이콘 제공자 — 프로세스에 하나만 두고 모든 다이얼로그가 공유한다.
-#
-# ``setIconProvider`` 는 **소유권을 가져가지 않는다.** 다이얼로그마다 새로 만들어
-# 그 다이얼로그에 매달아 두면, 창을 닫을 때 파이썬 쪽 객체가 먼저 수거되면서
-# C++ 모델이 이미 사라진 제공자를 가리켜 세그폴트가 난다(PyQt6 에서 재현).
-# 하나를 오래 살려 두면 그 순서 문제가 사라진다.
-_PLAIN_ICONS = None
-
-
-def _plain_icon_provider():
-    global _PLAIN_ICONS
-    if _PLAIN_ICONS is None:
-        from qtpy.QtWidgets import QFileIconProvider
-
-        _PLAIN_ICONS = QFileIconProvider()
-    return _PLAIN_ICONS
-
-
 # 모드별 (AcceptMode, FileMode) 설정값
 _INSTANCE_MODES = {
     SelectMode.OPEN_FILE: ("AcceptOpen", "ExistingFile"),
@@ -358,8 +340,17 @@ class CustomFileDialog(QFileDialog):
 
         # 아이콘 제공자는 사이드바보다 먼저 걸어야 사이드바 항목에도 반영된다
         # (QUrlModel 이 등록 시점의 DecorationRole 을 복사해 가기 때문).
+        #
+        # **여기서 한 번만 건다.** 폴더를 옮길 때마다 갈아 끼우면 안 된다 —
+        # setIconProvider 는 모델이 그때까지 기억한 **모든 노드**를 다시 훑으며
+        # 노드마다 QFileInfo 를 만든다(= stat). 실측: 폴더 40개를 둘러본 뒤 교체
+        # 한 번에 icon() 1,751회 · 18.5ms(로컬 ext4). 네트워크 홈에서는 그 stat 이
+        # 전부 서버 왕복이라, 저장소를 드나들 때마다 그 값을 물었다(즐겨찾기·
+        # 최근 파일을 눌렀을 때 가장 느렸던 이유다 — 사이드바를 16번 오가며
+        # icon() 5,160회 -> 1,184회).
         provider = self._places.icon_provider()
         if provider is not None:
+            self._icon_provider = provider      # setIconProvider 는 소유하지 않는다
             self.setIconProvider(provider)
 
         # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
@@ -373,40 +364,8 @@ class CustomFileDialog(QFileDialog):
 
         install_hooks(self, self._places, current)
 
-        # 사이드바에 아이콘이 복사된 뒤부터는 저장소 폴더에서만 제공자를 쓴다
-        if provider is not None:
-            self._watch_icon_provider(provider)
-
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
-
-    def _watch_icon_provider(self, provider):
-        """분류 아이콘 제공자를 **저장소 폴더를 볼 때만** 걸어 둔다.
-
-        아이콘 제공자는 목록의 **항목마다** 파이썬으로 불린다. 항목이 수천 개인
-        폴더(홈 등)에서는 그것만으로 목록이 채워질 때 GUI 가 100ms 단위로 멈추고,
-        그 폴더를 떠난 뒤에도 이미 시작된 나열이 끝나며 멈춤이 이어진다. 분류
-        아이콘이 필요한 자리는 저장소 안뿐이라 그 밖에서는 기본 제공자로 되돌린다
-        (분류가 아닌 항목에는 어차피 기본 아이콘을 주므로 보이는 것은 같다).
-        """
-        plain = _plain_icon_provider()
-        self._icon_providers = (provider, plain)
-
-        def apply_for(_entered=None):
-            # 신호가 준 경로가 아니라 **지금 서 있는 폴더**를 본다. 링크 추적은
-            # install_hooks 에서 **먼저** 연결되므로, 링크 폴더로 들어가면 그쪽
-            # 슬롯이 setDirectory 로 원본까지 옮긴 뒤에 이 슬롯이 돈다(그 이동은
-            # directoryEntered 를 다시 내지 않는다). 신호의 옛 경로로 판단하면
-            # 원본이 큰 폴더일 때 제공자가 걸린 채 나열되어, 이 장치가 막으려던
-            # 멈춤이 그대로 돌아온다. 지금 폴더를 읽으면 연결 순서에 기대지
-            # 않으므로 순서가 바뀌어도 안전하다.
-            here = self.directory().absolutePath()
-            wanted = provider if self._places.is_inside(here) else plain
-            if self.iconProvider() is not wanted:
-                self.setIconProvider(wanted)
-
-        self.directoryEntered.connect(apply_for)
-        apply_for()
 
     # ------------------------------------------------------------- 조회
     def mode(self):
