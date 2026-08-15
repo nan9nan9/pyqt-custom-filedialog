@@ -1281,7 +1281,7 @@ def test_icon_provider_asks_qt_once_per_kind(qapp, tmp_path, monkeypatch):
     for name in names:
         provider.icon(QFileInfo(str(tmp_path / name)))
 
-    # 종류는 다섯 가지뿐이다: 폴더 · 확장자 없음(점파일 포함) · csv · png
+    # 종류는 넷뿐이다: 평범한 폴더 · 확장자 없음(점파일 포함) · csv · png
     assert len(asked) == 4, [
         a.fileName() for a in asked if isinstance(a, QFileInfo)
     ]
@@ -1348,7 +1348,7 @@ def _icon_blob(icon):
     return bytes(data)
 
 
-def test_icon_cache_matches_qt_for_every_kind(qapp, tmp_path):
+def test_icon_cache_matches_qt_for_every_kind(qapp, tmp_path, monkeypatch):
     """종류별 캐시가 **어떤 순서로 물어도** Qt 기본과 같은 답을 준다.
 
     Qt 는 뿌리(디스크) · 폴더 · 파일 · 그 밖(FIFO·소켓 — 빈 아이콘)을 다르게
@@ -1362,7 +1362,18 @@ def test_icon_cache_matches_qt_for_every_kind(qapp, tmp_path):
     from qtpy.QtCore import QFileInfo
     from qtpy.QtWidgets import QFileIconProvider
 
+    from custom_file_dialog import icons as icons_module
     from custom_file_dialog.icons import CategoryIconProvider
+
+    # 캐시는 **프로세스에 하나**라 앞 테스트가 채워 둔 것이 그대로 남는다.
+    # 그것을 물려받으면 이 테스트가 재는 것이 달라진다 — 아래에서 "지금 Qt 가
+    # 주는 답"과 비교하는데, **Qt6 + gtk3 는 폴더 아이콘 답이 프로세스마다
+    # 갈린다**(같은 경로에 평범한 폴더 그림과 테마 폴더 그림이 번갈아 나온다.
+    # GTK 아이콘 테마가 언제 다 읽히느냐에 달린 것으로 보인다). 그러면 앞
+    # 테스트가 넣어 둔 값과 지금 값이 달라 **열쇠 설계와 무관하게** 깨진다 —
+    # 실제로 이 테스트는 혼자 돌리면 통과하고 스위트에서는 PyQt6·PySide6 에서만
+    # 깨졌다. 비워 놓고 시작한다.
+    monkeypatch.setattr(icons_module, "_plain_icons", {})
 
     (tmp_path / "폴더A").mkdir()
     (tmp_path / "메모.txt").write_text("x")
@@ -1404,21 +1415,30 @@ def test_icon_key_splits_whatever_qt_splits(qapp, tmp_path):
     실제로 났던 일: 확장자를 **파일일 때만** 봤더니 끊긴 링크가 확장자와 무관
     하게 한 칸에 묶여, 먼저 물어본 쪽 아이콘을 서로 덮어썼다. 분류 폴더는 안이
     전부 링크이고 대상이 지워지면 끊긴 링크가 되므로 이 화면에서 바로 드러난다.
+
+    열쇠는 **제품 코드의 :meth:`_icon_key` 를 그대로 불러서** 본다. 예전에는
+    이 테스트가 열쇠를 손으로 다시 조립했는데, 그러면 조립 규칙이 바뀌어도
+    테스트는 옛 규칙을 계속 검사한다 — 실제로 그 사이에 들어간 조건 하나가
+    통째로 검사 밖이었다(결함을 심어도 278개가 전부 통과).
     """
-    from qtpy.QtCore import QFileInfo, QMimeDatabase
+    from qtpy.QtCore import QFileInfo, QMimeDatabase, QStandardPaths
 
     from custom_file_dialog.icons import CategoryIconProvider
+    from custom_file_dialog.qt_compat import scoped_attr
 
     (tmp_path / "폴더").mkdir()
     os.mkfifo(str(tmp_path / "파이프"))
     for name in ("글.txt", "그림.png", "묶음.tar.gz", "그냥.gz", "소스.c", "소스.C"):
         (tmp_path / name).write_text("x")
+    for name in (".숨김.txt", ".숨김.png"):               # 점파일도 확장자를 본다
+        (tmp_path / name).write_text("x")
     for name in ("끊긴.txt", "끊긴.png"):                 # 대상이 없는 링크
         os.symlink(str(tmp_path / "없음"), str(tmp_path / name))
 
     names = [
-        "폴더", "파이프", "글.txt", "그림.png", "묶음.tar.gz", "그냥.gz",
+        "파이프", "글.txt", "그림.png", "묶음.tar.gz", "그냥.gz",
         "소스.c", "소스.C", "끊긴.txt", "끊긴.png", "없는것.txt", "없는것.png",
+        ".숨김.txt", ".숨김.png",
     ]
     database = QMimeDatabase()
     provider = CategoryIconProvider(FavoritesStore(base_dir=str(tmp_path / "fav")))
@@ -1426,22 +1446,53 @@ def test_icon_key_splits_whatever_qt_splits(qapp, tmp_path):
     seen = {}
     for name in names:
         info = QFileInfo(str(tmp_path / name))
-        key = (provider._kind(info), info.isSymLink(), provider._suffix(info))
+        key = provider._icon_key(info)
+        assert key is not None, name
         seen.setdefault(key, set()).add(database.mimeTypeForFile(info).name())
 
     mixed = {key: kinds for key, kinds in seen.items() if len(kinds) > 1}
     assert not mixed, "한 열쇠에 Qt 종류가 여럿 묶였다: %s" % mixed
 
-    # 그러면서도 같은 종류는 한 칸에 모인다 — 열쇠가 이름마다 갈리면 캐시가 죽는다
-    for extra in range(5):
-        (tmp_path / ("추가%d.txt" % extra)).write_text("x")
-    keys = {
-        (provider._kind(QFileInfo(str(tmp_path / ("추가%d.txt" % i)))),
-         False,
-         provider._suffix(QFileInfo(str(tmp_path / ("추가%d.txt" % i)))))
-        for i in range(5)
-    }
-    assert len(keys) == 1
+    # **평범한 폴더는 한 칸에 모이고, 특수 폴더는 따로 간다.** Qt6 은 홈과
+    # 바탕화면에 XDG 전용 아이콘을 주므로(실측: Qt6 + gtk3 에서만, 그 둘뿐)
+    # 통째로 묶으면 평범한 폴더가 그 모양으로 오염된다. 그렇다고 이름을 열쇠에
+    # 넣으면 폴더 수만큼 열쇠가 나 캐시가 죽는다 — 네트워크 홈은 폴더가
+    # 대부분이라 하필 가장 비싼 자리에서 그렇게 된다.
+    (tmp_path / "폴더2").mkdir()
+    plain_dirs = {provider._icon_key(QFileInfo(str(tmp_path / n)))
+                  for n in ("폴더", "폴더2")}
+    assert len(plain_dirs) == 1, plain_dirs
+    home = QStandardPaths.writableLocation(
+        scoped_attr(QStandardPaths, "StandardLocation", "HomeLocation"))
+    assert provider._icon_key(QFileInfo(home)) not in plain_dirs
+
+    # 그러면서도 같은 종류는 한 칸에 모인다 — 열쇠가 이름마다 갈리면 캐시가 죽는다.
+    # 날짜·버전이 박힌 이름이 그 자리다(``로그.2024.01.txt``). 확장자 사슬을
+    # 열쇠로 쓰던 때는 여기서 파일 수만큼 열쇠가 났다(실측 2,000개 -> 2,000개).
+    keys = set()
+    for day in range(30):
+        name = "로그.2024.%02d.txt" % (day + 1)
+        (tmp_path / name).write_text("x")
+        keys.add(provider._icon_key(QFileInfo(str(tmp_path / name))))
+    assert len(keys) == 1, keys
+
+
+def test_mime_key_ignores_a_real_file_of_the_same_fake_name(qapp, tmp_path, monkeypatch):
+    """종류를 정할 때 쓰는 **가짜 이름**이 현재 폴더의 진짜 파일에 걸리면 안 된다.
+
+    확장자로 종류를 알아내려고 ``x.<확장자>`` 라는 없는 이름을 넘기는데, 기본
+    방식(``MatchDefault``)은 그 이름을 **현재 작업 폴더 기준의 실제 경로**로 보고
+    내용까지 읽는다. 마침 그 이름의 파일이 거기 있으면 남의 파일 내용이 우리
+    아이콘 열쇠로 새어 든다 — 실측: 현재 폴더에 PNG 내용이 든 ``x`` 가 있으면
+    확장자 없는 파일 전부가 image/png 로 분류됐다. 그래서 ``MatchExtension`` 으로
+    이름만 보게 한다(그 편이 네트워크에서 읽기 왕복도 없다).
+    """
+    from custom_file_dialog import icons as icons_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "x").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 64)
+    icons_module._mime_names.clear()
+    assert icons_module._mime_name("") == "application/octet-stream"
 
 
 def test_shared_recent_store_is_not_trimmed_by_a_smaller_widget(tmp_path):

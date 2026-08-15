@@ -26,7 +26,7 @@ from . import history, safety
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
 from .filters import build_filter, ensure_suffix, suffix_of
 from .places import PlacesOptions
-from .qt_compat import enum_value, exec_dialog, make_options
+from .qt_compat import enum_value, exec_dialog, make_options, option_value
 from .recent import DEFAULT_RECENT_MAX
 from .sidebar import fit_sidebar
 from .util import to_urls
@@ -310,14 +310,6 @@ class CustomFileDialog(QFileDialog):
             icon=favorites_icon,
         ).places()
 
-        # **모드를 먼저 정하고 옵션을 나중에 건다.** Qt5 의 setFileMode 는
-        # ShowDirsOnly 를 `mode == DirectoryOnly` 로 **덮어쓴다**(Qt6 에는 그
-        # 줄이 없다). 옵션을 먼저 걸면 그 비트가 조용히 꺼져서, 폴더 모드인데
-        # 파일이 그대로 나왔다 — PyQt5·PySide2 에서만, 그것도 아무 신호 없이.
-        accept_mode, file_mode = _INSTANCE_MODES[mode]
-        self.setAcceptMode(enum_value("AcceptMode", accept_mode))
-        self.setFileMode(enum_value("FileMode", file_mode))
-
         # 네이티브 창으로는 아래 것들을 하나도 걸 수 없다
         self.setOptions(
             make_options(
@@ -326,6 +318,21 @@ class CustomFileDialog(QFileDialog):
                 extra=options,
             )
         )
+        accept_mode, file_mode = _INSTANCE_MODES[mode]
+        self.setAcceptMode(enum_value("AcceptMode", accept_mode))
+        self.setFileMode(enum_value("FileMode", file_mode))
+
+        # **setFileMode 뒤에 ShowDirsOnly 를 다시 건다.** Qt5 의 setFileMode 는
+        # 그 비트를 `mode == DirectoryOnly` 로 덮어써서, 옵션을 먼저 걸면 폴더
+        # 모드인데 파일이 그대로 나왔다(PyQt5·PySide2, 아무 신호 없이).
+        #
+        # 순서를 통째로 뒤집는 방법도 되지만 그러면 "파일 형식" 칸이
+        # `Directories` 대신 `All Files (*)` 가 된다 — 네이티브 헬퍼가 있는
+        # 테마(GNOME 의 gtk3)에서 위젯이 setOptions 시점에 만들어지면서 이름
+        # 필터가 나중에 덮어쓰기 때문이다. 4개 바인딩 × 2테마에서 재 보니
+        # 이 방식만 둘 다 지킨다.
+        if mode == SelectMode.DIRECTORY and show_dirs_only:
+            self.setOption(option_value("ShowDirsOnly"), True)
 
         name_filter = build_filter(filters, add_all_files=add_all_files_filter)
         if name_filter and mode != SelectMode.DIRECTORY:

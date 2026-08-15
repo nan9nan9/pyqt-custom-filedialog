@@ -9,7 +9,7 @@
 import math
 import os
 
-from qtpy.QtCore import QFileInfo, QPointF, Qt
+from qtpy.QtCore import QFileInfo, QMimeDatabase, QPointF, QStandardPaths, Qt
 from qtpy.QtGui import QColor, QIcon, QPainter, QPixmap, QPolygonF
 from qtpy.QtWidgets import QFileIconProvider, QStyle
 
@@ -63,11 +63,72 @@ _drawn = {}
 # Qt 기본 아이콘도 마찬가지다 — 같은 종류면 어느 제공자가 묻든 답이 같으므로
 # 제공자마다 따로 들 이유가 없다(그러면 다이얼로그 수만큼 쌓인다).
 #
-# 다만 이쪽은 열쇠가 파일 이름에서 나오므로 **상한이 필요하다.** 날짜·버전이
-# 든 이름(``로그.2024.01.txt``)은 파일마다 다른 확장자 사슬이 되어, 오래 도는
-# 앱이 폴더를 옮겨 다니면 계속 자란다.
+# 열쇠는 확장자가 아니라 **종류 이름**(``text/plain``)이다. 확장자를 그대로
+# 쓰면 날짜·버전이 든 이름(``로그.2024.01.txt``)이 파일마다 다른 사슬이 되어
+# 열쇠가 파일 수만큼 늘고, 그러면 캐시가 하는 일이 없다 — 실측: 날짜가 박힌
+# 파일 2,000개에서 질의 2,000회 · 열쇠 2,000개였고, **다시 열어도 또 2,000회**
+# 였다. 종류로 접으면 같은 폴더가 질의 1회 · 열쇠 1개가 된다.
 _plain_icons = {}
+
+# 확장자 사슬 -> 종류 이름. 이쪽은 이름에서 나오므로 계속 자랄 수 있어
+# 상한을 둔다. 값이 문자열이라 아이콘보다 훨씬 가볍다.
+_mime_names = {}
 MAX_ICON_KEYS = 512
+
+_mime_db = None
+
+
+def _mime_name(suffix):
+    """확장자 사슬로 본 종류 이름 — Qt 가 아이콘을 고르는 기준과 같다.
+
+    실제 파일을 건드리지 않으려고 ``x.<확장자>`` 라는 **가짜 이름**만 넘기고
+    확장자만 보게 한다(``MatchExtension``). 내용을 읽지 않으므로 네트워크
+    왕복이 없고, 없는 경로·끊긴 링크에도 그대로 쓸 수 있다.
+    """
+    global _mime_db
+    name = _mime_names.get(suffix)
+    if name is None:
+        if _mime_db is None:
+            _mime_db = QMimeDatabase()
+        if len(_mime_names) >= MAX_ICON_KEYS:
+            _mime_names.clear()
+        match = scoped_attr(QMimeDatabase, "MatchMode", "MatchExtension")
+        name = _mime_names[suffix] = _mime_db.mimeTypeForFile(
+            "x." + suffix if suffix else "x", match).name()
+    return name
+
+
+# Qt 가 전용 아이콘을 줄 수 있는 폴더들. 바인딩·Qt 판마다 있고 없는 이름이
+# 있어 있는 것만 쓴다.
+_SPECIAL_DIR_NAMES = (
+    "HomeLocation", "DesktopLocation", "DocumentsLocation", "DownloadLocation",
+    "MusicLocation", "PicturesLocation", "MoviesLocation", "TempLocation",
+    "PublicShareLocation", "TemplatesLocation",
+)
+
+_special_dirs = None
+
+
+def _special_dir(path):
+    """``path`` 가 특수 폴더면 그 경로를, 아니면 빈 문자열.
+
+    평범한 폴더를 **한 칸에 모으기 위한** 함수다. 목록은 프로세스에 한 번만
+    만든다(``QStandardPaths`` 가 이미 캐시하지만, 폴더마다 부르면 그 자체가
+    비용이다). 파일 시스템을 건드리지 않으므로 네트워크 왕복이 없다.
+    """
+    global _special_dirs
+    if _special_dirs is None:
+        _special_dirs = set()
+        for name in _SPECIAL_DIR_NAMES:
+            location = getattr(QStandardPaths, "StandardLocation", QStandardPaths)
+            value = getattr(location, name, None)
+            if value is None:
+                continue
+            found = QStandardPaths.writableLocation(value)
+            if found:
+                _special_dirs.add(found.rstrip("/") or "/")
+    normal = path.rstrip("/") or "/"
+    return normal if normal in _special_dirs else ""
 
 
 def _cached(store, key, make):
@@ -239,61 +300,58 @@ class CategoryIconProvider(QFileIconProvider):
 
         게다가 Qt 는 화면에 **보이지 않는 항목까지 전부** 훑는다 — 필터로 7개만
         보이는 폴더에서도 274번 불렸다. 종류가 같으면 아이콘도 같으므로 한 번만
-        묻는다(위 274개 -> 실제 질의 10회).
+        묻는다(위 274개 -> 실제 질의 10회). 열쇠는 :meth:`_icon_key` 가 정한다.
 
-        **열쇠는 Qt 가 종류를 가르는 기준 그대로여야 한다.** Qt 는 뿌리(Drive) ·
-        폴더 · 파일 · 그 밖(FIFO · 소켓 · 장치 · 끊긴 링크 — 빈 아이콘)을 다르게
-        보는데, 그것을 뭉뚱그리면 **먼저 물어본 것이 뒤엣것을 덮어쓴다.**
-
-        - 뿌리 ``/`` 를 폴더와 같은 열쇠로 묶었더니, 모델이 시작 폴더의 인덱스를
-          만들며 **루트부터** 묻는 바람에 그 디스크 아이콘이 박혀서 **모든 폴더가
-          하드디스크 모양**이 됐다(4개 바인딩 전부 재현). 윈도우에서는 ``C:/``
-          ``D:/`` 가 전부 이 자리다.
-        - FIFO·소켓을 확장자 없는 파일과 묶었더니, 홈에 흔한 소켓
-          (``.gnupg/S.gpg-agent``)이 먼저 나열되면 ``README``·``Makefile`` 같은
-          평범한 파일이 **아이콘 없이** 그려졌다(반대로도 갈린다).
-
-        심볼릭 링크 여부도 같은 이유로 넣는다 — 즐겨찾기·최근 파일 폴더는 안이
-        **전부 링크**라 빼먹으면 하필 이 라이브러리가 만드는 화면에서 가장 잘
-        보인다. 확장자를 뽑는 규칙은 :meth:`_suffix` 에 적어 두었다.
-        점파일(``.bashrc``)은 확장자가 없는 것으로 본다 — 맨 앞 점을 확장자로
-        보면 점파일마다 열쇠가 달라져 캐시가 듣지 않는다.
-
-        ``QFileInfo`` 가 이 답들을 이미 들고 있어(항목을 그리려고 stat 한 결과)
-        추가 비용은 없다.
-
-        맞바꾼 것: 확장자가 없는 **파일**들이 내용과 무관하게 같은 아이콘을 받고,
-        폴더마다 다른 아이콘을 두는 데스크톱 설정이 무시된다. Qt 자신도 그
-        조회가 네트워크에서 비싸다고 보고 끄는 옵션
+        맞바꾼 것: 같은 종류인 **파일**들이 내용과 무관하게 같은 아이콘을 받는다.
+        Qt 자신도 그 조회가 네트워크에서 비싸다고 보고 끄는 옵션
         (``DontUseCustomDirectoryIcons``)을 두고 있다.
         """
-        kind = self._kind(info)
-        # **확장자는 종류를 가릴 때만 본다.** Qt 는 뿌리·폴더·특수 파일에서는
-        # 이름을 아예 안 보므로(폴더 60개 -> Qt 아이콘 1가지), 거기에 확장자를
-        # 붙이면 열쇠만 늘고 답은 같다 — 실측으로 항목 494개에 열쇠 298개가
-        # 났는데 Qt 가 준 아이콘은 2가지뿐이었다.
-        suffix = self._suffix(info) if kind in ("file", "other") else ""
-        key = (kind, info.isSymLink(), suffix)
-        if len(_plain_icons) >= MAX_ICON_KEYS:
-            # 상한이 없으면 훑은 파일 수에 비례해 영구히 쌓인다(실측: 항목
-            # 10,000개에 열쇠 10,000개 · +7.8MB. 실제 홈에는 확장자 사슬이
-            # 4,600여 가지 있다). 다 지우고 다시 채운다 — 한 폴더를 나열하는
-            # 동안 같은 종류가 되풀이되는 것이 이 캐시의 목적이고, 그 이득은
-            # 비운 직후에도 그대로다.
-            _plain_icons.clear()
+        key = self._icon_key(info)
+        if key is None:
+            return super().icon(info)
         return _cached(_plain_icons, key, lambda: super(
             CategoryIconProvider, self).icon(info))
 
     @staticmethod
-    def _kind(info):
-        """Qt 가 아이콘을 고를 때 가르는 갈래 — 뿌리 · 폴더 · 파일 · 그 밖."""
+    def _icon_key(info):
+        """캐시 열쇠. **None 이면 캐시하지 말라는 뜻**(그때는 Qt 에 그냥 묻는다).
+
+        지금은 그런 자리가 없지만, 규칙을 넓힐 때를 위해 열어 둔다.
+
+        **폴더는 특수 폴더인지로 가른다.** Qt6 은 홈과 바탕화면에 XDG 전용
+        아이콘을 주므로(실측: Qt6 + gtk3 에서만, 그리고 그 둘뿐. Qt5 는 전부
+        같다) 폴더를 한 칸에 묶으면 먼저 물어본 것이 뒤엣것을 덮어써서 평범한
+        폴더가 **바탕화면 모양**이 된다. 그렇다고 이름을 통째로 열쇠에 넣으면
+        열쇠가 폴더 수만큼 늘어 캐시가 죽는다 — 네트워크 홈은 폴더가 대부분이라
+        하필 가장 비싼 자리에서 그렇게 된다. :func:`_special_dir` 이 그 사이를
+        가른다: 특수 폴더면 제 경로, 아니면 빈 문자열(= 평범한 폴더 한 칸).
+        늘어나는 열쇠는 :data:`_SPECIAL_DIR_NAMES` 개수가 상한이고 추가 조회는
+        없다.
+
+        파일은 **종류 이름**으로 접는다 — Qt 가 아이콘을 고르는 기준 그대로다.
+        확장자 사슬을 열쇠로 쓰던 예전 방식은 :func:`_mime_name` 에 적어 둔
+        이유로 버렸다.
+
+        특수 파일(FIFO · 소켓 · 장치)은 이름을 보지 않고 한 칸에 모은다 —
+        Qt 도 이름이 아니라 종류로 아이콘을 주기 때문이다. 반대로 **끊긴 링크와
+        없는 경로는 이름으로 갈린다**(``끊긴.txt`` -> text/plain,
+        ``끊긴.png`` -> image/png). 이 둘을 가르는 것이 ``exists()`` 다.
+        즐겨찾기·최근 파일 폴더는 안이 전부 링크이고 대상이 지워지면 끊긴
+        링크가 되므로, 하필 이 라이브러리가 만드는 화면에서 드러난다.
+
+        ``QFileInfo`` 가 이 답들을 이미 들고 있어(항목을 그리려고 stat 한 결과)
+        추가 비용은 없다.
+        """
         if info.isRoot():
-            return "root"           # Qt 는 여기에 디스크 아이콘을 준다
+            return ("root", info.absoluteFilePath())
         if info.isDir():
-            return "dir"
-        if info.isFile():
-            return "file"
-        return "other"              # FIFO · 소켓 · 장치 · 끊긴 링크 -> 빈 아이콘
+            # 링크 여부는 Qt 가 겹쳐 그리는 화살표를 가른다 — 폴더도 마찬가지다.
+            return ("dir", info.isSymLink(),
+                    _special_dir(info.absoluteFilePath()))
+        if info.exists() and not info.isFile():
+            return ("special",)     # FIFO · 소켓 · 장치 -> 이름을 안 본다
+        # 심볼릭 링크 여부는 Qt 가 겹쳐 그리는 화살표를 가른다.
+        return (info.isSymLink(), _mime_name(CategoryIconProvider._suffix(info)))
 
     @staticmethod
     def _suffix(info):
@@ -301,19 +359,16 @@ class CategoryIconProvider(QFileIconProvider):
 
         세 가지가 다 이유가 있다(전부 실측으로 확인했다).
 
-        - **파일이 아닐 때도 본다.** Qt 는 끊긴 링크와 없는 경로도 이름으로
-          종류를 가린다(``끊긴.txt`` -> text/plain, ``끊긴.png`` -> image/png).
-          파일일 때만 보면 그 둘이 한 칸에 묶여 먼저 물어본 쪽 아이콘을 받는다.
-          즐겨찾기·최근 파일 분류 폴더는 안이 전부 링크이고 대상이 지워지면
-          끊긴 링크가 되므로, 하필 이 라이브러리가 만드는 화면에서 드러난다.
         - **첫 점 뒤 전부**를 본다. 마지막 점만 보면 ``묶음.tar.gz`` 와
           ``그냥.gz`` 가 같은 칸인데 Qt 는 다르게 본다
           (x-compressed-tar vs gzip).
         - **소문자로 바꾸지 않는다.** ``소스.c``(text/x-csrc) 와
           ``소스.C``(text/x-c++src) 는 Qt 에서 다른 종류다.
+        - **맨 앞 점은 확장자가 아니다.** 점파일(``.bashrc``)은 확장자가 없는
+          것으로 본다.
 
-        더 잘게 갈리는 대신(실측: 항목 310개에서 열쇠 16개 -> 22개) 틀린
-        아이콘이 사라진다(틀린 열쇠 3개 -> 0개).
+        여기서 나온 사슬은 :func:`_mime_name` 이 곧바로 종류 이름으로 접으므로,
+        사슬이 몇 가지든 열쇠 수는 종류 수를 넘지 않는다.
         """
         name = info.fileName()
         dot = name.find(".", 1)         # 점파일의 맨 앞 점은 확장자가 아니다
