@@ -367,9 +367,7 @@ class CustomFileDialog(QFileDialog):
 
         # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
         current = self.directory().absolutePath()
-        urls = self._places.sidebar_urls(current)
-        if urls is not None:
-            self.setSidebarUrls(to_urls(urls))
+        self._apply_sidebar_urls()
 
         # 사이드바 표시 · 링크 추적 · 우클릭 메뉴 · 차단 경로 방어를 한 번에
         from .hooks import install_hooks
@@ -414,10 +412,32 @@ class CustomFileDialog(QFileDialog):
         ``[0, 0]``) 생성자가 아니라 여기서 맞춘다. 한 번만 하므로, 사용자가
         경계를 끌어 조절한 뒤 창을 다시 열어도 그 폭이 유지된다.
         """
+        self._apply_sidebar_urls()      # done() 에서 빼 두었으면 다시 얹는다
         super().showEvent(event)
         if not self._sidebar_fitted:
             # 스플리터가 아직 자리 잡기 전(fit 이 None)이면 다음 show 때 다시 시도
             self._sidebar_fitted = fit_sidebar(self, self._sidebar_width) is not None
+
+    def done(self, result):         # noqa: N802 (Qt 시그니처)
+        """닫히기 전에 **우리 사이드바 항목을 빼 둔다.**
+
+        Qt 는 사이드바 목록을 다이얼로그가 사라질 때 사용자 전역 설정에 저장
+        한다 — 그 사용자의 **모든 Qt 앱**이 함께 쓰는 파일이다. 우리 분류 폴더는
+        이름이 반드시 비-ASCII 라 거기 남으면 Qt5/Qt6 왕복마다 경로가 배로
+        늘어나고, 끝에는 그 사용자의 파일 대화상자가 전부 죽는다. 자세한 이유는
+        :meth:`~custom_file_dialog.places.Places.without_our_places` 에 적었다.
+
+        다시 :meth:`showEvent` 가 불리면 그대로 되돌려 놓으므로, 이 다이얼로그를
+        닫았다 다시 여는 쓰임에도 사이드바는 그대로다.
+        """
+        self.setSidebarUrls(self._places.without_our_places(self.sidebarUrls()))
+        super().done(result)
+
+    def _apply_sidebar_urls(self):
+        """우리 사이드바 목록을 얹는다(얹을 게 없으면 그대로 둔다)."""
+        urls = self._places.sidebar_urls(self.directory().absolutePath())
+        if urls is not None:
+            self.setSidebarUrls(to_urls(urls))
 
     # ------------------------------------------------------------- 내부
     def _start_at(self, directory):

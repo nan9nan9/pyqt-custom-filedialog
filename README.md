@@ -1727,35 +1727,61 @@ tests/
   test_widget.py              FilePathEdit · FilePathForm
 ```
 
-### 알려진 문제 — 테스트 스위트의 드문 SIGSEGV (미해결)
+### 해결됨 — 파일 대화상자가 여는 순간 죽던 문제
 
-스위트를 반복해 돌리면 아주 드물게 파이썬이 SIGSEGV 로 죽습니다. 평범한 조건
-에서는 약 110회에 1회지만, 해제된 메모리를 덮어쓰게 하면 자주 드러납니다.
+증상은 이랬습니다. 스위트가 드물게 SIGSEGV 로 죽고, 네이티브 스택은
+`findChild` 가 자식 트리를 훑다 `QObject::objectName()` 에서 터집니다.
+`MALLOC_PERTURB_` 를 걸면 재현율이 올라가고, 데스크톱 테마·바인딩과는 무관
+합니다. 오래 "우리 가드가 객체를 잘못 잡고 있다"고 봤지만 **원인은 딴 데
+있었습니다.**
 
-```bash
-QT_QPA_PLATFORM=offscreen MALLOC_PERTURB_=85 python -m pytest tests -q   # 18회 중 4회
+**근본 원인**: Qt 는 사이드바 목록(`shortcuts`)을 다이얼로그가 사라질 때
+사용자 전역 설정(`~/.config/QtProject.conf`)에 저장하고 여는 순간 되읽습니다.
+그 파일은 그 사용자의 **모든 Qt 앱**이 함께 씁니다. 그런데 **Qt5 와 Qt6 은 그
+값의 비-ASCII 인코딩을 다르게 읽습니다.** 이 라이브러리의 분류 폴더 이름은
+반드시 비-ASCII 라(`최근 파일` · `즐겨찾기`) 그 경로가 한 번 저장되면, 두 판을
+번갈아 도는 환경에서 **왕복마다 배로** 늘어납니다.
+
+| 왕복 | 저장된 경로 길이 |
+|---|---|
+| 씨앗 | 25자 |
+| 1회 | 33자 |
+| 2회 | 45자 |
+| 3회 | 69자 |
+
+이 저장소의 개발 환경에서 그 파일이 **805MB** 가 됐고, 그 상태에서는 이
+라이브러리를 한 줄도 쓰지 않은 **맨 `QFileDialog` 조차** 여는 순간 죽었습니다.
+
+```python
+from PyQt5.QtWidgets import QApplication, QFileDialog
+app = QApplication([])
+QFileDialog(None).show()          # -> SIGSEGV (100%)
 ```
 
-네이티브 스택은 `QObject::objectName()` 에서 죽고, 그 위는 `findChild` 가 자식
-트리를 재귀로 훑는 프레임입니다 — **이미 해제된 자식**을 만나는 것으로 보입니다.
-어느 객체인지는 아직 특정하지 못했습니다(160회 재현 시도 · 5회 발생).
+설정 저장 위치만 임시 폴더로 돌리면 같은 코드가 멀쩡히 돕니다. 그것이
+증거였습니다.
 
-지금까지 확인된 것만 적어 둡니다.
+**고친 것**은 둘입니다.
 
-- 데스크톱 테마와 무관합니다(gtk3 로 96회 돌려 0회). 특정 바인딩 전용도 아닙니다.
-- `guard.py` 와 `hooks.py` 는 이 문제가 처음 보인 뒤로 **한 글자도 바뀌지
-  않았습니다** — 그 사이 어떤 커밋도 이 문제의 수정이 아닙니다.
-- 순환 GC · 워커 스레드의 아이콘 조회 · 힙 메타데이터 손상은 배제했습니다.
-- 스위트가 `QFileDialog` 를 한 번도 지우지 않아 100개 넘게 살아 있고, 테스트마다
-  `gc.collect()` 로 파괴 시점을 고정하면 3회 중 0회였습니다(표본이 작습니다).
+- `CustomFileDialog` 는 닫힐 때 **우리가 얹은 항목만** 사이드바에서 빼고
+  닫습니다. Qt 가 전역 설정에 저장하는 목록에 우리 이름이 아예 들어가지
+  않습니다. 사용자가 직접 끌어다 놓은 항목이나 앱이 준 항목은 그대로 두고,
+  다시 열면 우리 항목도 그대로 돌아옵니다.
+- 테스트가 띄우는 자식 프로세스도 `QApplication` 보다 먼저 설정 위치를 임시
+  폴더로 돌립니다. 그 프로세스만 이 격리가 빠져 있어서 **사용자의 진짜 설정을
+  오염시킨 장본인**이었습니다.
 
-같은 계열로 보이는 것이 하나 더 있습니다 — **PySide2 + gtk3** 에서는
-`test_typing_touches_no_guarded_child_at_syscall_level` 이 띄우는 자식
-프로세스가 SIGSEGV 로 죽습니다(이 조합에서만, 재현율 100%). 이 조합을 쓸 일이
-없다면 `QT_QPA_PLATFORMTHEME` 를 비우고 돌리세요.
+이미 커진 설정 파일이 있다면 그 값만 지우면 됩니다(다른 Qt 앱 설정은
+`QtProject.conf` 안 다른 절에 있으므로 파일째 지우지 마세요).
 
-**라이브러리를 쓰는 앱에서 이 현상이 보고된 적은 없습니다.** 다이얼로그를 제때
-닫는 평범한 사용에서는 재현되지 않았습니다.
+```bash
+python - <<'EOF'
+from PyQt5.QtCore import QSettings
+s = QSettings(QSettings.Scope.UserScope, "QtProject")
+print(s.fileName())
+s.remove("FileDialog/shortcuts")
+EOF
+```
 
 ## 라이선스
 

@@ -1219,6 +1219,19 @@ def test_typing_guard_keeps_normal_autochecks(qapp, guarded_root, tmp_path):
 
 _SYSCALL_REPRO = """
 import os, sys, tempfile
+
+# **QApplication 보다 먼저** 설정 저장 위치를 임시 폴더로 돌린다 (conftest 와
+# 같은 이유·같은 방법). 이걸 빼면 이 자식 프로세스가 QFileDialog 상태를
+# 사용자의 진짜 ~/.config/QtProject.conf 에 쓴다 — 거기 우리 분류 폴더(비-ASCII
+# 이름) 경로가 한 번 들어가면 Qt5/Qt6 을 번갈아 도는 이 스위트에서 왕복마다
+# 배로 늘어나, 실제로 그 파일이 805MB 가 됐고 그때부터 이 스크립트가
+# QFileDialog.show() 에서 100% SIGSEGV 로 죽었다.
+from qtpy.QtCore import QSettings
+_settings_dir = tempfile.mkdtemp(prefix="cfd-syscall-settings-")
+for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+    QSettings.setPath(_fmt, QSettings.Scope.UserScope, _settings_dir)
+    QSettings.setPath(_fmt, QSettings.Scope.SystemScope, _settings_dir)
+
 from qtpy.QtTest import QTest
 from qtpy.QtWidgets import QApplication, QLineEdit
 from custom_file_dialog import CustomFileDialog, safety

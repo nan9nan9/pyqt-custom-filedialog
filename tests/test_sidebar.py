@@ -566,3 +566,53 @@ def test_fixed_urls_ignore_pathless_entries(qapp, tmp_path):
     assert os.path.normpath(home) in fixed
     assert os.path.normpath(str(tmp_path)) in fixed
     assert not [p for p in fixed if "QUrl" in p], fixed      # 문자열화된 것이 없다
+
+
+def test_dialog_leaves_no_trace_of_our_places_in_shared_qt_settings(qapp, tmp_path):
+    """닫힌 뒤 **Qt 전역 사이드바 목록**에 우리 분류 폴더가 남지 않는다.
+
+    Qt 는 다이얼로그가 사라질 때 ``sidebarUrls()`` 를 사용자 설정
+    (``~/.config/QtProject.conf`` 의 ``[FileDialog] shortcuts``)에 저장한다 —
+    그 사용자의 **모든 Qt 앱**이 함께 쓰는 파일이다. 우리 분류 폴더는 이름이
+    반드시 비-ASCII(``최근 파일`` · ``즐겨찾기``)인데, **Qt5 와 Qt6 은 그 값의
+    인코딩을 다르게 읽어** 번갈아 돌리면 경로가 왕복마다 배로 늘어난다
+    (실측 25 -> 33 -> 45 -> 69자). 실제로 그렇게 자란 설정 파일이 805MB 가
+    됐고, 그 상태에서는 **맨 QFileDialog 조차** ``show()`` 에서 100% SIGSEGV 로
+    죽었다(우리 코드가 한 줄도 없이).
+
+    지우는 것은 **우리가 얹은 것뿐**이고, 다시 열면 되돌아와야 한다.
+    """
+    from custom_file_dialog import CustomFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    favorites.add_category("즐겨찾기")
+    work = tmp_path / "작업"
+    work.mkdir()
+    mine = str(tmp_path / "남의항목")
+    os.mkdir(mine)
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(work), favorites=favorites,
+        sidebar_urls=[mine],
+    )
+    dialog.show()
+    _spin(qapp, 200)
+
+    def ours():
+        base = os.path.abspath(str(tmp_path / "fav"))
+        return [u for u in dialog.sidebarUrls() if u.toLocalFile().startswith(base)]
+
+    def others():
+        return [u for u in dialog.sidebarUrls() if u.toLocalFile() == mine]
+
+    assert ours(), "열려 있는 동안에는 분류 폴더가 보여야 한다"
+    assert others(), "앱이 준 항목도 보여야 한다"
+
+    dialog.done(0)
+    assert ours() == [], "닫힌 뒤 Qt 가 저장할 목록에 우리 것이 남았다"
+    assert others(), "남의 항목까지 지우면 안 된다"
+
+    dialog.show()                       # 다시 열면 그대로 돌아온다
+    _spin(qapp, 200)
+    assert ours()
+    dialog.close()

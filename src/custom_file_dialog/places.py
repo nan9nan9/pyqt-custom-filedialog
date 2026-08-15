@@ -155,6 +155,37 @@ class Places:
         """최근 파일 → 즐겨찾기 순서의 저장소 목록(없는 것은 빠진다)."""
         return [s for s in (self.recent, self.favorites) if s is not None]
 
+    def without_our_places(self, urls):
+        """사이드바 목록에서 **우리 저장소 안의 항목만** 걷어낸다.
+
+        Qt 는 사이드바 목록을 다이얼로그가 사라질 때 **사용자 전역 설정**
+        (리눅스의 ``~/.config/QtProject.conf`` 의 ``[FileDialog] shortcuts``)에
+        저장한다. 그 파일은 그 사용자의 **모든 Qt 앱**이 함께 쓴다. 우리가
+        얹는 분류 폴더는 이름이 반드시 비-ASCII 인데(``최근 파일`` ·
+        ``즐겨찾기``), **Qt5 와 Qt6 은 그 값의 인코딩을 다르게 읽는다.** 그래서
+        같은 설정을 두 판이 번갈아 읽고 쓰면 경로가 왕복마다 배로 늘어난다
+        (실측: 25 -> 33 -> 45 -> 69자). 끝에 가면 설정 파일이 수백 MB 가 되고,
+        그때부터 **그 사용자의 모든 파일 대화상자**가 여는 순간 죽는다
+        (실측: 805MB 짜리 설정에서 맨 ``QFileDialog.show()`` 가 100% SIGSEGV).
+
+        그 자리에 우리 이름을 애초에 남기지 않는다. 사용자가 직접 끌어다 놓은
+        항목이나 앱이 넣은 다른 항목은 **그대로 둔다** — 지우는 것은 우리가
+        얹은 것뿐이다.
+        """
+        bases = [abspath(store.base_dir) for store in self.stores()]
+        bases = [base for base in bases if base]
+        if not bases:
+            return list(urls)
+        kept = []
+        for url in urls:
+            path = abspath(url_path(url))
+            if path and any(
+                path == base or path.startswith(base + os.sep) for base in bases
+            ):
+                continue
+            kept.append(url)
+        return kept
+
 
     def category_store(self, path):
         """그 경로가 **분류 폴더 자체**인 저장소(아니면 None)."""
