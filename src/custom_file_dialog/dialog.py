@@ -19,11 +19,14 @@
 """
 
 import os
+import time
 
-from qtpy.QtWidgets import QFileDialog
+from qtpy.QtWidgets import QFileDialog, QFileSystemModel
 
-from . import history, safety
-from .debuglog import enable_debug, log, step
+from . import history, icons, safety
+from .debuglog import enable_debug
+from .debuglog import is_enabled as debug_enabled
+from .debuglog import log, step
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
 from .filters import build_filter, ensure_suffix, suffix_of
 from .places import PlacesOptions
@@ -315,6 +318,9 @@ class CustomFileDialog(QFileDialog):
             self._sidebar_width = sidebar_width
             self._sidebar_fitted = False
             self._places_stripped = False   # done() 이 우리 항목을 빼 갔는가
+            # 생성자가 시작 폴더를 잡을 때 이미 setDirectory 가 불리므로,
+            # 신호를 잇기(_watch_navigation) 전에 자리를 만들어 둔다.
+            self._nav_started = {}
             self._path_timeout = None if path_timeout is None else float(path_timeout)
             # 위젯과 같은 규칙으로 조립한다(True = 기본 위치에 자동 생성 등).
             # 다이얼로그는 뜬 뒤 설정이 바뀌지 않으므로 한 번 만들고 만다.
@@ -398,6 +404,8 @@ class CustomFileDialog(QFileDialog):
 
             with step("훅 설치(가드 · 메뉴 · 사이드바 표시)"):
                 install_hooks(self, self._places, current, scanned)
+        self._watch_navigation()
+
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
 
@@ -468,6 +476,61 @@ class CustomFileDialog(QFileDialog):
         self.setSidebarUrls(self._places.without_our_places(self.sidebarUrls()))
         self._places_stripped = True
         super().done(result)
+
+    def _watch_navigation(self):
+        """폴더 한 번 옮기는 데 얼마나 걸리는지 DEBUG 로 남긴다.
+
+        사이드바를 누르거나 폴더를 두 번 눌렀을 때가 이 구간이다 — 여는 것과는
+        따로 재야 한다. 시작은 ``directoryEntered``(그 폴더로 옮기기로 했다),
+        끝은 모델의 ``directoryLoaded``(그 폴더를 다 읽었다)로 잡는다. 그 사이가
+        **나열에 든 시간**이고, 네트워크 폴더에서 눈에 보이는 지연이 그것이다.
+
+        신호만 이어 두고, 꺼져 있으면 슬롯이 곧바로 돌아온다. 이동 한 번에 두 번
+        불릴 뿐이라 평소 부담이 없다.
+        """
+        try:
+            self.directoryEntered.connect(self._debug_entered)
+            # 모델이 **하나가 아닐 수 있다** — 안전장치를 켜면 자동완성용
+            # GuardedFileSystemModel 이 하나 더 붙는다. findChild 로 하나만 집으면
+            # 어느 것이 잡히는지는 자식 목록 순서 운이므로 전부에 잇는다. 같은
+            # 이동에 두 번 불려도 시작 기록을 꺼내 쓰는 쪽이 한 번뿐이라 괜찮다.
+            for model in self.findChildren(QFileSystemModel):
+                model.directoryLoaded.connect(self._debug_loaded)
+        except (AttributeError, TypeError):
+            pass                    # 신호가 없는 바인딩이면 계측만 포기한다
+
+    def setDirectory(self, directory):      # noqa: N802 (Qt 시그니처)
+        """폴더를 옮긴다. 계측이 켜져 있으면 그 시작 시각을 잡아 둔다.
+
+        ``setDirectory`` 는 ``directoryEntered`` 를 **내지 않는다**(그 신호는
+        사용자가 옮겼을 때만 나온다). 그래서 프로그램이 옮긴 것까지 재려면
+        여기서도 시작을 찍어야 한다 — 앱이 처음 여는 자리가 대개 이쪽이다.
+        """
+        if debug_enabled():
+            path = directory.absolutePath() if hasattr(directory, "absolutePath") \
+                else str(directory)
+            self._mark_navigation(path)
+        super().setDirectory(directory)
+
+    def _mark_navigation(self, path):
+        """이동 시작 — 그 폴더의 나열이 끝나면 :meth:`_debug_loaded` 가 받는다."""
+        icons.take_icon_stats()     # 이동 전의 계수는 흘려보낸다
+        self._nav_started[os.path.normpath(path)] = time.perf_counter()
+        log("> 폴더 이동: %s", path)
+
+    def _debug_entered(self, path):
+        if not debug_enabled():
+            return
+        self._mark_navigation(path)
+
+    def _debug_loaded(self, path):
+        if not debug_enabled():
+            return
+        started = self._nav_started.pop(os.path.normpath(path), None)
+        if started is None:
+            return                  # 우리가 시작을 못 본 나열(미리 읽기 등)
+        log("폴더 이동 끝: %s = %.1f ms", path, (time.perf_counter() - started) * 1000)
+        icons.log_icon_stats("이 폴더를 나열하며")
 
     def _apply_sidebar_urls(self, scanned=None):
         """우리 사이드바 목록을 얹는다(얹을 게 없으면 그대로 둔다).

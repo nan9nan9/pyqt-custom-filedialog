@@ -128,3 +128,67 @@ def test_labels_line_up_regardless_of_hangul():
         )
     }
     assert len(widths) == 1, widths
+
+
+def test_logs_each_navigation_with_icon_counts(qapp, tmp_path, caplog):
+    """폴더를 옮길 때마다 걸린 시간과 **아이콘 조회 수**가 남는다.
+
+    사이드바를 누를 때가 이 구간이다 — 여는 것과는 따로 재야 한다. 아이콘은
+    Qt 가 목록의 항목마다(화면에 안 보이는 것까지) 묻고, 답을 만들려면 아이콘
+    테마 폴더(``~/.icons``)를 뒤진다. 홈이 네트워크면 그 하나하나가 서버
+    왕복이라(실측 항목당 4.9ms · 274개에 1.3초) 캐시를 두었는데, 그 캐시가 그
+    환경에서 실제로 듣는지는 "물음 대 조회" 두 숫자로만 알 수 있다.
+    """
+    from custom_file_dialog import FavoritesStore
+
+    work = tmp_path / "작업"
+    work.mkdir()
+    for index in range(5):
+        (work / ("자료%d.csv" % index)).write_text("x")
+
+    # 아이콘 계수는 **우리 아이콘 제공자가 걸렸을 때만** 나온다. 즐겨찾기·최근
+    # 파일이 없으면 Qt 기본 제공자가 쓰이고, 그건 우리가 셀 수 없다.
+    favorites = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    favorites.add_category("설계")
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(tmp_path), favorites=favorites
+    )
+    enable_debug()
+    with caplog.at_level(logging.DEBUG, logger=debuglog.LOGGER_NAME):
+        dialog.setDirectory(str(work))
+        for _ in range(60):
+            qapp.processEvents()
+    dialog.done(0)
+
+    messages = _records(caplog)
+    assert any("폴더 이동" in m and str(work) in m for m in messages), messages
+    assert any("폴더 이동 끝" in m and "ms" in m for m in messages), messages
+    assert any("아이콘: 물음" in m and "Qt 조회" in m for m in messages), messages
+
+
+def test_icon_counts_show_the_cache_working(qapp, tmp_path):
+    """같은 종류가 되풀이되면 **물음은 늘어도 조회는 안 는다.**
+
+    이 관계가 깨지면 캐시가 죽은 것이고, 네트워크 홈에서 그 값이 그대로 지연이
+    된다. 숫자로 못 박아 둔다.
+    """
+    from qtpy.QtCore import QFileInfo
+
+    from custom_file_dialog import icons as icons_module
+    from custom_file_dialog.favorites import FavoritesStore
+    from custom_file_dialog.icons import CategoryIconProvider
+
+    for index in range(20):
+        (tmp_path / ("자료%02d.csv" % index)).write_text("x")
+
+    icons_module._plain_icons.clear()
+    icons_module.take_icon_stats()
+    provider = CategoryIconProvider(FavoritesStore(base_dir=str(tmp_path / "fav")))
+    for index in range(20):
+        provider.icon(QFileInfo(str(tmp_path / ("자료%02d.csv" % index))))
+
+    asked, missed, _spent = icons_module.take_icon_stats()
+    assert asked == 20
+    assert missed == 1, "종류가 하나뿐인데 Qt 에 %d번 물었다" % missed
+    # 가져간 뒤에는 0 부터 다시 센다
+    assert icons_module.take_icon_stats() == (0, 0, 0.0)

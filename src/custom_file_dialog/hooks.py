@@ -19,6 +19,7 @@
 계속 동작한다.
 """
 
+from .debuglog import step
 from .guard import GuardedFileSystemModel, guard_dialog
 from .links import (
     follow_link_directories,
@@ -61,15 +62,19 @@ def install_hooks(dialog, places, current=None, scanned=None):
     지정해도 걸고(그 메뉴가 "사이드바에서 제거"를 막는다), 링크 추적은 저장소가
     있을 때만 건다.
     """
-    guard_dialog(dialog)
-    mark_sidebar(dialog, places, current, scanned)
+    with step("차단 경로 방어"):
+        guard_dialog(dialog)
+    with step("사이드바 표시(집 · 현재 위치 · 분류 아이콘)"):
+        mark_sidebar(dialog, places, current, scanned)
 
     # 우클릭 메뉴는 보호 위치만 지정해도 필요하다(그 메뉴가 제거를 막는다)
-    FavoritesMenus(dialog, places).install()
+    with step("우클릭 메뉴"):
+        FavoritesMenus(dialog, places).install()
 
     if not places.stores():
         return                                   # 링크 추적은 저장소가 있을 때만
 
-    follow_link_directories(dialog, places)      # 링크 폴더로 진입할 때
-    show_link_target_in_combo(dialog, places)    # 목록에서 항목을 고를 때
-    follow_link_on_parent(dialog, places)        # "상위 폴더" 로 올라갈 때
+    with step("링크 추적"):
+        follow_link_directories(dialog, places)      # 링크 폴더로 진입할 때
+        show_link_target_in_combo(dialog, places)    # 목록에서 항목을 고를 때
+        follow_link_on_parent(dialog, places)        # "상위 폴더" 로 올라갈 때
