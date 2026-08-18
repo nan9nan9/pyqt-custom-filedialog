@@ -846,9 +846,16 @@ Qt 기본 동작이 됩니다.
 어디서 시간이 가는지 그 환경에서 직접 재는 스크립트가 있습니다.
 
 ```bash
-python examples/diagnose_slow.py            # 데모와 같은 구성으로 재 본다
-python examples/diagnose_slow.py --safety   # 안전장치를 켠 상태로
+python examples/diagnose_slow.py                 # 임시 폴더로 재 본다
+python examples/diagnose_slow.py --work ~/작업   # **실제** 폴더로 재 본다
+python examples/diagnose_slow.py --safety        # 안전장치를 켠 상태로
 ```
+
+`--work` 를 주지 않으면 임시 폴더(`/tmp/cfd-진단-…`)를 만들어 쓰고 끝나면
+지웁니다. 사이드바의 "현재 위치"가 그것입니다. 파일 5개짜리 **가짜 폴더**라
+그 줄이 느리게 나와도 폴더 탓인지 알 수 없으니(첫 클릭에 1회성 비용이 몰립니다),
+실제로 느린 폴더를 `--work` 로 직접 주세요. **준 폴더는 건드리지도 지우지도
+않습니다.**
 
 느린 자리를 둘로 나눠 잽니다.
 

@@ -1,6 +1,12 @@
 """다이얼로그가 왜 느린지 **그 환경에서** 찍어 본다.
 
-    python examples/diagnose_slow.py
+    python examples/diagnose_slow.py                      # 임시 폴더로 재 본다
+    python examples/diagnose_slow.py --work ~/작업       # **실제** 폴더로 재 본다
+    python examples/diagnose_slow.py --safety            # 안전장치를 켠 상태로
+
+``--work`` 를 주지 않으면 임시 폴더(``/tmp/cfd-진단-…``)를 만들어 쓰고 끝나면
+지운다. 그것은 파일 5개짜리 **가짜 폴더**라, 느린 자리를 찾는 데는 실제로 쓰는
+폴더를 주는 편이 낫다. ``--work`` 로 준 폴더는 **건드리지도 지우지도 않는다.**
 
 느린 자리는 둘로 나뉘고, 이 스크립트도 그렇게 나눠 잰다.
 
@@ -24,8 +30,6 @@ Qt 가 사이드바 목록을 저장하는 파일이 비정상적으로 커졌�
 
 Qt 쪽이 대부분이면 그 폴더를 읽는 것 자체가 느린 것이고(네트워크 지연 ·
 파일 수), 우리 코드 쪽이 크면 어느 함수인지까지 찍어 준다.
-
-데모의 "안전장치" 체크박스와 같은 설정으로 재려면 ``--safety`` 를 붙인다.
 
 잴 때 쓰는 임시 저장소와 작업 폴더는 **끝나면 지운다** — 홈이 네트워크인
 환경에서 쓰는 도구라 홈에 흔적을 남기지 않는다.
@@ -356,6 +360,35 @@ def _where(path, table):
     return "%s (%s, %s)" % (kind, mount[1], mount[0])
 
 
+def _some_files(directory, count):
+    """그 폴더에 실제로 있는 파일 몇 개(없으면 빈 목록).
+
+    폴더 전체를 정렬하지 않는다 — 네트워크 폴더에서 항목이 많으면 그 자체가
+    재려는 비용만큼 든다. 앞에서부터 필요한 개수만 집는다.
+    """
+    found = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.is_file(follow_symlinks=False):
+                    found.append(entry.path)
+                    if len(found) >= count:
+                        break
+    except OSError:
+        return []
+    return found
+
+
+def _option(name, default=None):
+    """``--work /경로`` 처럼 값을 받는 인자를 읽는다 (없으면 default)."""
+    for index, arg in enumerate(sys.argv):
+        if arg == name and index + 1 < len(sys.argv):
+            return sys.argv[index + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return default
+
+
 def _timed(func):
     started = time.perf_counter()
     return func(), time.perf_counter() - started
@@ -367,19 +400,45 @@ def main():
 
     home = os.path.expanduser("~")
     storage = os.path.join(home, ".config", "custom-file-dialog-진단")
-    work = tempfile.mkdtemp(prefix="cfd-진단-")
-    for index in range(5):
-        with open(os.path.join(work, "파일%02d.csv" % index), "w") as handle:
-            handle.write("x")
+
+    # 작업 폴더. 안 주면 임시 폴더를 만들어 쓰고 끝나면 지운다 — 다만 그것은
+    # **가짜 폴더**라, 느린 것이 폴더 탓인지 아닌지는 말해 주지 못한다.
+    # 실제로 느린 자리를 재려면 그 폴더를 직접 줘라: --work /경로
+    given = _option("--work")
+    if given:
+        work = os.path.abspath(os.path.expanduser(given))
+        if not os.path.isdir(work):
+            print("--work 로 준 폴더가 없다: %s" % work)
+            return
+        made_work = False
+    else:
+        work = tempfile.mkdtemp(prefix="cfd-진단-")
+        made_work = True
+        for index in range(5):
+            with open(os.path.join(work, "파일%02d.csv" % index), "w") as handle:
+                handle.write("x")
 
     print("\n홈        %-60s %s" % (home, _where(home, table)))
     print("저장소    %-60s %s" % (storage, _where(storage, table)))
     print("작업폴더  %-60s %s" % (work, _where(work, table)))
+    if made_work:
+        print("          ^ 이 스크립트가 방금 만든 **임시 폴더**다(파일 5개, 끝나면")
+        print("            지운다). 사이드바의 '현재 위치'가 이것이다. 여기가 느리게")
+        print("            나오면 폴더 탓이 아니라 **첫 클릭에 몰리는 1회성 비용**일")
+        print("            수 있다 — 아래 '두 번째 바퀴' 값과 견줘 보라.")
+        print("            진짜 작업 폴더를 재려면:  --work /실제/경로")
 
     favorites = FavoritesStore(base_dir=os.path.join(storage, "favorites"))
     recent = RecentStore(base_dir=os.path.join(storage, "recent"), max_items=10)
-    favorites.add("설계", os.path.join(work, "파일00.csv"))
-    recent.record(os.path.join(work, "파일01.csv"))
+    # 즐겨찾기·최근 파일에 얹을 것은 **그 폴더에 실제로 있는 파일**에서 고른다.
+    # (--work 로 남의 폴더를 받으면 이름을 알 수 없다. 빈 폴더면 그냥 건너뛴다 —
+    #  분류 폴더는 비어 있어도 사이드바에 나오므로 재는 데 지장이 없다.)
+    seeds = _some_files(work, 2)
+    if seeds:
+        favorites.add("설계", seeds[0])
+        recent.record(seeds[-1])
+    else:
+        print("\n작업 폴더에 파일이 없어 즐겨찾기·최근 파일은 비운 채로 잰다.")
 
     if "--safety" in sys.argv:
         # 데모의 "안전장치" 체크박스와 같은 설정
@@ -414,6 +473,7 @@ def main():
         target = url_path(sidebar.model().index(row, 0).data(PATH_ROLE))
         if target and os.path.isdir(target):
             print("  %s  (%s)" % (names[row], target))
+            print("      얹힌 곳: %s" % _where(target, table))
             _listing_cost(target)
 
     print("\n%-18s %10s %12s %12s   %s"
@@ -466,7 +526,8 @@ def main():
 
     dialog.done(0)
     shutil.rmtree(storage, ignore_errors=True)      # 홈에 흔적을 남기지 않는다
-    shutil.rmtree(work, ignore_errors=True)
+    if made_work:                                   # --work 로 받은 폴더는 남의 것이다
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def _our_share(profile):
