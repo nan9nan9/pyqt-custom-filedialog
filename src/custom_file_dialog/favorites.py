@@ -221,6 +221,23 @@ def _safe_name(name):
     return text
 
 
+def _scan_names(directory):
+    """그 폴더 **안의 이름**들(이름순). 없으면 빈 목록."""
+    try:
+        return sorted(os.listdir(directory))
+    except OSError:
+        return []
+
+
+def _index_stamp(path):
+    """인덱스 파일의 (수정시각, 크기). 없으면 None."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 def _scan_dirs(directory):
     """그 폴더 **안의 폴더 이름**들(이름순). 없으면 빈 목록.
 
@@ -311,7 +328,9 @@ class FavoritesStore:
             return False
         if os.path.dirname(absolute) != self._normal_base():
             return False
-        return os.path.isdir(absolute) if is_dir is None else bool(is_dir)
+        # **안전장치를 거친다.** 이 함수는 목록의 항목마다 불리는데(아이콘
+        # 제공자), 저장소가 멈추면 항목 하나에 그대로 매달렸다(실측 6.00초).
+        return safety.safe_isdir(absolute) if is_dir is None else bool(is_dir)
 
     def _normal_base(self):
         """정규화한 ``base_dir`` (항목마다 다시 계산하지 않게 기억해 둔다)."""
@@ -437,14 +456,19 @@ class FavoritesStore:
         return removed
 
     def entries(self, category):
-        """``[(표시이름, 원본경로)]`` 목록(이름순)."""
+        """``[(표시이름, 원본경로)]`` 목록(이름순).
+
+        이름을 읽는 것도 안전장치를 거친다 — 멈춘 저장소에서는 빈 목록이다
+        (실측: 안 거쳤을 때 27.00초).
+        """
         directory = self.category_dir(category)
-        if not os.path.isdir(directory):
+        names = safety.safe_call(_scan_names, directory, [])
+        if not names:
             return []
         index = self._load_index()
         return [
             (name, self._target_of(os.path.join(directory, name), index))
-            for name in sorted(os.listdir(directory))
+            for name in names
         ]
 
     def items(self, category):
@@ -462,10 +486,11 @@ class FavoritesStore:
         """
         target = abspath(path)
         directory = self.category_dir(category)
-        if not os.path.isdir(directory):
+        names = safety.safe_call(_scan_names, directory, [])
+        if not names:
             return None
         index = self._load_index() if _index is None else _index
-        for name in sorted(os.listdir(directory)):
+        for name in names:
             link = os.path.join(directory, name)
             if self._target_of(link, index) == target:
                 return link
@@ -537,11 +562,26 @@ class FavoritesStore:
         # 원본을 되찾을 수 없는 경우를 위한 보조 수단인데, 우클릭 "이름 변경"
         # 으로 링크 이름이 바뀌면 낡은 매핑이 그대로 남는다. 그것을 먼저 믿으면
         # 다른 항목의 원본을 돌려주고, 저장 모드에서는 엉뚱한 파일을 덮어쓴다.
-        if os.path.islink(link):
-            return self._follow_links(link)
+        # 링크를 푸는 일 전체를 **한 번의 안전한 호출**로 감싼다. 안쪽은
+        # readlink 뿐이라 원본이 죽어 있어도 안 멈추지만, **저장소 자신이**
+        # 멈추면 그 readlink 에서 매달린다 — 파일을 고른 직후 자동으로 도는
+        # 길이라 그대로 GUI 지연이 됐다(실측 18.00초). 못 풀면 인덱스로 간다.
+        followed = safety.safe_call(self._follow_or_none, link, None)
+        if followed is not None:
+            return followed
         recorded = index.get(os.path.normpath(link))
         if recorded:
             return recorded
+        return safety.safe_call(self._follow_links, link, link)
+
+    def _follow_or_none(self, link):
+        """링크면 원본을, 링크가 아니면 ``None``.
+
+        :meth:`_target_of` 가 "링크 우선, 없으면 인덱스" 순서를 지키려면
+        **링크가 아니었다**를 구분해야 한다.
+        """
+        if not os.path.islink(link):
+            return None
         return self._follow_links(link)
 
     def _follow_links(self, path):
@@ -644,10 +684,8 @@ class FavoritesStore:
         호출자들이 고쳐서 다시 저장하는 패턴이라 캐시 원본을 주면 안 된다.
         """
         path = self._index_path()
-        try:
-            stat = os.stat(path)
-            stamp = (stat.st_mtime_ns, stat.st_size)
-        except OSError:
+        stamp = safety.safe_call(_index_stamp, path, None)
+        if stamp is None:
             self._index_cache = None
             return {}
         cached = self._index_cache

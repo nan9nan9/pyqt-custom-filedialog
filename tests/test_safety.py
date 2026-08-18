@@ -2924,7 +2924,9 @@ def test_hung_storage_does_not_freeze_the_dialog(qapp, monkeypatch, tmp_path):
 
     # 그 자리를 만지면 돌아오지 않는 것처럼 흉내 낸다
     delay = 3.0
-    for name in ("scandir", "listdir"):
+    # ``stat`` 까지 물려야 **인덱스 파일 읽기**가 검사된다 — 그것을 빼먹어서
+    # 그 보호를 되돌려도 테스트가 통과했다(실측으로 3.00초 매달리는데도).
+    for name in ("scandir", "listdir", "stat"):
         real = getattr(os, name)
 
         def slow(path, *args, _real=real, **kwargs):
@@ -2977,6 +2979,35 @@ def test_hung_storage_does_not_freeze_the_dialog(qapp, monkeypatch, tmp_path):
     spent = time.perf_counter() - started
     assert spent < budget, "최근 목록을 읽는 데 %.2f초 걸렸다" % spent
     assert items == []
+
+    # 파일을 고른 직후 도는 **링크 -> 원본 되돌리기**도 마찬가지다. 사용자가
+    # 즐겨찾기 링크를 고르면 늘 이 길로 온다(실측: 안 거쳤을 때 18.00초).
+    link = hung / "fav" / "즐겨찾기" / "고른파일.csv"
+    os.symlink(str(target), str(link))
+    started = time.perf_counter()
+    restored = favorites.resolve_all([str(link)])
+    spent = time.perf_counter() - started
+    assert spent < budget, "링크를 되돌리는 데 %.2f초 걸렸다" % spent
+    assert restored == [str(link)], "못 풀면 준 경로를 그대로 돌려줘야 한다"
+
+    # 분류 폴더 판정은 **목록의 항목마다** 불린다(아이콘 제공자) — 항목 하나에
+    # 매달리면 목록 전체가 그만큼 늦는다(실측: 안 거쳤을 때 6.00초).
+    started = time.perf_counter()
+    favorites.is_category_dir(str(hung / "fav" / "즐겨찾기"))
+    spent = time.perf_counter() - started
+    assert spent < budget, "분류 판정에 %.2f초 걸렸다" % spent
+
+    # 분류 항목 읽기도(실측: 안 거쳤을 때 27.00초)
+    started = time.perf_counter()
+    assert favorites.entries("즐겨찾기") == []
+    spent = time.perf_counter() - started
+    assert spent < budget, "분류 항목 읽기에 %.2f초 걸렸다" % spent
+
+    # 이미 등록됐는지 보는 길도 마찬가지다(분류 폴더 목록 + 인덱스 파일).
+    started = time.perf_counter()
+    assert favorites.contains("즐겨찾기", str(target)) is False
+    spent = time.perf_counter() - started
+    assert spent < budget, "등록 여부 확인에 %.2f초 걸렸다" % spent
 
     # 물러섰을 뿐 창은 살아 있다
     assert favorites.categories() == []
