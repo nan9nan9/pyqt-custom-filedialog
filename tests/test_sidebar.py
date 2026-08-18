@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 import tempfile
 import time
 
@@ -663,3 +664,83 @@ def test_stores_are_scanned_once_per_open(qapp, tmp_path, monkeypatch):
     _spin(qapp, 200)
     assert len(scans) == 2, scans
     dialog.close()
+
+
+_PERSIST_REPRO = """
+import os, sys, tempfile
+from qtpy.QtCore import QSettings, QTimer
+for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+    QSettings.setPath(_fmt, QSettings.Scope.UserScope, os.environ["SETTINGS_DIR"])
+from qtpy.QtWidgets import QApplication
+from custom_file_dialog import CustomFileDialog, FavoritesStore
+
+app = QApplication([])
+favorites = FavoritesStore(base_dir=os.path.join(os.environ["STORE_DIR"], "fav"))
+favorites.add_category("즐겨찾기")
+dialog = CustomFileDialog(
+    None, mode="open_file", directory=tempfile.mkdtemp(), favorites=favorites
+)
+dialog.show()
+if os.environ["HOW"] == "hide":
+    # 감추고 **이벤트 루프 없이** 끝낸다 — aboutToQuit 이 안 도는 길이라
+    # hideEvent 쪽 방어만 겨눈다.
+    dialog.hide()
+else:
+    # 띄운 채로 앱을 정상 종료한다 — aboutToQuit 쪽 방어만 겨눈다.
+    QTimer.singleShot(100, app.quit)
+    (app.exec_ if hasattr(app, "exec_") else app.exec)()
+"""
+
+
+@pytest.mark.parametrize("how", ["hide", "quit"])
+def test_our_places_never_reach_the_saved_settings_file(tmp_path, how):
+    """**끝까지 가서** 확인한다 — 저장된 설정 파일에 우리 경로가 없다.
+
+    Qt 는 사이드바를 다이얼로그가 사라질 때 저장하는데, 그 쓰기는 프로세스가
+    끝날 때 일어난다. 그래서 같은 프로세스 안에서는 무엇을 재도 늘 0 이 나온다
+    (실제로 방어를 빼고 재 봐도 0 이었다 — 그 테스트는 아무것도 못 잡는다).
+    자식 프로세스로 끝까지 가야 한다.
+
+    ``done()`` 에서만 빼고 있어서 **감추기(hide)** 와 **띄운 채 앱 종료** 두 길로
+    우리 경로가 그대로 저장됐다. 그 두 길을 여기서 지킨다.
+    """
+    import subprocess
+
+    import custom_file_dialog
+
+    script = tmp_path / "persist.py"
+    script.write_text(_PERSIST_REPRO, encoding="utf-8")
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    # 저장소 **경로**는 ASCII 로 둔다 — 설정 파일은 비-ASCII 를 ``\xed\x95\x9c``
+    # 처럼 이스케이프해 적으므로, 한글 경로로 두면 문자열 비교가 늘 빗나가
+    # 결함이 있어도 통과한다(실제로 그렇게 만들어 놓고 한참 못 봤다).
+    # 분류 이름은 한글 그대로다 — 문제를 일으키는 것이 그쪽이다.
+    store_dir = tmp_path / "store"
+    store_dir.mkdir()
+
+    env = dict(
+        os.environ,
+        QT_QPA_PLATFORM="offscreen",
+        PYTHONPATH=os.path.dirname(os.path.dirname(custom_file_dialog.__file__)),
+        SETTINGS_DIR=str(settings_dir),
+        STORE_DIR=str(store_dir),
+        HOW=how,
+    )
+    try:
+        done = subprocess.run(
+            [sys.executable, str(script)], env=env,
+            capture_output=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip("Qt 시작이 제한 시간 안에 안 끝났다 — 머신이 바쁘다")
+    assert done.returncode == 0, done.stderr.decode(errors="replace")[-500:]
+
+    saved = settings_dir / "QtProject.conf"
+    if not saved.exists():
+        pytest.skip("이 Qt 는 사이드바를 저장하지 않는다 — 관측 불가")
+    text = saved.read_text(errors="replace")
+    assert "shortcuts" in text, "사이드바가 저장되지 않았다 — 관측이 안 된다"
+    assert str(store_dir) not in text, (
+        "우리 저장소 경로가 전역 설정에 저장됐다 (%s)" % how
+    )

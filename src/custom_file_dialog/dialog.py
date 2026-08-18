@@ -21,7 +21,7 @@
 import os
 import time
 
-from qtpy.QtWidgets import QFileDialog, QFileSystemModel
+from qtpy.QtWidgets import QApplication, QFileDialog, QFileSystemModel
 
 from . import history, safety
 from .debuglog import enable_debug
@@ -411,6 +411,13 @@ class CustomFileDialog(QFileDialog):
                 install_hooks(self, self._places, current, scanned)
         self._watch_navigation()
 
+        # **띄운 채로 앱이 끝나는 길**도 있다. 그때도 Qt 는 사이드바를 저장하므로
+        # 나가기 직전에 뺀다(실측: 그 경로로 끝낸 프로세스에서 1건이 남았다).
+        # 받는 쪽이 이 다이얼로그라 파괴되면 연결도 함께 끊긴다.
+        application = QApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self._strip_our_places)
+
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
 
@@ -467,20 +474,38 @@ class CustomFileDialog(QFileDialog):
                     )
 
     def done(self, result):         # noqa: N802 (Qt 시그니처)
-        """닫히기 전에 **우리 사이드바 항목을 빼 둔다.**
+        """확정·취소로 닫을 때 우리 사이드바 항목을 빼 둔다."""
+        self._strip_our_places()
+        super().done(result)
 
-        Qt 는 사이드바 목록을 다이얼로그가 사라질 때 사용자 전역 설정에 저장
-        한다 — 그 사용자의 **모든 Qt 앱**이 함께 쓰는 파일이다. 우리 분류 폴더는
-        이름이 반드시 비-ASCII 라 거기 남으면 Qt5/Qt6 왕복마다 경로가 배로
-        늘어나고, 끝에는 그 사용자의 파일 대화상자가 전부 죽는다. 자세한 이유는
-        :meth:`~custom_file_dialog.places.Places.without_our_places` 에 적었다.
+    def hideEvent(self, event):     # noqa: N802 (Qt 시그니처)
+        """감출 때도 뺀다 — ``done()`` 을 거치지 않는 길이 있다.
 
-        다시 :meth:`showEvent` 가 불리면 그대로 되돌려 놓으므로, 이 다이얼로그를
-        닫았다 다시 여는 쓰임에도 사이드바는 그대로다.
+        ``hide()`` 만 하고 다이얼로그를 들고 있는 앱이 흔하다(다시 쓰려고
+        숨겨 둔다). 그 상태로 앱이 끝나면 Qt 가 그때 사이드바를 저장하는데,
+        ``done()`` 에서만 빼고 있어서 **우리 경로가 그대로 저장됐다**
+        (실측: hide 로 끝낸 프로세스에서 1건).
         """
+        self._strip_our_places()
+        super().hideEvent(event)
+
+    def _strip_our_places(self):
+        """우리가 얹은 사이드바 항목을 뺀다(남의 항목은 그대로).
+
+        Qt 는 사이드바 목록을 다이얼로그가 사라질 때 사용자 **전역 설정**에
+        저장한다 — 그 사용자의 **모든 Qt 앱**이 함께 쓰는 파일이다. 우리 분류
+        폴더는 이름이 반드시 비-ASCII 라 거기 남으면 Qt5/Qt6 왕복마다 경로가
+        배로 늘어나고, 끝에는 그 사용자의 파일 대화상자가 전부 죽는다. 자세한
+        이유는 :meth:`~custom_file_dialog.places.Places.without_our_places` 에
+        적었다.
+
+        다시 :meth:`showEvent` 가 불리면 그대로 되돌려 놓으므로, 닫았다 다시
+        여는 쓰임에도 사이드바는 그대로다. 여러 번 불러도 같다.
+        """
+        if self._places_stripped:
+            return
         self.setSidebarUrls(self._places.without_our_places(self.sidebarUrls()))
         self._places_stripped = True
-        super().done(result)
 
     def _watch_navigation(self):
         """폴더 한 번 옮기는 데 얼마나 걸리는지 DEBUG 로 남긴다.
