@@ -36,6 +36,33 @@ def default_recent_dir():
     return os.path.join(default_storage_dir(), DEFAULT_RECENT_DIRNAME)
 
 
+def _scan_links(directory):
+    """링크 경로들을 **최신순**으로(만든 시각 = 링크 자신의 수정 시각).
+
+    목록과 시각 읽기를 **한 번의 호출 안에서** 끝낸다 — 나눠 놓으면 바깥에서
+    도는 동안 일어나는 I/O 가 타임아웃 밖으로 새어 나간다. ``scandir`` 의
+    항목은 그 자리에서 stat 값을 들고 있어 왕복도 덜 든다.
+    """
+    try:
+        with os.scandir(directory) as entries:
+            found = [
+                (entry.path, entry.stat(follow_symlinks=False).st_mtime)
+                for entry in entries
+            ]
+    except OSError:
+        return []
+    found.sort(key=lambda item: item[1], reverse=True)
+    return [path for path, _mtime in found]
+
+
+def _count_entries(directory):
+    """항목 수만. 정렬하지 않으므로 항목마다의 stat 이 붙지 않는다."""
+    try:
+        return len(os.listdir(directory))
+    except OSError:
+        return 0
+
+
 class RecentStore(FavoritesStore):
     """최근에 고른 파일을 자동으로 모아 두는 저장소.
 
@@ -92,6 +119,15 @@ class RecentStore(FavoritesStore):
         if self.max_items <= 0 or not path:
             return None
 
+        # **저장소 자체가 닿는 자리인지 먼저 본다.** 이 함수는 파일을 고른
+        # **직후** 자동으로 불리고, 저장소의 기본 자리는 네트워크 홈이다.
+        # 안쪽에서 하는 일이 여럿이라(있던 링크 찾기 · 링크 만들기 · 인덱스
+        # 쓰기 · 넘친 것 자르기) 저마다 멈추면 그 합만큼 GUI 가 잡힌다
+        # (실측: 멈춘 저장소에서 18.04초. 확인 한 번을 앞에 두니 0.3초).
+        # 닿지 않으면 기록을 **거른다** — 고른 결과는 그대로 나간다.
+        if not safety.is_reachable(self.base_dir):
+            return None
+
         target = abspath(path)
         # 고른 파일이 죽은 원격 마운트일 수 있다. 평범한 isfile 은 그런 자리에서
         # 돌아오지 않아, 확정 직후의 기록만으로 GUI 가 멈춘다(D 상태).
@@ -133,14 +169,16 @@ class RecentStore(FavoritesStore):
 
     # --------------------------------------------------------------- 조회
     def links(self, category=None):
-        """최신순 링크 경로 목록."""
+        """최신순 링크 경로 목록.
+
+        **저장소 폴더를 읽는 것도 안전장치를 거친다.** 이 저장소의 기본 자리는
+        ``~/.config`` — 이 라이브러리가 상정하는 네트워크 홈 위이고, 이 함수는
+        파일을 고른 **직후**에도 불린다(:meth:`record` 안의 정리). 맨 ``listdir``
+        + 링크마다 ``lstat`` 이라, 홈이 멈추면 그 자리에서 GUI 가 잡혔다.
+        멈추면 빈 목록으로 물러선다.
+        """
         directory = self.category_dir(category or self.name)
-        if not os.path.isdir(directory):
-            return []
-        links = [os.path.join(directory, n) for n in os.listdir(directory)]
-        # 링크 자신의 수정 시각 = 만든 시각. 최신이 앞으로 오게 내림차순.
-        links.sort(key=self._link_mtime, reverse=True)
-        return links
+        return safety.safe_call(_scan_links, directory, [])
 
     def entries(self, category=None):
         """``[(표시이름, 원본경로)]`` 최신순."""
@@ -172,10 +210,7 @@ class RecentStore(FavoritesStore):
         라 그 왕복이 그대로 GUI 지연이 된다(실측: 목록 100개일 때 lstat
         100회가 더 붙었다).
         """
-        try:
-            return len(os.listdir(self.category_dir(self.name)))
-        except OSError:
-            return 0
+        return safety.safe_call(_count_entries, self.category_dir(self.name), 0)
 
     def _link_mtime(self, link):
         """링크 자신의 수정 시각(대상이 아니라). 없으면 0."""

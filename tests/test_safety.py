@@ -27,6 +27,7 @@ from custom_file_dialog import (
     to_urls,
     validate_paths,
 )
+from custom_file_dialog import safety
 from custom_file_dialog import mounts as safety_mounts
 from custom_file_dialog import reach as safety_reach
 from custom_file_dialog import dialog as dialog_module
@@ -2897,3 +2898,86 @@ def test_probe_budget_follows_the_timeout(monkeypatch, tmp_path):
         assert seen[1] == pytest.approx(0.75)
     finally:
         safety.clear_cache()
+
+
+def test_hung_storage_does_not_freeze_the_dialog(qapp, monkeypatch, tmp_path):
+    """**저장소가 멈춰도** 여닫기와 확정이 제한 시간 안에 끝난다.
+
+    이 라이브러리가 막겠다는 사고를 정작 제 저장소에서 냈다. 저장소의 기본
+    자리는 ``~/.config`` — 상정하는 **네트워크 홈** 위인데, 분류 목록과 최근
+    파일 기록을 맨 ``os.listdir`` / ``os.path.isdir`` 로 읽고 있었다. 홈이
+    멈추면 다이얼로그를 여는 것만으로 GUI 가 잡혔다(실측: ``path_timeout=1.0``
+    을 주고도 생성 9.04초, 파일을 고른 직후의 기록은 18.04초).
+
+    멈춘 저장소에서는 **빈 목록으로 물러선다** — 사이드바에 분류가 안 보일 뿐
+    창은 뜨고, 고른 결과는 그대로 나간다.
+    """
+    from custom_file_dialog import CustomFileDialog, FavoritesStore, RecentStore
+
+    hung = tmp_path / "hung"
+    (hung / "fav" / "즐겨찾기").mkdir(parents=True)
+    (hung / "recent" / "최근 파일").mkdir(parents=True)
+    work = tmp_path / "작업"
+    work.mkdir()
+    target = work / "고른파일.csv"
+    target.write_text("x")
+
+    # 그 자리를 만지면 돌아오지 않는 것처럼 흉내 낸다
+    delay = 3.0
+    for name in ("scandir", "listdir"):
+        real = getattr(os, name)
+
+        def slow(path, *args, _real=real, **kwargs):
+            if str(path).startswith(str(hung)):
+                time.sleep(delay)
+            return _real(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, name, slow)
+    real_isdir = os.path.isdir
+
+    def slow_isdir(path, *args, **kwargs):
+        if str(path).startswith(str(hung)):
+            time.sleep(delay)
+        return real_isdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "isdir", slow_isdir)
+
+    # 원격으로 보이게 해야 안전장치가 개입한다
+    monkeypatch.setattr(
+        safety_mounts, "iter_mounts",
+        lambda refresh=False: [("/", "ext4", "/dev/sda1"),
+                               (str(hung), "nfs", "서버:/vol")],
+    )
+    safety.configure(timeout=1.0)
+    safety.clear_cache()
+
+    favorites = FavoritesStore(base_dir=str(hung / "fav"), create=False)
+    recent = RecentStore(base_dir=str(hung / "recent"), create=False)
+
+    budget = delay - 0.5        # 한 번이라도 멈춘 호출을 기다렸으면 넘는다
+    started = time.perf_counter()
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(work),
+        favorites=favorites, recent=recent, path_timeout=1.0,
+    )
+    dialog.show()
+    qapp.processEvents()
+    spent = time.perf_counter() - started
+    assert spent < budget, "다이얼로그를 여는 데 %.2f초 걸렸다" % spent
+
+    started = time.perf_counter()
+    recent.record(str(target))          # 파일을 고른 **직후** 자동으로 도는 길
+    spent = time.perf_counter() - started
+    assert spent < budget, "최근 파일 기록에 %.2f초 걸렸다" % spent
+
+    # 목록을 읽어 가는 공개 API 도 마찬가지다 — 앱이 직접 부르는 길이다.
+    # (위의 record 는 앞의 도달 확인에서 걸러지므로 이쪽을 따로 겨눈다.)
+    started = time.perf_counter()
+    items = recent.items()
+    spent = time.perf_counter() - started
+    assert spent < budget, "최근 목록을 읽는 데 %.2f초 걸렸다" % spent
+    assert items == []
+
+    # 물러섰을 뿐 창은 살아 있다
+    assert favorites.categories() == []
+    dialog.done(0)

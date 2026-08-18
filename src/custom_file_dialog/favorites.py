@@ -221,6 +221,23 @@ def _safe_name(name):
     return text
 
 
+def _scan_dirs(directory):
+    """그 폴더 **안의 폴더 이름**들(이름순). 없으면 빈 목록.
+
+    ``listdir`` 뒤에 이름마다 ``isdir`` 을 부르지 않는다 — 이름 수만큼 stat 이
+    붙고, 네트워크 저장소에서는 그 하나하나가 서버 왕복이다. ``scandir`` 은
+    대개 디렉터리 항목에 들어 있는 종류를 그대로 쓴다.
+
+    **한 번의 호출 안에서 다 읽는다.** 반쯤 게으른 이터레이터를 돌려주면
+    바깥에서 도는 동안 일어나는 I/O 가 타임아웃 밖으로 새어 나간다.
+    """
+    try:
+        with os.scandir(directory) as entries:
+            return sorted(entry.name for entry in entries if entry.is_dir())
+    except OSError:
+        return []
+
+
 class FavoritesStore:
     """즐겨찾기 분류를 심볼릭 링크 폴더로 관리한다.
 
@@ -256,14 +273,19 @@ class FavoritesStore:
 
     # ------------------------------------------------------------- 분류
     def categories(self):
-        """분류 이름 목록(이름순)."""
-        if not os.path.isdir(self.base_dir):
-            return []
-        return sorted(
-            name
-            for name in os.listdir(self.base_dir)
-            if os.path.isdir(os.path.join(self.base_dir, name))
-        )
+        """분류 이름 목록(이름순).
+
+        **저장소 폴더를 읽는 것도 안전장치를 거친다.** 이 저장소의 기본 자리는
+        ``~/.config`` — 이 라이브러리가 상정하는 **네트워크 홈** 위다. 그런데
+        여기를 맨 ``os.listdir`` 로 읽고 있어서, 홈이 멈추면 다이얼로그를 여는
+        것만으로 GUI 가 그대로 잡혔다(실측: ``path_timeout=1.0`` 을 주고도
+        다이얼로그 생성에 9.04초). 이 라이브러리가 막겠다는 바로 그 사고를
+        정작 제 저장소에서 냈다.
+
+        멈추면 **빈 목록**으로 물러선다 — 사이드바에 분류가 안 보일 뿐 창은
+        뜬다. 이 패키지가 다른 곳에서 지키는 규칙과 같다.
+        """
+        return safety.safe_call(_scan_dirs, self.base_dir, [])
 
     def category_dir(self, category):
         """분류 폴더의 경로(없어도 경로만 계산해서 반환)."""
