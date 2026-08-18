@@ -314,6 +314,7 @@ class CustomFileDialog(QFileDialog):
             self._settings_key = settings_key
             self._sidebar_width = sidebar_width
             self._sidebar_fitted = False
+            self._places_stripped = False   # done() 이 우리 항목을 빼 갔는가
             self._path_timeout = None if path_timeout is None else float(path_timeout)
             # 위젯과 같은 규칙으로 조립한다(True = 기본 위치에 자동 생성 등).
             # 다이얼로그는 뜬 뒤 설정이 바뀌지 않으므로 한 번 만들고 만다.
@@ -388,13 +389,15 @@ class CustomFileDialog(QFileDialog):
             # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
             current = self.directory().absolutePath()
             with step("사이드바 목록 만들기"):
-                self._apply_sidebar_urls()
+                # 저장소는 **여기서 한 번만** 훑고, 그 결과를 아래 훅에도 넘긴다.
+                scanned = self._places.scan_categories()
+                self._apply_sidebar_urls(scanned)
 
             # 사이드바 표시 · 링크 추적 · 우클릭 메뉴 · 차단 경로 방어를 한 번에
             from .hooks import install_hooks
 
             with step("훅 설치(가드 · 메뉴 · 사이드바 표시)"):
-                install_hooks(self, self._places, current)
+                install_hooks(self, self._places, current, scanned)
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
 
@@ -434,7 +437,14 @@ class CustomFileDialog(QFileDialog):
         경계를 끌어 조절한 뒤 창을 다시 열어도 그 폭이 유지된다.
         """
         with step("다이얼로그 show()"):
-            self._apply_sidebar_urls()  # done() 에서 빼 두었으면 다시 얹는다
+            if self._places_stripped:
+                # done() 이 빼 갔을 때만 다시 얹는다. 처음 보일 때는 생성자가
+                # 이미 얹어 두었으므로 여기서 또 만들면 저장소를 헛되이 한 번
+                # 더 훑는다(네트워크 홈에서는 그것이 그대로 지연이다).
+                # 다시 만드는 것이 맞다 — 닫혀 있는 동안 우클릭 메뉴로 즐겨찾기가
+                # 바뀌었을 수 있다.
+                self._apply_sidebar_urls()
+                self._places_stripped = False
             super().showEvent(event)
             if not self._sidebar_fitted:
                 # 스플리터가 아직 자리 잡기 전이면 다음 show 때 다시 시도
@@ -456,11 +466,16 @@ class CustomFileDialog(QFileDialog):
         닫았다 다시 여는 쓰임에도 사이드바는 그대로다.
         """
         self.setSidebarUrls(self._places.without_our_places(self.sidebarUrls()))
+        self._places_stripped = True
         super().done(result)
 
-    def _apply_sidebar_urls(self):
-        """우리 사이드바 목록을 얹는다(얹을 게 없으면 그대로 둔다)."""
-        urls = self._places.sidebar_urls(self.directory().absolutePath())
+    def _apply_sidebar_urls(self, scanned=None):
+        """우리 사이드바 목록을 얹는다(얹을 게 없으면 그대로 둔다).
+
+        ``scanned`` 를 주면 저장소를 다시 훑지 않는다
+        (:meth:`~custom_file_dialog.places.Places.scan_categories`).
+        """
+        urls = self._places.sidebar_urls(self.directory().absolutePath(), scanned)
         if urls is not None:
             self.setSidebarUrls(to_urls(urls))
 

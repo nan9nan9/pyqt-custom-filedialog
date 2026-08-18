@@ -263,7 +263,42 @@ class Places:
             pass
 
     # ------------------------------------------------------------ 사이드바
-    def sidebar_urls(self, current=None):
+    def scan_categories(self):
+        """``[(저장소, 분류 URL 목록)]`` — **저장소를 한 번만 훑는다.**
+
+        분류를 알려면 저장소 폴더를 읽어야 하는데, 이 라이브러리가 상정하는
+        저장소 자리는 **네트워크 홈**이라 그 읽기 하나가 그대로 서버 왕복이다.
+        그런데 한 번 여는 동안 그것을 묻는 곳이 셋이다(사이드바 목록 · 표시용
+        아이콘 · 다시 보일 때). 각자 부르면 왕복이 그만큼 는다 — 실측으로 한 번
+        여는 데 저장소 훑기가 4회 돌았다.
+
+        그래서 훑은 결과를 **값으로 주고받는다.** :meth:`sidebar_urls` 와
+        :meth:`sidebar_marks` 는 이 값을 받으면 다시 훑지 않는다. 캐시로 두지
+        않는 이유는 분류가 도중에 바뀌기 때문이다(우클릭 메뉴로 즐겨찾기를
+        더하거나 뺀다) — 언제 버릴지 정하는 것보다, 필요한 쪽이 한 번 훑어
+        넘기는 편이 단순하고 틀릴 구석이 없다.
+        """
+        scanned = []
+        for store in self.stores():
+            with step("저장소 훑기: %s" % os.path.basename(store.base_dir)):
+                found = store.sidebar_urls()
+                log("분류 %d개", len(found))
+            scanned.append((store, found))
+        return scanned
+
+    @staticmethod
+    def _fills_sidebar_of(scanned, sidebar_base):
+        """이 구성이 사이드바를 **우리가 채우는가** — :meth:`sidebar_urls` 의 판정.
+
+        목록을 다 만들어 ``is None`` 인지 보는 것으로도 알 수 있지만, 그러려고
+        합치고 중복을 걸러 내면 같은 일을 두 번 한다. 판정만 떼어 둔다.
+        """
+        return sidebar_base is not None or any(found for _store, found in scanned)
+
+    def _fills_sidebar(self, scanned):
+        return self._fills_sidebar_of(scanned, self.sidebar_base)
+
+    def sidebar_urls(self, current=None, scanned=None):
         """다이얼로그에 넘길 최종 사이드바 목록(얹을 게 없으면 None).
 
         순서는 **홈 → 현재 위치 → 최근 파일 → 북마크(즐겨찾기)** 다. 고정된
@@ -274,18 +309,17 @@ class Places:
             current: 다이얼로그가 열리는 폴더. ``sidebar_urls`` 로 기준 목록을
                 직접 주지 않았을 때만 "현재 위치" 항목으로 붙는다(직접 준
                 목록은 그대로 존중한다). 홈과 같으면 겹치지 않게 하나만 남는다.
+            scanned: :meth:`scan_categories` 결과. 주면 저장소를 다시 훑지
+                않는다(네트워크 홈에서는 그 훑기가 곧 지연이다).
         """
         with step("사이드바 항목 모으기"):
-            extra = []
-            for store in self.stores():
-                # 저장소마다 분류 폴더를 훑는다 — 저장소가 네트워크 홈에 있으면
-                # 여기가 왕복이라, 저장소별로 따로 잰다.
-                with step("저장소 훑기: %s" % os.path.basename(store.base_dir)):
-                    found = store.sidebar_urls()
-                    log("분류 %d개", len(found))
-                extra += found
-            if not extra and self.sidebar_base is None:
+            if scanned is None:
+                scanned = self.scan_categories()
+            if not self._fills_sidebar(scanned):
                 return None                  # 손댈 것이 없다
+            extra = []
+            for _store, found in scanned:
+                extra += found
 
             if self.sidebar_base is not None:
                 base = to_urls(self.sidebar_base)
@@ -304,7 +338,7 @@ class Places:
         """제거가 막힌 위치 목록(정렬된 경로)."""
         return sorted(self._fixed)
 
-    def sidebar_marks(self, current=None):
+    def sidebar_marks(self, current=None, scanned=None):
         """사이드바에서 **표시만** 갈아 끼울 항목 — ``{경로: (이름, 아이콘)}``.
 
         홈은 이름을 그대로 두고 폴더 아이콘만 **집 모양**으로 바꾸고, 다이얼로그가
@@ -317,9 +351,13 @@ class Places:
                 같으면 사이드바에서 한 항목으로 합쳐지므로 홈 쪽만 남긴다.
                 ``sidebar_urls`` 로 기준 목록을 직접 준 경우에는 "현재 위치"
                 항목을 붙이지 않았으므로 무시한다.
+            scanned: :meth:`scan_categories` 결과. 주면 저장소를 다시 훑지
+                않는다(네트워크 홈에서는 그 훑기가 곧 지연이다).
         """
         marks = {}
-        if self.sidebar_urls(current) is None:
+        if scanned is None:
+            scanned = self.scan_categories()
+        if not self._fills_sidebar(scanned):
             return marks        # 사이드바를 우리가 채우지 않았으면 표시도 그대로
 
         home = abspath("~")
@@ -333,11 +371,11 @@ class Places:
         # 분류(★ 즐겨찾기 · 🕘 최근 파일)도 여기서 씌운다. 아이콘 제공자에
         # 맡기면 QUrlModel 이 파일시스템 통지를 받을 때마다 경로에서 아이콘을
         # 다시 읽어 폴더 아이콘으로 되돌아간다(모듈 설명 참고).
-        for store in self.stores():
+        for store, found in scanned:
             icon = self.category_icon(store)
             if icon is None:
                 continue
-            for url in store.sidebar_urls():
+            for url in found:
                 path = abspath(url_path(url))
                 if path:
                     marks[path] = (None, icon)

@@ -65,20 +65,22 @@ class _SidebarMarks(QStyledItemDelegate):
             option.icon = icon
 
 
-def mark_sidebar(dialog, places, current=None):
+def mark_sidebar(dialog, places, current=None, scanned=None):
     """사이드바의 홈에 집 아이콘을, 현재 위치 항목에 "현재 위치" 이름을 씌운다.
 
     Args:
         dialog: 대상 ``QFileDialog`` (Qt 자체 다이얼로그여야 한다).
         places: :class:`~custom_file_dialog.places.Places`.
         current: 다이얼로그가 열리는 폴더. None 이면 다이얼로그에서 읽는다.
+        scanned: :meth:`~custom_file_dialog.places.Places.scan_categories` 결과.
+            주면 저장소를 다시 훑지 않는다.
 
     Returns:
         걸어 둔 델리게이트. 씌울 것이 없거나 사이드바를 못 찾으면 None.
     """
     if current is None:
         current = dialog.directory().absolutePath()
-    marks = places.sidebar_marks(current)
+    marks = places.sidebar_marks(current, scanned)
     if not marks:
         return None
 

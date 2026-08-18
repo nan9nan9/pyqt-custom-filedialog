@@ -1009,6 +1009,19 @@ install_hooks(dialog, places)   # 사이드바 표시 + 링크 추적 + 우클�
 
 `FilePathEdit` 은 이것을 자동으로 겁니다.
 
+사이드바를 직접 채우면서 훅도 걸 때는 **저장소를 한 번만 훑도록** 그 결과를
+넘기세요. 분류를 알려면 저장소 폴더를 읽어야 하는데, 저장소가 네트워크 홈에
+있으면 그 읽기 하나가 그대로 서버 왕복입니다.
+
+```python
+scanned = places.scan_categories()              # 저장소를 여기서 한 번만 훑는다
+dialog.setSidebarUrls(to_urls(places.sidebar_urls(current, scanned)))
+install_hooks(dialog, places, current, scanned)
+```
+
+넘기지 않아도 동작은 같습니다 — 필요한 쪽이 스스로 훑을 뿐입니다.
+`CustomFileDialog` 은 이미 이렇게 합니다.
+
 ### 우클릭 메뉴
 
 **파일 목록**에서 파일이나 폴더를 우클릭하면 맨 위에 `즐겨찾기에 추가 ▸` 가 붙습니다.

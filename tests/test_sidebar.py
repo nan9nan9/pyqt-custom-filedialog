@@ -616,3 +616,50 @@ def test_dialog_leaves_no_trace_of_our_places_in_shared_qt_settings(qapp, tmp_pa
     _spin(qapp, 200)
     assert ours()
     dialog.close()
+
+
+def test_stores_are_scanned_once_per_open(qapp, tmp_path, monkeypatch):
+    """한 번 여는 동안 저장소 폴더를 **저장소마다 한 번만** 훑는다.
+
+    분류를 알려면 저장소 폴더를 읽어야 하는데, 이 라이브러리가 상정하는 저장소
+    자리는 **네트워크 홈**이라 그 읽기 하나가 그대로 서버 왕복이다. 그런데 그것을
+    묻는 곳이 셋이었다 — 사이드바 목록 · 표시용 아이콘(sidebar_marks) · 다시 보일
+    때(showEvent). 각자 부르는 바람에 한 번 여는 데 훑기가 **4회** 돌았다
+    (sidebar_marks 는 "우리가 채웠나" 판정에 한 번, 아이콘에 또 한 번 훑었다).
+
+    이제 생성자가 한 번 훑어 그 값을 훅까지 넘긴다.
+    """
+    from custom_file_dialog import CustomFileDialog
+
+    favorites = FavoritesStore(base_dir=str(tmp_path / "fav"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"))
+    work = tmp_path / "작업"
+    work.mkdir()
+    target = work / "a.csv"
+    target.write_text("x")
+    favorites.add("설계", str(target))
+    recent.record(str(target))
+
+    scans = []
+    real = FavoritesStore.sidebar_urls          # RecentStore 도 이것을 물려받는다
+    monkeypatch.setattr(
+        FavoritesStore, "sidebar_urls",
+        lambda self: (scans.append(self.base_dir), real(self))[1],
+    )
+
+    dialog = CustomFileDialog(
+        None, mode="open_file", directory=str(work),
+        favorites=favorites, recent=recent,
+    )
+    dialog.show()
+    _spin(qapp, 200)
+    assert len(scans) == 2, scans        # 저장소 2개 × 1회
+
+    # 닫았다 다시 열 때는 **다시 훑는다** — 그사이 우클릭 메뉴로 즐겨찾기가
+    # 바뀌었을 수 있고, done() 이 우리 항목을 빼 두었으므로 새로 얹어야 한다.
+    scans.clear()
+    dialog.done(0)
+    dialog.show()
+    _spin(qapp, 200)
+    assert len(scans) == 2, scans
+    dialog.close()

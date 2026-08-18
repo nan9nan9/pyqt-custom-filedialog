@@ -44,7 +44,7 @@ __all__ = [
 ]
 
 
-def install_hooks(dialog, places, current=None):
+def install_hooks(dialog, places, current=None, scanned=None):
     """다이얼로그에 사이드바 표시 · 링크 추적 · 메뉴 · 차단 경로 방어를 모두 건다.
 
     Args:
@@ -52,6 +52,9 @@ def install_hooks(dialog, places, current=None):
         places: :class:`~custom_file_dialog.places.Places`.
         current: 사이드바를 채울 때 쓴 "현재 위치". 주지 않으면 다이얼로그가
             지금 열려 있는 폴더를 쓴다.
+        scanned: :meth:`~custom_file_dialog.places.Places.scan_categories` 결과.
+            부르는 쪽이 이미 훑었으면 넘겨라 — 저장소가 네트워크 홈이면 그
+            훑기가 그대로 지연이다.
 
     사이드바 표시와 차단 방어는 **얹을 것이 없어도** 건다(차단은 전역 설정이,
     홈 아이콘은 사이드바 자체가 있으면 의미가 있다). 우클릭 메뉴는 보호 위치만
@@ -59,7 +62,7 @@ def install_hooks(dialog, places, current=None):
     있을 때만 건다.
     """
     guard_dialog(dialog)
-    mark_sidebar(dialog, places, current)
+    mark_sidebar(dialog, places, current, scanned)
 
     # 우클릭 메뉴는 보호 위치만 지정해도 필요하다(그 메뉴가 제거를 막는다)
     FavoritesMenus(dialog, places).install()
