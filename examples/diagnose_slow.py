@@ -1,10 +1,21 @@
-"""사이드바가 왜 느린지 **그 환경에서** 찍어 본다.
+"""다이얼로그가 왜 느린지 **그 환경에서** 찍어 본다.
 
     python examples/diagnose_slow.py
 
-데모와 같은 구성으로 다이얼로그를 열고, 사이드바 항목을 하나씩 눌러 가며
-**어느 단계에서 시간이 가는지** 나눠 잰다. 창은 실제로 뜨며(오프스크린이 아님),
-조작은 프로그램이 대신 한다.
+느린 자리는 둘로 나뉘고, 이 스크립트도 그렇게 나눠 잰다.
+
+1. **여는 순간** — 창이 처음 뜰 때까지. 파이썬·Qt 를 올리고, 저장된 설정과
+   표준 위치를 읽고, 아이콘 테마를 뒤지고, 시작 폴더를 나열한다. 이 값들은
+   Qt 가 프로세스 안에 캐시하므로 **새 프로세스에서 한 번** 재야 한다.
+   단계마다 무엇을 읽는지와, 맨 ``QFileDialog`` 대비 이 라이브러리가 더 쓰는
+   시간을 함께 찍는다 — 대개는 여는 비용의 대부분이 Qt 자신이다.
+2. **오갈 때** — 이미 열린 창에서 사이드바 항목을 누를 때. 데모와 같은 구성으로
+   하나씩 눌러 가며 잰다. 창은 실제로 뜨며(오프스크린이 아님) 조작은 프로그램이
+   대신 한다.
+
+Qt 가 사이드바 목록을 저장하는 파일이 비정상적으로 커졌는지도 함께 본다 —
+그 파일이 커지면 **이 라이브러리를 쓰지 않는 앱의** 파일 대화상자까지 느려지거나
+죽는다.
 
 클릭 한 번의 시간을 **우리 코드**와 **Qt** 로 갈라 잰다.
 
@@ -113,6 +124,228 @@ def _listing_cost(directory):
               " 아니라 **항목마다 서버에 묻는 비용** 이다." % (stat_all / max(read, 1e-6)))
 
 
+# 다이얼로그를 처음 여는 동안 지나가는 단계들. **새 프로세스에서** 순서대로
+# 재야 한다 — Qt 는 아이콘 테마 · 종류 정보 · 설정을 프로세스 안에 캐시해서,
+# 이미 돌던 프로세스에서 재면 두 번째부터는 전부 0 ms 로 나온다.
+_STARTUP_PROBE = """
+import os, sys, time
+sys.path.insert(0, %r)
+T = time.perf_counter()
+def mark(label):
+    global T
+    now = time.perf_counter()
+    print("%%s\t%%.6f" %% (label, now - T), flush=True)
+    T = now
+
+from qtpy.QtCore import QMimeDatabase, QSettings, QStandardPaths, QUrl
+from qtpy.QtWidgets import QApplication, QFileDialog
+mark("파이썬·Qt 모듈 import")
+
+app = QApplication([])
+mark("QApplication (플랫폼·테마 플러그인 · 폰트)")
+
+settings = QSettings(QSettings.Scope.UserScope, "QtProject")
+settings.value("FileDialog/shortcuts")
+mark("Qt 설정 읽기 (저장된 사이드바)")
+
+for name in ("HomeLocation", "DesktopLocation", "DocumentsLocation"):
+    scope = getattr(QStandardPaths, "StandardLocation", QStandardPaths)
+    QStandardPaths.writableLocation(getattr(scope, name))
+mark("표준 위치 (XDG user-dirs)")
+
+QMimeDatabase().mimeTypeForFile("x.txt", QMimeDatabase.MatchMode.MatchExtension)
+mark("종류 판별 첫 조회 (shared-mime-info)")
+
+from qtpy.QtWidgets import QFileIconProvider
+from qtpy.QtCore import QFileInfo
+provider = QFileIconProvider()
+provider.icon(QFileInfo(os.path.expanduser("~")))
+mark("아이콘 테마 첫 조회 (~/.icons · ~/.local/share/icons)")
+
+plain = QFileDialog(None)
+plain.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+plain.setDirectory(%r)
+mark("맨 QFileDialog 생성")
+
+plain.show()
+app.processEvents()
+mark("맨 QFileDialog show()")
+plain.done(0)
+
+from custom_file_dialog import CustomFileDialog, FavoritesStore, RecentStore
+favorites = FavoritesStore(base_dir=os.path.join(%r, "favorites"))
+recent = RecentStore(base_dir=os.path.join(%r, "recent"), max_items=10)
+mark("우리 저장소 열기 (즐겨찾기 · 최근 파일)")
+
+ours = CustomFileDialog(None, mode="open_file", directory=%r,
+                        favorites=favorites, recent=recent)
+mark("CustomFileDialog 생성 (사이드바 · 훅 · 안전 판정)")
+
+ours.show()
+app.processEvents()
+mark("CustomFileDialog show()")
+ours.done(0)
+"""
+
+
+def _startup_breakdown(work, storage):
+    """다이얼로그가 **처음 뜰 때** 어디에 시간이 가는지 단계별로.
+
+    같은 프로세스에서 재면 두 번째부터 전부 0 ms 가 나오므로 새로 띄워 잰다.
+    """
+    import subprocess
+
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+    script = _STARTUP_PROBE % (src, work, storage, storage, work)
+    print("\n여는 데 드는 시간을 단계로 나눠 본다 (새 프로세스에서 1회):")
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        print("    10분 안에 안 끝났다 — 어딘가 멈춰 있다(죽은 마운트가 유력).")
+        return
+    if done.returncode != 0:
+        print("    재지 못했다 (종료 %d):" % done.returncode)
+        print("    " + (done.stderr.strip().splitlines() or ["출력 없음"])[-1])
+        return
+
+    steps = []
+    for line in done.stdout.splitlines():
+        if "\t" in line:
+            label, seconds = line.rsplit("\t", 1)
+            steps.append((label, float(seconds) * 1000))
+    if not steps:
+        return
+
+    total = sum(ms for _label, ms in steps)
+    print("    %-46s %9s  %s" % ("단계", "걸린 시간", "몫"))
+    for label, ms in steps:
+        share = ms / total * 100 if total else 0
+        bar = "#" * int(round(share / 4))
+        print("    %-46s %7.0f ms  %4.1f%% %s" % (label, ms, share, bar))
+    print("    %-46s %7.0f ms" % ("합계", total))
+
+    table = dict(steps)
+    bare = table.get("맨 QFileDialog 생성", 0) + table.get("맨 QFileDialog show()", 0)
+    ours = (table.get("CustomFileDialog 생성 (사이드바 · 훅 · 안전 판정)", 0)
+            + table.get("CustomFileDialog show()", 0)
+            + table.get("우리 저장소 열기 (즐겨찾기 · 최근 파일)", 0))
+    print("\n    맨 QFileDialog %.0f ms  vs  이 라이브러리 %.0f ms  (차이 %+.0f ms)"
+          % (bare, ours, ours - bare))
+    if bare > ours:
+        print("    -> 여는 비용의 대부분은 **Qt 자신**이다. 이 라이브러리를 빼도 그만큼 든다.")
+
+    _explain_startup(table)
+
+
+# 단계 이름 -> (이 단계가 무엇을 읽는가, 느릴 때 할 것)
+_STARTUP_HINTS = {
+    "Qt 설정 읽기 (저장된 사이드바)": (
+        "~/.config/QtProject.conf",
+        "그 파일이 커져 있는지 보라. Qt5 와 Qt6 은 비-ASCII 경로의 인코딩을 "
+        "다르게 읽어, 두 판을 번갈아 쓰면 저장된 경로가 왕복마다 배로 늘어난다.",
+    ),
+    "표준 위치 (XDG user-dirs)": (
+        "~/.config/user-dirs.dirs",
+        "홈이 네트워크면 이 한 번이 그대로 왕복이다.",
+    ),
+    "아이콘 테마 첫 조회 (~/.icons · ~/.local/share/icons)": (
+        "~/.icons · ~/.local/share/icons · XDG_DATA_DIRS",
+        "홈이 네트워크면 테마 폴더를 뒤지는 것이 전부 왕복이다. "
+        "favorites_icon=False 로 제공자를 빼면 Qt 기본 동작이 된다.",
+    ),
+    "종류 판별 첫 조회 (shared-mime-info)": (
+        "/usr/share/mime",
+        "보통 로컬이라 빠르다. 여기가 느리면 mime 데이터베이스가 원격에 있다.",
+    ),
+    "QApplication (플랫폼·테마 플러그인 · 폰트)": (
+        "Qt 플러그인 · fontconfig 캐시",
+        "QT_QPA_PLATFORMTHEME=gtk3 면 GTK 초기화까지 여기 든다. "
+        "fontconfig 캐시가 네트워크 홈에 있으면 특히 느리다.",
+    ),
+    "우리 저장소 열기 (즐겨찾기 · 최근 파일)": (
+        "저장소 폴더",
+        "저장소가 네트워크 홈에 있다. base_dir 로 로컬 디스크를 주면 사라진다.",
+    ),
+    "파이썬·Qt 모듈 import": (
+        "파이썬 패키지 · Qt 공유 라이브러리",
+        "파이썬과 Qt 를 처음 올리는 값이라 어느 앱에서나 든다. 앱이 이미 Qt 를 "
+        "쓰고 있으면 이 값은 다이얼로그를 열 때 다시 들지 않는다.",
+    ),
+    "맨 QFileDialog 생성": (
+        "시작 폴더 · Qt 자신의 위젯 트리",
+        "이 라이브러리가 없어도 드는 값이다. 여기가 크면 원인은 우리가 아니라 "
+        "시작 폴더를 읽는 비용이다 — 아래 'ls vs Qt' 줄을 보라.",
+    ),
+    "맨 QFileDialog show()": (
+        "시작 폴더 나열 · 첫 그리기",
+        "이 라이브러리가 없어도 드는 값이다.",
+    ),
+    "CustomFileDialog 생성 (사이드바 · 훅 · 안전 판정)": (
+        "사이드바 경로들 · 마운트 표",
+        "여기만 크면 우리 몫이다. 사이드바 항목 수를 줄이거나 path_timeout 을 "
+        "낮춰 보라.",
+    ),
+    "CustomFileDialog show()": (
+        "사이드바 폭 맞춤 · 첫 그리기",
+        "사이드바 항목이 많을수록 는다.",
+    ),
+}
+
+
+# 이 시간을 넘긴 단계만 설명한다. 네트워크 홈에서는 왕복 한 번이 5~10 ms 라,
+# 50 ms 는 "몇 번 왕복했다"는 뜻이 된다.
+THRESHOLD_MS = 50
+
+
+def _explain_startup(steps):
+    """오래 걸린 단계마다 무엇을 읽는지와 할 일을 붙인다."""
+    slow = [(label, ms) for label, ms in steps.items() if ms >= THRESHOLD_MS]
+    if not slow:
+        print("    %d ms 를 넘는 단계가 없다 — 여는 것 자체는 문제가 아니다."
+              % THRESHOLD_MS)
+        return
+    print("\n    %d ms 를 넘은 단계마다 무엇을 읽는지:" % THRESHOLD_MS)
+    for label, ms in sorted(slow, key=lambda item: -item[1]):
+        reads, advice = _STARTUP_HINTS.get(label, ("(모름)", ""))
+        print("      · %s — %.0f ms" % (label, ms))
+        print("          읽는 곳: %s" % reads)
+        if advice:
+            print("          %s" % advice)
+
+
+def _settings_file_report():
+    """Qt 가 사이드바를 저장하는 파일이 비정상적으로 크지 않은지."""
+    from qtpy.QtCore import QSettings
+
+    path = QSettings(QSettings.Scope.UserScope, "QtProject").fileName()
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        print("\nQt 설정 파일: 아직 없다 (%s)" % path)
+        return
+    print("\nQt 설정 파일: %s — %s" % (path, _bytes(size)))
+    if size > 1 << 20:
+        print("    ** 비정상이다.** 파일 대화상자 상태만 담는 파일이 1MB 를 넘을")
+        print("       이유가 없다. 이 상태에서는 **이 라이브러리를 쓰지 않는 앱의**")
+        print("       파일 대화상자까지 여는 순간 느려지거나 죽는다(실측: 805MB 에서")
+        print("       맨 QFileDialog.show() 가 100% SIGSEGV). 저장된 목록만 지운다:")
+        print("           python -c \"from qtpy.QtCore import QSettings;"
+              " QSettings(QSettings.Scope.UserScope, 'QtProject')"
+              ".remove('FileDialog/shortcuts')\"")
+        print("       (그 파일의 다른 값은 그대로 남는다.)")
+
+
+def _bytes(size):
+    """사람이 읽는 크기. ``ls -l`` · ``du -b`` 와 맞추려고 1000 단위를 쓴다."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1000 or unit == "GB":
+            return "%d B" % size if unit == "B" else "%.1f %s" % (size, unit)
+        size /= 1000.0
+
+
 def _where(path, table):
     """그 경로가 어느 마운트에 얹혀 있는지 한 줄로."""
     mount = mounts.mount_for(path)
@@ -152,6 +385,9 @@ def main():
         # 데모의 "안전장치" 체크박스와 같은 설정
         safety.configure(guarded_roots=[os.path.join(work, "user")], min_depth=2)
     print("\n안전 설정: %s" % safety.settings())
+
+    _settings_file_report()
+    _startup_breakdown(work, storage)
 
     dialog, spent = _timed(lambda: CustomFileDialog(
         None, mode="open_file", directory=work, favorites=favorites, recent=recent
@@ -215,6 +451,9 @@ def main():
             print("    %7.1f ms  %s" % (spent * 1000, where))
 
     print("\n읽는 법:")
+    print("  · **여는 것 자체가 느리다면** 위의 '단계로 나눠 본다' 표를 보라.")
+    print("    거기서 가장 큰 줄이 원인이고, 그 줄마다 무엇을 읽는지 적어 두었다.")
+    print("    아래 표(사이드바 클릭)는 이미 열린 창을 **오갈 때**의 비용이라 다르다.")
     print("  · 'Qt' 가 대부분이면 -> 위의 'ls vs Qt' 줄을 보라. Qt 는 크기·종류·")
     print("    시각을 채우려고 **항목마다 stat** 한다(실측: 항목당 10회 이상,")
     print("    오갈 때마다 다시). ls 는 폴더만 읽으므로 빠른 것이 정상이고,")
