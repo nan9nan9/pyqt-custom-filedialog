@@ -36,6 +36,7 @@
 
 import logging
 import os
+import sys
 import time
 import unicodedata
 from contextlib import contextmanager
@@ -64,24 +65,44 @@ def enable_debug(enabled=True, stream=None, level=logging.DEBUG):
             수준만 올려라 — 여기서 핸들러를 붙이면 같은 줄이 두 번 찍힌다.
         level: 켤 때 로거에 줄 수준.
 
+    ``stream`` 을 바꿔 다시 부르면 **그쪽으로 옮겨 단다.** 끌 때는 우리가 단
+    핸들러만 뗀다(앱이 단 것은 건드리지 않는다).
+
     Returns:
         지금 켜져 있는지(bool).
     """
     global _handler
     if not enabled:
-        if _handler is not None:
-            logger.removeHandler(_handler)
-            _handler = None
-        logger.setLevel(logging.NOTSET)
+        _drop_handler()
+        # **NOTSET 이 아니라 WARNING 이다.** NOTSET 은 "부모에게 물어봐"라는 뜻
+        # 이라, 앱이 루트 로거를 DEBUG 로 두고 있으면 껐는데도 그대로 켜진 채였다
+        # (실측: enable_debug(False) 뒤에도 is_enabled() 가 True). 끄라고 했으면
+        # 꺼져야 한다 — 다시 켜려면 이 함수를 부르면 된다.
+        logger.setLevel(logging.WARNING)
         return False
 
     logger.setLevel(level)
+    if _handler is not None and _handler.stream is not _stream_of(stream):
+        _drop_handler()         # 찍을 곳을 바꿔 다시 켰다 -> 새로 단다
     if _handler is None and not logger.handlers:
         # 앱이 이미 핸들러를 달아 두었으면 그대로 쓴다(중복 출력 방지).
         _handler = logging.StreamHandler(stream)
         _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         logger.addHandler(_handler)
     return True
+
+
+def _stream_of(stream):
+    """``StreamHandler`` 가 실제로 쓸 스트림 (None 이면 표준 오류)."""
+    return sys.stderr if stream is None else stream
+
+
+def _drop_handler():
+    global _handler
+    if _handler is not None:
+        logger.removeHandler(_handler)
+        _handler.close()
+        _handler = None
 
 
 def is_enabled():

@@ -133,37 +133,6 @@ def _special_dir(path):
     return normal if normal in _special_dirs else ""
 
 
-# 아이콘 조회 계수 — "우리에게 몇 번 물었고, 그중 몇 번을 Qt 에 넘겼나".
-#
-# Qt 는 목록의 **항목마다**(화면에 안 보이는 것까지) 아이콘을 묻고, Qt 가 답을
-# 만들려면 종류를 알아내고 아이콘 테마 폴더를 뒤진다. 그 테마 폴더에 ``~/.icons``
-# 가 들어 있어서 **홈이 네트워크면 항목 하나하나가 서버 왕복**이다(실측: 항목당
-# 4.9ms · 홈 274개에 1.3초). 캐시가 그걸 막으라고 있는데, 그 환경에서 실제로
-# 듣고 있는지는 이 두 숫자로만 알 수 있다.
-#
-# 세는 것은 정수 두 번이라 꺼져 있어도 부담이 없다. 시간 재기만 켰을 때 한다.
-_asked = 0          # 우리에게 물어 온 횟수
-_missed = 0         # 캐시가 못 맞춰 Qt 에 넘긴 횟수
-_spent = 0.0        # Qt 에 물어 보느라 쓴 시간(초)
-
-
-def take_icon_stats():
-    """계수를 돌려주고 0 으로 되돌린다 — ``(물음, 조회, 초)``."""
-    global _asked, _missed, _spent
-    stats = (_asked, _missed, _spent)
-    _asked = _missed = 0
-    _spent = 0.0
-    return stats
-
-
-def log_icon_stats(label):
-    """계수를 한 줄로 남기고 되돌린다(물어 온 것이 없으면 아무것도 안 한다)."""
-    asked, missed, spent = take_icon_stats()
-    if asked and debuglog.is_enabled():
-        debuglog.log("아이콘: 물음 %d회 · Qt 조회 %d회 · %.1f ms (%s)",
-                     asked, missed, spent * 1000, label)
-
-
 def _cached(store, key, make):
     icon = store.get(key)
     if icon is None:
@@ -280,6 +249,22 @@ class CategoryIconProvider(QFileIconProvider):
 
     def __init__(self, store=None, icon=None):
         super().__init__()
+        # 조회 계수 — "우리에게 몇 번 물었고, 그중 몇 번을 Qt 에 넘겼나".
+        #
+        # Qt 는 목록의 **항목마다**(화면에 안 보이는 것까지) 아이콘을 묻고, 답을
+        # 만들려면 종류를 알아내고 아이콘 테마 폴더를 뒤진다. 그 목록에
+        # ``~/.icons`` 가 들어 있어서 **홈이 네트워크면 항목 하나하나가 서버
+        # 왕복**이다(실측: 항목당 4.9ms · 홈 274개에 1.3초). 캐시가 그걸 막으라고
+        # 있는데, 그 환경에서 실제로 듣고 있는지는 이 두 숫자로만 알 수 있다.
+        #
+        # **제공자마다 따로 센다.** 모듈에 두었더니 다이얼로그를 둘 열어 동시에
+        # 움직일 때 숫자가 섞였다 — 그럴듯해 보여서 틀린 줄도 모른다. 캐시 자체는
+        # 답이 같으므로 프로세스에 하나로 두는 것이 맞다(위 _plain_icons).
+        #
+        # 세는 것은 정수 두 번이라 꺼져 있어도 부담이 없다. 시간 재기만 켰을 때 한다.
+        self._asked = 0             # 우리에게 물어 온 횟수
+        self._missed = 0            # 캐시가 못 맞춰 Qt 에 넘긴 횟수
+        self._spent = 0.0           # Qt 에 물어 보느라 쓴 시간(초)
         self._entries = []          # [(저장소, 아이콘 또는 None)]
         self._bases = set()         # 저장소 뿌리들 — "/" 구분자로 통일한 절대 경로
         self._star = None
@@ -339,24 +324,37 @@ class CategoryIconProvider(QFileIconProvider):
         Qt 자신도 그 조회가 네트워크에서 비싸다고 보고 끄는 옵션
         (``DontUseCustomDirectoryIcons``)을 두고 있다.
         """
-        global _asked, _missed, _spent
-        _asked += 1
+        self._asked += 1
         key = self._icon_key(info)
         if key is not None:
             found = _plain_icons.get(key)
             if found is not None:
                 return found
 
-        _missed += 1
+        self._missed += 1
         if not debuglog.is_enabled():
             answer = super().icon(info)
         else:
             started = time.perf_counter()
             answer = super().icon(info)
-            _spent += time.perf_counter() - started
+            self._spent += time.perf_counter() - started
         if key is not None:
             _plain_icons[key] = answer
         return answer
+
+    def take_stats(self):
+        """계수를 돌려주고 0 으로 되돌린다 — ``(물음, 조회, 초)``."""
+        stats = (self._asked, self._missed, self._spent)
+        self._asked = self._missed = 0
+        self._spent = 0.0
+        return stats
+
+    def log_stats(self, label):
+        """계수를 한 줄로 남기고 되돌린다(물어 온 것이 없으면 아무것도 안 한다)."""
+        asked, missed, spent = self.take_stats()
+        if asked and debuglog.is_enabled():
+            debuglog.log("아이콘: 물음 %d회 · Qt 조회 %d회 · %.1f ms (%s)",
+                         asked, missed, spent * 1000, label)
 
     @staticmethod
     def _icon_key(info):

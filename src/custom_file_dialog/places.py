@@ -286,17 +286,13 @@ class Places:
             scanned.append((store, found))
         return scanned
 
-    @staticmethod
-    def _fills_sidebar_of(scanned, sidebar_base):
-        """이 구성이 사이드바를 **우리가 채우는가** — :meth:`sidebar_urls` 의 판정.
+    def _fills_sidebar(self, scanned):
+        """사이드바를 **우리가 채우는가** — :meth:`sidebar_urls` 의 판정.
 
         목록을 다 만들어 ``is None`` 인지 보는 것으로도 알 수 있지만, 그러려고
         합치고 중복을 걸러 내면 같은 일을 두 번 한다. 판정만 떼어 둔다.
         """
-        return sidebar_base is not None or any(found for _store, found in scanned)
-
-    def _fills_sidebar(self, scanned):
-        return self._fills_sidebar_of(scanned, self.sidebar_base)
+        return self.sidebar_base is not None or any(f for _store, f in scanned)
 
     def sidebar_urls(self, current=None, scanned=None):
         """다이얼로그에 넘길 최종 사이드바 목록(얹을 게 없으면 None).

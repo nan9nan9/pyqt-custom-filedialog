@@ -182,13 +182,71 @@ def test_icon_counts_show_the_cache_working(qapp, tmp_path):
         (tmp_path / ("자료%02d.csv" % index)).write_text("x")
 
     icons_module._plain_icons.clear()
-    icons_module.take_icon_stats()
     provider = CategoryIconProvider(FavoritesStore(base_dir=str(tmp_path / "fav")))
     for index in range(20):
         provider.icon(QFileInfo(str(tmp_path / ("자료%02d.csv" % index))))
 
-    asked, missed, _spent = icons_module.take_icon_stats()
+    asked, missed, _spent = provider.take_stats()
     assert asked == 20
     assert missed == 1, "종류가 하나뿐인데 Qt 에 %d번 물었다" % missed
     # 가져간 뒤에는 0 부터 다시 센다
-    assert icons_module.take_icon_stats() == (0, 0, 0.0)
+    assert provider.take_stats() == (0, 0, 0.0)
+
+    # **제공자마다 따로 센다** — 모듈에 두면 다이얼로그 둘을 동시에 움직일 때
+    # 숫자가 섞이고, 그럴듯해 보여서 틀린 줄도 모른다.
+    other = CategoryIconProvider(FavoritesStore(base_dir=str(tmp_path / "fav2")))
+    provider.icon(QFileInfo(str(tmp_path / "자료00.csv")))
+    assert other.take_stats() == (0, 0, 0.0)
+    assert provider.take_stats()[0] == 1
+
+
+def test_unfinished_navigations_do_not_pile_up(qapp, tmp_path):
+    """**끝을 못 본 이동**이 쌓이지 않는다.
+
+    없는 폴더로 옮기거나 마운트가 멈추면 ``directoryLoaded`` 가 영영 안 온다 —
+    하필 이 계측을 켜 두는 환경이 그런 곳이다. 그대로 두면 오래 도는 앱에서
+    계속 쌓였다(실측: 없는 폴더로 500번 옮기니 500개).
+    """
+    from custom_file_dialog.dialog import _MAX_PENDING_NAVIGATIONS
+
+    dialog = CustomFileDialog(None, mode="open_file", directory=str(tmp_path))
+    enable_debug(stream=open(os.devnull, "w"))
+    for index in range(200):
+        dialog.setDirectory(str(tmp_path / ("없는폴더%d" % index)))
+        qapp.processEvents()
+    assert len(dialog._nav_started) <= _MAX_PENDING_NAVIGATIONS
+    dialog.done(0)
+
+
+def test_enable_debug_false_really_turns_it_off():
+    """껐으면 **앱이 루트 로거를 DEBUG 로 두어도** 꺼져 있어야 한다.
+
+    로거 수준을 NOTSET 으로 되돌리면 "부모에게 물어봐"라는 뜻이라, 개발 중에
+    흔한 ``logging.basicConfig(level=DEBUG)`` 아래에서는 껐는데도 그대로 켜진
+    채였다 — 재는 비용까지 그대로 든다.
+    """
+    root = logging.getLogger()
+    before = root.level
+    try:
+        enable_debug()
+        assert enable_debug(False) is False
+        root.setLevel(logging.DEBUG)
+        assert not debuglog.is_enabled()
+    finally:
+        root.setLevel(before)
+
+
+def test_enable_debug_can_move_where_it_writes():
+    """``stream`` 을 바꿔 다시 켜면 **그쪽으로 옮겨 단다.**
+
+    예전에는 이미 핸들러가 있으면 조용히 무시해서, 나중에 파일로 남기려고 다시
+    불러도 아무 일이 없었다.
+    """
+    import io
+
+    first, second = io.StringIO(), io.StringIO()
+    enable_debug(stream=first)
+    enable_debug(stream=second)
+    debuglog.log("옮겨 갔다")
+    assert "옮겨 갔다" in second.getvalue()
+    assert first.getvalue() == ""

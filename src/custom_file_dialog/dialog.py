@@ -23,7 +23,7 @@ import time
 
 from qtpy.QtWidgets import QFileDialog, QFileSystemModel
 
-from . import history, icons, safety
+from . import history, safety
 from .debuglog import enable_debug
 from .debuglog import is_enabled as debug_enabled
 from .debuglog import log, step
@@ -205,6 +205,10 @@ def _run_dialog(
     return ([path] if path else []), (chosen or selected_filter)
 
 
+# 끝을 못 본 이동을 몇 개까지 들고 있을지 (DEBUG 계측용)
+_MAX_PENDING_NAVIGATIONS = 8
+
+
 # 모드별 (AcceptMode, FileMode) 설정값
 _INSTANCE_MODES = {
     SelectMode.OPEN_FILE: ("AcceptOpen", "ExistingFile"),
@@ -321,6 +325,7 @@ class CustomFileDialog(QFileDialog):
             # 생성자가 시작 폴더를 잡을 때 이미 setDirectory 가 불리므로,
             # 신호를 잇기(_watch_navigation) 전에 자리를 만들어 둔다.
             self._nav_started = {}
+            self._icon_provider = None      # 아래에서 걸릴 수도, 안 걸릴 수도
             self._path_timeout = None if path_timeout is None else float(path_timeout)
             # 위젯과 같은 규칙으로 조립한다(True = 기본 위치에 자동 생성 등).
             # 다이얼로그는 뜬 뒤 설정이 바뀌지 않으므로 한 번 만들고 만다.
@@ -514,7 +519,15 @@ class CustomFileDialog(QFileDialog):
 
     def _mark_navigation(self, path):
         """이동 시작 — 그 폴더의 나열이 끝나면 :meth:`_debug_loaded` 가 받는다."""
-        icons.take_icon_stats()     # 이동 전의 계수는 흘려보낸다
+        if self._icon_provider is not None:
+            self._icon_provider.take_stats()    # 이동 전의 계수는 흘려보낸다
+        # **끝을 못 보는 이동이 있다.** 없는 폴더로 옮기거나 마운트가 멈추면
+        # directoryLoaded 가 영영 안 온다 — 하필 이 계측을 켜 두는 환경이 그런
+        # 곳이다. 그대로 두면 오래 도는 앱에서 계속 쌓인다(실측: 없는 폴더로
+        # 500번 옮기니 500개). 최근 것 몇 개만 남긴다.
+        if len(self._nav_started) >= _MAX_PENDING_NAVIGATIONS:
+            oldest = min(self._nav_started, key=self._nav_started.get)
+            del self._nav_started[oldest]
         self._nav_started[os.path.normpath(path)] = time.perf_counter()
         log("> 폴더 이동: %s", path)
 
@@ -530,7 +543,8 @@ class CustomFileDialog(QFileDialog):
         if started is None:
             return                  # 우리가 시작을 못 본 나열(미리 읽기 등)
         log("폴더 이동 끝: %s = %.1f ms", path, (time.perf_counter() - started) * 1000)
-        icons.log_icon_stats("이 폴더를 나열하며")
+        if self._icon_provider is not None:
+            self._icon_provider.log_stats("이 폴더를 나열하며")
 
     def _apply_sidebar_urls(self, scanned=None):
         """우리 사이드바 목록을 얹는다(얹을 게 없으면 그대로 둔다).
