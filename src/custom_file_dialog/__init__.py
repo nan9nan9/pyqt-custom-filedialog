@@ -23,6 +23,7 @@ QFileDialog 를 확장한 파일 다이얼로그.
 
 from . import safety
 from .constants import SelectMode
+from .debuglog import enable_debug
 from .dialog import CustomFileDialog, exec_file_dialog, resolve_start_dir
 from .favorites import (
     FavoritesError,
@@ -55,6 +56,8 @@ from .validators import validate_paths
 __version__ = "0.1.0"
 
 __all__ = [
+    # 진단
+    "enable_debug",
     # 다이얼로그
     "CustomFileDialog",
     "exec_file_dialog",

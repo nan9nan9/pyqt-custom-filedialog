@@ -841,6 +841,57 @@ Qt 자신도 이 조회가 네트워크 드라이브에서 비싸다고 보고 �
 필요하고 홈이 로컬이라면 `favorites_icon=False` 로 이 제공자를 아예 빼면
 Qt 기본 동작이 됩니다.
 
+#### DEBUG 모드 — 단계마다 걸린 시간 찍기
+
+여는 동안 **어느 단계에서 시간이 가는지**(또는 어디서 멈췄는지)를 표준
+`logging` 으로 남깁니다. 기본은 꺼져 있습니다.
+
+```python
+from custom_file_dialog import CustomFileDialog, enable_debug
+
+enable_debug()                                  # 표준 오류로 찍는다
+CustomFileDialog(None, mode="open_file", directory="~/작업")
+```
+
+```
+DEBUG custom_file_dialog: > 다이얼로그 생성
+DEBUG custom_file_dialog:   > 시작 위치 정하기
+DEBUG custom_file_dialog:     시작 폴더 = /user/jekai/작업
+DEBUG custom_file_dialog:   시작 위치 정하기 ..........................      0.5 ms
+DEBUG custom_file_dialog:   > 사이드바 목록 만들기
+DEBUG custom_file_dialog:     > 저장소 훑기: recent
+DEBUG custom_file_dialog:       분류 1개
+DEBUG custom_file_dialog:     저장소 훑기: recent .....................    182.4 ms
+DEBUG custom_file_dialog:   사이드바 목록 만들기 ......................    184.1 ms
+DEBUG custom_file_dialog:   훅 설치(가드 · 메뉴 · 사이드바 표시) ......      4.1 ms
+DEBUG custom_file_dialog: 다이얼로그 생성 .............................    191.0 ms mode=open_file
+```
+
+`>` 로 시작하는 줄은 **들어갔다**는 뜻이고, 짝이 되는 줄에 걸린 시간이 붙습니다.
+멈추면 끝 줄이 영영 안 나오므로 **마지막 `>` 줄이 멈춘 자리**입니다 — 죽은
+마운트를 만났을 때 이 줄이 가장 쓸모 있습니다. 제한 시간을 넘겨 포기한 확인도
+남깁니다.
+
+```
+DEBUG custom_file_dialog: stat(/user/myaccount) 가 1.00초 안에 안 끝났다 — 포기(멈춘 확인 1개)
+```
+
+켜는 방법은 셋이고 전부 같은 것을 켭니다.
+
+| 방법 | 쓰는 자리 |
+|---|---|
+| `enable_debug()` | 코드에서 |
+| `CFD_DEBUG=1` 환경 변수 | 코드를 안 고치고 |
+| `CustomFileDialog(..., debug=True)` · `exec_file_dialog(..., debug=True)` | 그 한 줄만 고쳐서 |
+
+로거 이름은 `custom_file_dialog` 입니다. 앱이 이미 `logging` 을 설정해 두었다면
+`enable_debug()` 대신 **그 설정에서 이 로거의 수준만 DEBUG 로 올리세요** — 이미
+핸들러가 붙어 있으면 우리 것을 따로 붙이지 않으므로 같은 줄이 두 번 찍히지
+않습니다.
+
+**꺼져 있으면 값이 0 입니다.** 시간을 재는 것 자체가 켜졌을 때만 일어나므로
+(`perf_counter` 도 부르지 않습니다), 평소에 이 기능 때문에 느려지지 않습니다.
+
 #### 그래도 느리면
 
 어디서 시간이 가는지 그 환경에서 직접 재는 스크립트가 있습니다.

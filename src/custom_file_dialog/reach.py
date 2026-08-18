@@ -30,7 +30,7 @@ import socket
 import threading
 import time
 
-from . import mounts, policy
+from . import debuglog, mounts, policy
 from .mounts import AUTOMOUNT_FSTYPES, REMOTE_FSTYPES
 
 # 원격 종류별로 살펴볼 서버 포트. **모르는 종류는 소켓 프로브를 건너뛰고**
@@ -180,6 +180,7 @@ def call_with_timeout(func, *args, **kwargs):
 
     with _lock:
         if key is not None and key in _pending_keys:
+            debuglog.log("%s 는 이미 멈춘 확인이 있어 건너뛴다", key)
             return False, None              # 이미 멈춘 확인이 있다 -> 안 두드린다
         if len(_pending) >= MAX_PENDING_CHECKS:
             # 묶음 키가 못 잡은 폭주의 마지막 방어. 키를 아무리 잘 잡아도
@@ -213,6 +214,10 @@ def call_with_timeout(func, *args, **kwargs):
                 # 방금 끝났으면(finally 가 먼저 돌았으면) 키를 남기지 않는다
                 if not done.is_set():
                     _pending_keys.add(key)
+        # 여기가 곧 눈에 보이는 지연이다 — 이만큼 기다렸다가 포기했다는 뜻.
+        debuglog.log("%s(%s) 가 %.2f초 안에 안 끝났다 — 포기(멈춘 확인 %d개)",
+                     getattr(func, "__name__", func), args[0] if args else "",
+                     wait, len(_pending))
         return False, None                  # 멈췄다 -> 스레드는 두고 나온다
     if "error" in box:
         # 예외도 "끝내지 못한 것"으로 본다. True 로 돌려주면 호출자가 그 값을

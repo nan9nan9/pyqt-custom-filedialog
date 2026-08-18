@@ -23,6 +23,7 @@ import os
 from qtpy.QtWidgets import QFileDialog
 
 from . import history, safety
+from .debuglog import enable_debug, log, step
 from .constants import DEFAULT_CAPTIONS, SelectMode, normalize_mode
 from .filters import build_filter, ensure_suffix, suffix_of
 from .places import PlacesOptions
@@ -55,6 +56,7 @@ def exec_file_dialog(
     sidebar_width=None,
     settings_key=None,
     path_timeout=safety.DEFAULT_TIMEOUT,
+    debug=None,
 ):
     """다이얼로그를 띄우고 ``(경로 리스트, 선택된 필터)`` 를 돌려준다.
 
@@ -75,11 +77,16 @@ def exec_file_dialog(
             ``DontUseNativeDialog`` 를 켜서 Qt 자체 창으로 연다. 꾸밀 것을 하나라도
             주면 (``places`` · ``favorites`` · ``recent`` · ``sidebar_urls`` …)
             이 설정과 무관하게 :class:`CustomFileDialog` 로 전환된다.
+        debug: ``True`` 면 단계별 소요 시간을 ``logging`` 으로 남긴다
+            (:func:`~custom_file_dialog.debuglog.enable_debug` 와 같다).
+            ``None`` 이면 지금 설정을 그대로 둔다.
         나머지 인자는 :class:`CustomFileDialog` 와 같다.
 
     Returns:
         ``(paths, selected_filter)`` 튜플. 취소하면 ``([], selected_filter)``.
     """
+    if debug is not None:
+        enable_debug(debug)
     selected_filter = selected_filter or ""
 
     # 사이드바·아이콘·링크 추적은 Qt 위젯을 직접 건드려야 해서 네이티브 창으로는
@@ -114,10 +121,10 @@ def exec_file_dialog(
             show_dirs_only=show_dirs_only,
             options=options,
             places=places,
-            favorites=favorites,
-            recent=recent,
-            recent_max=recent_max,
-            sidebar_urls=sidebar_urls,
+                favorites=favorites,
+                recent=recent,
+                recent_max=recent_max,
+                sidebar_urls=sidebar_urls,
             fixed_sidebar_urls=fixed_sidebar_urls,
             favorites_icon=favorites_icon,
             sidebar_width=sidebar_width,
@@ -265,6 +272,11 @@ class CustomFileDialog(QFileDialog):
             만큼** 자동으로 넓힌다(이미 넓으면 그대로 둔다). ``0`` 이면 내용에는
             맞추지 않는다. 둘 다 :data:`MIN_SIDEBAR_WIDTH` 아래로는 내려가지
             않는다. 숫자를 주면 그 폭을 그대로 쓴다.
+        debug: ``True`` 면 여는 동안 **단계마다 걸린 시간**을 ``logging`` 으로
+            남긴다 — 어디서 시간이 가는지(또는 어디서 멈췄는지) 보려고 쓴다.
+            ``None``(기본)이면 지금 설정을 그대로 둔다. 같은 것을
+            :func:`~custom_file_dialog.debuglog.enable_debug` 로도, 환경 변수
+            ``CFD_DEBUG=1`` 로도 켤 수 있다.
     """
 
     def __init__(
@@ -289,91 +301,100 @@ class CustomFileDialog(QFileDialog):
         settings_key=None,
         path_timeout=safety.DEFAULT_TIMEOUT,
         sidebar_width=None,
+        debug=None,
     ):
+        if debug is not None:
+            enable_debug(debug)
         mode = normalize_mode(mode)
         super().__init__(parent, caption or DEFAULT_CAPTIONS.get(mode, "선택"))
 
-        self._mode = mode
-        self._default_suffix = default_suffix
-        self._settings_key = settings_key
-        self._sidebar_width = sidebar_width
-        self._sidebar_fitted = False
-        self._path_timeout = None if path_timeout is None else float(path_timeout)
-        # 위젯과 같은 규칙으로 조립한다(True = 기본 위치에 자동 생성 등).
-        # 다이얼로그는 뜬 뒤 설정이 바뀌지 않으므로 한 번 만들고 만다.
-        self._places = places if places is not None else PlacesOptions(
-            favorites=favorites,
-            recent=recent,
-            recent_max=recent_max,
-            sidebar_urls=sidebar_urls,
-            fixed_urls=fixed_sidebar_urls,
-            icon=favorites_icon,
-        ).places()
+        with step("다이얼로그 생성", mode=mode):
+            self._mode = mode
+            self._default_suffix = default_suffix
+            self._settings_key = settings_key
+            self._sidebar_width = sidebar_width
+            self._sidebar_fitted = False
+            self._path_timeout = None if path_timeout is None else float(path_timeout)
+            # 위젯과 같은 규칙으로 조립한다(True = 기본 위치에 자동 생성 등).
+            # 다이얼로그는 뜬 뒤 설정이 바뀌지 않으므로 한 번 만들고 만다.
+            with step("저장소·사이드바 설정 조립"):
+                self._places = places if places is not None else PlacesOptions(
+                favorites=favorites,
+                recent=recent,
+                recent_max=recent_max,
+                sidebar_urls=sidebar_urls,
+                    fixed_urls=fixed_sidebar_urls,
+                    icon=favorites_icon,
+                ).places()
 
-        # 네이티브 창으로는 아래 것들을 하나도 걸 수 없다
-        self.setOptions(
-            make_options(
-                native=False,
-                show_dirs_only=(mode == SelectMode.DIRECTORY and show_dirs_only),
-                extra=options,
+            # 네이티브 창으로는 아래 것들을 하나도 걸 수 없다
+            self.setOptions(
+                make_options(
+                    native=False,
+                    show_dirs_only=(mode == SelectMode.DIRECTORY and show_dirs_only),
+                    extra=options,
+                )
             )
-        )
-        accept_mode, file_mode = _INSTANCE_MODES[mode]
-        self.setAcceptMode(enum_value("AcceptMode", accept_mode))
-        self.setFileMode(enum_value("FileMode", file_mode))
+            accept_mode, file_mode = _INSTANCE_MODES[mode]
+            self.setAcceptMode(enum_value("AcceptMode", accept_mode))
+            self.setFileMode(enum_value("FileMode", file_mode))
 
-        # **setFileMode 뒤에 ShowDirsOnly 를 다시 건다.** Qt5 의 setFileMode 는
-        # 그 비트를 `mode == DirectoryOnly` 로 덮어써서, 옵션을 먼저 걸면 폴더
-        # 모드인데 파일이 그대로 나왔다(PyQt5·PySide2, 아무 신호 없이).
-        #
-        # 순서를 통째로 뒤집는 방법도 되지만 그러면 "파일 형식" 칸이
-        # `Directories` 대신 `All Files (*)` 가 된다 — 네이티브 헬퍼가 있는
-        # 테마(GNOME 의 gtk3)에서 위젯이 setOptions 시점에 만들어지면서 이름
-        # 필터가 나중에 덮어쓰기 때문이다. 4개 바인딩 × 2테마에서 재 보니
-        # 이 방식만 둘 다 지킨다.
-        if mode == SelectMode.DIRECTORY and show_dirs_only:
-            self.setOption(option_value("ShowDirsOnly"), True)
+            # **setFileMode 뒤에 ShowDirsOnly 를 다시 건다.** Qt5 의 setFileMode 는
+            # 그 비트를 `mode == DirectoryOnly` 로 덮어써서, 옵션을 먼저 걸면 폴더
+            # 모드인데 파일이 그대로 나왔다(PyQt5·PySide2, 아무 신호 없이).
+            #
+            # 순서를 통째로 뒤집는 방법도 되지만 그러면 "파일 형식" 칸이
+            # `Directories` 대신 `All Files (*)` 가 된다 — 네이티브 헬퍼가 있는
+            # 테마(GNOME 의 gtk3)에서 위젯이 setOptions 시점에 만들어지면서 이름
+            # 필터가 나중에 덮어쓰기 때문이다. 4개 바인딩 × 2테마에서 재 보니
+            # 이 방식만 둘 다 지킨다.
+            if mode == SelectMode.DIRECTORY and show_dirs_only:
+                self.setOption(option_value("ShowDirsOnly"), True)
 
-        name_filter = build_filter(filters, add_all_files=add_all_files_filter)
-        if name_filter and mode != SelectMode.DIRECTORY:
-            self.setNameFilters([f for f in name_filter.split(";;") if f])
-            if selected_filter:
-                self.selectNameFilter(selected_filter)
-        if default_suffix:
-            self.setDefaultSuffix(default_suffix)
+            name_filter = build_filter(filters, add_all_files=add_all_files_filter)
+            if name_filter and mode != SelectMode.DIRECTORY:
+                self.setNameFilters([f for f in name_filter.split(";;") if f])
+                if selected_filter:
+                    self.selectNameFilter(selected_filter)
+            if default_suffix:
+                self.setDefaultSuffix(default_suffix)
 
-        if not directory and settings_key:
-            directory = resolve_start_dir(
-                [], last_dir=history.last_dir(settings_key), mode=mode,
-                timeout=self._path_timeout,
-            )
-        if directory:
-            self._start_at(directory)
+            with step("시작 위치 정하기"):
+                if not directory and settings_key:
+                    directory = resolve_start_dir(
+                        [], last_dir=history.last_dir(settings_key), mode=mode,
+                        timeout=self._path_timeout,
+                    )
+                if directory:
+                    self._start_at(directory)
+                log("시작 폴더 = %s", self.directory().absolutePath())
 
-        # 아이콘 제공자는 사이드바보다 먼저 걸어야 사이드바 항목에도 반영된다
-        # (QUrlModel 이 등록 시점의 DecorationRole 을 복사해 가기 때문).
-        #
-        # **여기서 한 번만 건다.** 폴더를 옮길 때마다 갈아 끼우면 안 된다 —
-        # setIconProvider 는 모델이 그때까지 기억한 **모든 노드**를 다시 훑으며
-        # 노드마다 QFileInfo 를 만든다(= stat). 실측: 폴더 40개를 둘러본 뒤 교체
-        # 한 번에 icon() 1,751회 · 18.5ms(로컬 ext4). 네트워크 홈에서는 그 stat 이
-        # 전부 서버 왕복이라, 저장소를 드나들 때마다 그 값을 물었다(즐겨찾기·
-        # 최근 파일을 눌렀을 때 가장 느렸던 이유다 — 사이드바를 16번 오가며
-        # icon() 5,160회 -> 1,184회).
-        provider = self._places.icon_provider()
-        if provider is not None:
-            self._icon_provider = provider      # setIconProvider 는 소유하지 않는다
-            self.setIconProvider(provider)
+            # 아이콘 제공자는 사이드바보다 먼저 걸어야 사이드바 항목에도 반영된다
+            # (QUrlModel 이 등록 시점의 DecorationRole 을 복사해 가기 때문).
+            #
+            # **여기서 한 번만 건다.** 폴더를 옮길 때마다 갈아 끼우면 안 된다 —
+            # setIconProvider 는 모델이 그때까지 기억한 **모든 노드**를 다시 훑으며
+            # 노드마다 QFileInfo 를 만든다(= stat). 실측: 폴더 40개를 둘러본 뒤 교체
+            # 한 번에 icon() 1,751회 · 18.5ms(로컬 ext4). 네트워크 홈에서는 그 stat 이
+            # 전부 서버 왕복이라, 저장소를 드나들 때마다 그 값을 물었다(즐겨찾기·
+            # 최근 파일을 눌렀을 때 가장 느렸던 이유다 — 사이드바를 16번 오가며
+            # icon() 5,160회 -> 1,184회).
+            with step("아이콘 제공자 준비"):
+                provider = self._places.icon_provider()
+                if provider is not None:
+                    self._icon_provider = provider  # setIconProvider 는 소유하지 않는다
+                    self.setIconProvider(provider)
 
-        # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
-        current = self.directory().absolutePath()
-        self._apply_sidebar_urls()
+            # 시작 폴더는 위에서 정해졌으므로 그대로 "현재 위치" 항목이 된다
+            current = self.directory().absolutePath()
+            with step("사이드바 목록 만들기"):
+                self._apply_sidebar_urls()
 
-        # 사이드바 표시 · 링크 추적 · 우클릭 메뉴 · 차단 경로 방어를 한 번에
-        from .hooks import install_hooks
+            # 사이드바 표시 · 링크 추적 · 우클릭 메뉴 · 차단 경로 방어를 한 번에
+            from .hooks import install_hooks
 
-        install_hooks(self, self._places, current)
-
+            with step("훅 설치(가드 · 메뉴 · 사이드바 표시)"):
+                install_hooks(self, self._places, current)
         # show() 로 띄워도 기억이 남도록 exec() 가 아니라 신호에 건다
         self.accepted.connect(self._on_accepted)
 
@@ -412,11 +433,15 @@ class CustomFileDialog(QFileDialog):
         ``[0, 0]``) 생성자가 아니라 여기서 맞춘다. 한 번만 하므로, 사용자가
         경계를 끌어 조절한 뒤 창을 다시 열어도 그 폭이 유지된다.
         """
-        self._apply_sidebar_urls()      # done() 에서 빼 두었으면 다시 얹는다
-        super().showEvent(event)
-        if not self._sidebar_fitted:
-            # 스플리터가 아직 자리 잡기 전(fit 이 None)이면 다음 show 때 다시 시도
-            self._sidebar_fitted = fit_sidebar(self, self._sidebar_width) is not None
+        with step("다이얼로그 show()"):
+            self._apply_sidebar_urls()  # done() 에서 빼 두었으면 다시 얹는다
+            super().showEvent(event)
+            if not self._sidebar_fitted:
+                # 스플리터가 아직 자리 잡기 전이면 다음 show 때 다시 시도
+                with step("사이드바 폭 맞추기"):
+                    self._sidebar_fitted = (
+                        fit_sidebar(self, self._sidebar_width) is not None
+                    )
 
     def done(self, result):         # noqa: N802 (Qt 시그니처)
         """닫히기 전에 **우리 사이드바 항목을 빼 둔다.**

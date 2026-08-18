@@ -15,6 +15,7 @@ import os
 
 from qtpy.QtCore import QDir, QSettings, QUrl
 
+from .debuglog import log, step
 from .favorites import FavoritesError, FavoritesStore
 from .icons import CategoryIconProvider, clock_icon, home_icon, star_icon
 from .recent import RecentStore
@@ -274,17 +275,25 @@ class Places:
                 직접 주지 않았을 때만 "현재 위치" 항목으로 붙는다(직접 준
                 목록은 그대로 존중한다). 홈과 같으면 겹치지 않게 하나만 남는다.
         """
-        extra = []
-        for store in self.stores():
-            extra += store.sidebar_urls()
-        if not extra and self.sidebar_base is None:
-            return None                      # 손댈 것이 없다
+        with step("사이드바 항목 모으기"):
+            extra = []
+            for store in self.stores():
+                # 저장소마다 분류 폴더를 훑는다 — 저장소가 네트워크 홈에 있으면
+                # 여기가 왕복이라, 저장소별로 따로 잰다.
+                with step("저장소 훑기: %s" % os.path.basename(store.base_dir)):
+                    found = store.sidebar_urls()
+                    log("분류 %d개", len(found))
+                extra += found
+            if not extra and self.sidebar_base is None:
+                return None                  # 손댈 것이 없다
 
-        if self.sidebar_base is not None:
-            base = to_urls(self.sidebar_base)
-        else:
-            base = to_urls(DEFAULT_SIDEBAR + ((current,) if current else ()))
-        return _dedup(base + extra)
+            if self.sidebar_base is not None:
+                base = to_urls(self.sidebar_base)
+            else:
+                base = to_urls(DEFAULT_SIDEBAR + ((current,) if current else ()))
+            urls = _dedup(base + extra)
+            log("사이드바 %d개", len(urls))
+            return urls
 
     def is_fixed(self, path):
         """"사이드바에서 제거"가 막힌 위치인지(기본: 사용자 홈)."""
