@@ -7,6 +7,7 @@
 
     is_remote(path)        서버가 죽으면 멈출 수 있는 자리인가 (NFS · CIFS …)
     on_automount(path)     건드리면 마운트가 붙는 자리인가 (autofs)
+    automount_key(path)    그 경로를 만지면 붙을 마운트 하나 (autofs 아래일 때)
     mount_for(path)        그 경로가 속한 (마운트지점, 종류, 원본)
 """
 
@@ -169,6 +170,31 @@ def on_automount(path):
     """
     mount = mount_for(path)
     return bool(mount) and mount[1] in AUTOMOUNT_FSTYPES
+
+
+def automount_key(path):
+    """automount 지점 **바로 아래 한 단계**(= 마운트 키) 경로. 아니면 None.
+
+    ``/user`` 가 autofs 일 때 ``/user/myaccount/proj/a.csv`` 를 주면
+    ``/user/myaccount`` 를 돌려준다 — 그 경로를 한 번 만질 때 실제로 붙는
+    마운트가 바로 이 하나다. 지점 자체(``/user``)나 autofs 위가 아닌 경로,
+    이미 다른 종류로 붙은 경로는 None.
+
+    "이 확정이 마운트를 **하나만** 부르는가"를 판정하는 데 쓴다
+    (:func:`custom_file_dialog.policy.may_open`).
+    """
+    mount = mount_for(path)
+    if not mount or mount[1] not in AUTOMOUNT_FSTYPES:
+        return None
+    point = os.path.normpath(mount[0])
+    absolute = abspath(path)
+    prefix = point.rstrip(os.sep) + os.sep
+    if not absolute.startswith(prefix):
+        return None                     # 지점 자체 — 아래로 한 단계도 안 들어갔다
+    first = absolute[len(prefix):].split(os.sep)[0]
+    if not first:
+        return None
+    return os.path.join(point, first)
 
 
 def is_automount_point(path):

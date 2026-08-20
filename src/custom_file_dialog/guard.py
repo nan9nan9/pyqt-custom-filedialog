@@ -438,18 +438,12 @@ def _first_step_under_automount(path):
     ``/user`` 가 autofs 일 때 ``/user/me/a.csv`` 를 주면 ``/user/me/`` 를
     돌려준다 — 그 폴더를 열면 하나만 마운트되고, 그 뒤로는 평소대로 쓸 수 있다.
     자리를 못 찾으면 None.
+
+    안내에 쓰는 자리는 :func:`~custom_file_dialog.safety.may_open` 이 "붙는
+    마운트가 하나뿐인가"를 판정할 때 보는 그 마운트 키다 — 같은 함수로 구한다.
     """
-    mount = safety.mount_for(path)
-    if not mount:
-        return None
-    point = os.path.normpath(mount[0])
-    absolute = abspath(path) or ""
-    if not absolute.startswith(point.rstrip(os.sep) + os.sep):
-        return None
-    first = os.path.relpath(absolute, point).split(os.sep)[0]
-    if not first or first == "..":
-        return None
-    return os.path.join(point, first) + os.sep
+    key = safety.automount_key(path)
+    return key + os.sep if key else None
 
 
 class _TypingGuard(QObject):

@@ -44,7 +44,8 @@ stat 하는 것도 마찬가지다(``/user/my`` 를 stat = ``my`` 를 마운트�
 폴더를 통째로            :func:`may_list`          :func:`may_enter`
                         (+ ``allow_listing``)
 경로 이름 하나           :func:`may_stat`          :func:`may_open`
-                                                  (+ 끝 구분자 예외)
+                                                  (+ 끝 구분자 · 마운트 키보다
+                                                  깊은 경로 예외)
 ======================  ========================  ========================
 
 무엇을 위험으로 볼지는 :func:`configure` 의 ``guarded_roots`` (이름으로 지목) ·
@@ -60,6 +61,7 @@ from .mounts import (
     MOUNTINFO,
     MOUNTS_TTL,
     REMOTE_FSTYPES,
+    automount_key,
     clear_mounts,
     has_automounts,
     is_automount_point,
@@ -129,6 +131,7 @@ __all__ = [
     "is_remote",
     "on_automount",
     "is_automount_point",
+    "automount_key",
     "has_automounts",
     "server_of",
     "REMOTE_FSTYPES",

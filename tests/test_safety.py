@@ -1995,8 +1995,19 @@ def test_decision_invariants(setup, automount, monkeypatch):
                 assert not safety.may_open(path + "/"), path
                 continue
 
-            # 구분자 없는 확정은 "이름 하나를 만지는" 일이라 자동 stat 과 같은 판정
-            assert safety.may_open(path) == safety.may_stat(path), path
+            # 구분자 없는 확정은 "이름 하나를 만지는" 일이라 원칙적으로 자동
+            # stat 과 같은 판정이다. 자동보다 관대해질 수 있는 자리는 **하나
+            # 뿐** — automount 키보다 깊은 경로다(그 확정이 부르는 마운트는 키
+            # 하나뿐이라 명시적으로 여는 "키/" 와 위험이 같다). 그 예외가 다른
+            # 이유(지목된 부모 · 얕은 부모)까지 덮어 주면 안 된다.
+            if safety.may_stat(path):
+                assert safety.may_open(path), path
+            elif safety.may_open(path):
+                key = safety.automount_key(path)
+                assert key and key != path, path            # 키 자체는 못 연다
+                parent = os.path.dirname(path)
+                assert not safety.is_guarded(parent), path
+                assert not safety.is_too_shallow(parent), path
 
             # 끝에 구분자를 붙인 명시적 표기는 깊이만 본다 — 단 automount
             # **지점 자체**는 열 수 없다(그 자리를 여는 것은 아래를 전부
@@ -2075,6 +2086,105 @@ def test_automount_root_never_opens_even_with_separator(monkeypatch, tmp_path):
         inner = os.path.join(str(root), "myaccount")
         assert safety.may_open(inner + os.sep)
         assert not safety.may_open(inner)                # 구분자 없이는 안 된다
+    finally:
+        safety.clear_cache()
+        safety.reset()
+
+
+def _autofs_user(monkeypatch, root, extra=()):
+    """``root`` 가 autofs 인 마운트 표를 깐다 (``extra`` 로 이미 붙은 줄 추가)."""
+    from custom_file_dialog import safety
+
+    safety.clear_cache()
+    table = [("/", "ext4", "/dev/sda1"), (str(root), "autofs", "auto.user")]
+    table.extend(extra)
+    monkeypatch.setattr(safety_mounts, "iter_mounts", lambda refresh=False: table)
+
+
+def test_full_file_path_opens_under_unmounted_automount(monkeypatch, tmp_path):
+    """automount 아래의 **전체 파일 경로**는 아직 안 붙었어도 확정할 수 있다.
+
+    사용자가 파일 이름 칸에 ``/user/me/proj/a.json`` 을 끝까지 쳐도 "폴더를
+    열려면 끝에 '/' 를 붙이세요" 가 떴다 — 파일에는 따를 수 없는 안내다.
+    게다가 그 자리가 붙어 있는 동안에는 멀쩡히 열려서, 같은 경로가 **되다 안
+    되다** 했다(autofs 는 놀면 다시 떨어진다).
+
+    확정의 stat 이 부르는 마운트는 ``/user/me`` 하나뿐이라, 사용자가 명시적으로
+    여는 ``/user/me/`` 와 위험이 똑같다. 그래서 같은 기준으로 연다.
+    """
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    deep = os.path.join(str(root), "me", "proj", "a.json")
+    safety.reset()
+    _autofs_user(monkeypatch, root)
+    try:
+        for limit in (0, 2, safety.path_depth(deep) - 1):
+            safety.configure(min_depth=limit)
+            assert safety.may_open(deep), limit          # 안 붙었어도 열린다
+            assert not safety.may_stat(deep)             # 자동 확인은 여전히 안 한다
+
+        # 붙어 있든 아니든 판정이 같아야 한다 — 되다 안 되다 하면 안 된다
+        safety.configure(min_depth=2)
+        opened = safety.may_open(deep)
+        _autofs_user(monkeypatch, root, [(os.path.join(str(root), "me"), "nfs4", "srv:/me")])
+        assert safety.may_open(deep) == opened is True
+
+        # 마운트 키(= 붙을 자리) **자체**는 그대로 구분자를 요구한다.
+        # 그 이름 하나를 stat 하는 것이 곧 "그것을 마운트해 보라" 이고,
+        # 오타면 헛마운트다 — 폴더는 '/' 로 밝히면 된다.
+        _autofs_user(monkeypatch, root)
+        assert not safety.may_open(os.path.join(str(root), "me"))
+        assert safety.may_open(os.path.join(str(root), "me") + os.sep)
+    finally:
+        safety.clear_cache()
+        safety.reset()
+
+
+def test_deep_path_exception_keeps_other_blocks(monkeypatch, tmp_path):
+    """깊은 경로 예외는 **automount 말고 다른 이유**까지 풀어 주지 않는다.
+
+    지목한 자리(``guarded_roots``) 바로 아래와, ``min_depth`` 에 못 미치는
+    경로는 autofs 위라도 그대로 막힌다.
+    """
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    inner = os.path.join(str(root), "me")
+    safety.reset()
+    _autofs_user(monkeypatch, root)
+    try:
+        # 부모를 이름으로 지목했으면 그 아래는 구분자 없이 못 연다
+        safety.configure(guarded_roots=[inner])
+        assert not safety.may_open(os.path.join(inner, "a.json"))
+        assert safety.may_open(os.path.join(inner, "proj", "a.json"))  # 한 단계 더 아래
+
+        # 깊이가 모자라면 automount 키보다 깊어도 못 연다
+        safety.configure(guarded_roots=[], min_depth=safety.path_depth(inner) + 3)
+        assert not safety.may_open(os.path.join(inner, "proj", "a.json"))
+    finally:
+        safety.clear_cache()
+        safety.reset()
+
+
+def test_automount_key_is_the_single_mount_a_touch_triggers(monkeypatch, tmp_path):
+    """``automount_key`` — 그 경로를 만질 때 실제로 붙는 마운트 하나."""
+    from custom_file_dialog import safety
+
+    root = tmp_path / "user"
+    safety.reset()
+    _autofs_user(monkeypatch, root)
+    try:
+        key = os.path.join(str(root), "me")
+        assert safety.automount_key(os.path.join(key, "proj", "a.json")) == key
+        assert safety.automount_key(key) == key
+        assert safety.automount_key(str(root)) is None          # 지점 자체
+        assert safety.automount_key(str(root) + os.sep) is None
+        assert safety.automount_key("/tmp") is None             # autofs 아래가 아니다
+
+        # 이미 다른 종류로 붙었으면 automount 가 아니다(붙일 것이 없다)
+        _autofs_user(monkeypatch, root, [(key, "nfs4", "srv:/me")])
+        assert safety.automount_key(os.path.join(key, "proj", "a.json")) is None
     finally:
         safety.clear_cache()
         safety.reset()
@@ -2289,10 +2399,9 @@ def test_blocked_paths_always_explain_and_advice_works(qapp, monkeypatch, tmp_pa
             _spin(qapp, 50)
             return swallowed, (blocker.notice.text() if blocker.notice else "")
 
-        # 막히는 네 자리 모두 안내가 뜬다
+        # 막히는 세 자리 모두 안내가 뜬다 (automount 지점 자체와 마운트 키)
         for text in (str(root), str(root) + os.sep,
-                     os.path.join(str(root), "me"),
-                     os.path.join(str(root), "me", "a.csv")):
+                     os.path.join(str(root), "me")):
             swallowed, body = press(text)
             assert swallowed is True, text
             assert blocker.notice.isVisible(), text
@@ -2304,6 +2413,12 @@ def test_blocked_paths_always_explain_and_advice_works(qapp, monkeypatch, tmp_pa
                     example = token.strip().rstrip(").").strip()
                     if example and "이름" not in example:
                         assert safety.may_open(example), (text, example)
+
+        # 반대로 **막히면 안 되는** 자리 — 마운트 키보다 깊은 전체 파일 경로다.
+        # 여기서 안내를 띄우면 "끝에 '/' 를 붙이세요" 라는, 파일에는 따를 수
+        # 없는 말을 하게 된다 (그것이 사용자가 만난 버그다).
+        swallowed, _body = press(os.path.join(str(root), "me", "a.csv"))
+        assert swallowed is False
 
         dialog.done(0)
         dialog.deleteLater()

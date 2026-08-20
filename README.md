@@ -1372,8 +1372,12 @@ safety.configure(guarded_roots=["/user", "/mnt/nfs", "/net"])
 ```
 /user/myaccount     Enter →  막힘 + 안내 팝업
 /user/myaccount/    Enter →  열림 (명시적 폴더 표기)
-/user/myaccount/a.csv Enter →  열림 (부모가 이미 붙은 자리)
+/user/myaccount/a.csv Enter →  열림 (한 단계 더 아래 — 붙는 건 myaccount 하나)
 ```
+
+마지막 줄이 핵심입니다. **전체 경로를 끝까지 친 파일은 그대로 확정됩니다** —
+그 확인이 부르는 마운트는 `/user/myaccount` 하나뿐이라, 바로 위 줄에서 `/` 로
+밝히고 여는 것과 위험이 똑같기 때문입니다.
 
 적용되는 곳 — 목록을 읽게 만드는 통로를 모두 막습니다:
 
@@ -1431,9 +1435,16 @@ safety.configure(min_depth=2)      # 2단계 아래부터만 자동완성
 /user/my           Enter →  막힘 + 안내 팝업 (예전엔 여기서 멈췄다)
 /user/myaccount       Enter →  막힘 + 안내 팝업 ("2단계 이상 + 끝에 / 를 붙이세요")
 /user/myaccount/      Enter →  열림 (명시적 폴더 표기 — 의도한 마운트는 이 한 번으로)
-/user/myaccount/a.csv Enter →  확정됨 (깊이 3)
+/user/myaccount/a.csv Enter →  확정됨 (깊이 3 — autofs 가 아직 안 붙었어도)
 /user/            Enter →  막힘 (/ 를 붙여도 min_depth 미만은 불가)
 ```
+
+autofs 아래에서도 마지막 줄은 그대로입니다. **아직 안 붙은 자리라고 해서 전체
+파일 경로가 막히지는 않습니다** — 그 확정이 부르는 마운트는 `/user/myaccount`
+하나뿐이고, 그것은 바로 윗줄에서 `/` 로 밝히고 여는 것과 같은 일입니다.
+(예전에는 여기서 막히면서 파일 경로에 "끝에 `/` 를 붙이세요" 라는, 따를 수
+없는 안내가 떴습니다. 게다가 그 자리가 붙어 있는 동안에는 멀쩡히 열려서 같은
+경로가 되다 안 되다 했습니다 — autofs 는 놀면 다시 떨어집니다.)
 
 **autofs 마운트 지점 자체**는 깊이와 무관하게, `/` 를 붙여도 열리지 않습니다.
 그 자리를 여는 것은 "아래 이름을 전부 마운트해 보라"는 뜻이라, 하나만 붙이는
@@ -1588,7 +1599,8 @@ edit = FilePathEdit(mode="open_file", path_timeout=None)  # 끄기
 | `safety.may_list(path)` / `listing_allowed()` | 위 셋 + automount 를 한 번에 판정 / 나열 스위치 상태 |
 | `safety.may_stat(path)` | 입력 중인 경로를 **자동으로 stat** 해도 되는지 (부모가 차단 경로 · 깊이 ≤ min_depth · autofs 위면 False) |
 | `safety.may_enter(path)` | 그 자리를 **열어(들어가) 되는지** (차단 경로 · 깊이 < min_depth · autofs 위면 False) |
-| `safety.may_open(path)` | **확정**(Enter·열기)해도 되는지 (차단 경로 · 깊이 ≤ min_depth 면 False — 끝에 `/` 를 붙인 폴더 표기는 min_depth 깊이부터, 더 깊은 경로는 그대로 허용) |
+| `safety.may_open(path)` | **확정**(Enter·열기)해도 되는지 (차단 경로 · 깊이 ≤ min_depth 면 False — 끝에 `/` 를 붙인 폴더 표기는 min_depth 깊이부터, autofs 마운트 키보다 깊은 경로는 아직 안 붙었어도 허용) |
+| `safety.automount_key(path)` | 그 경로를 만질 때 실제로 붙는 마운트 하나 (autofs 아래가 아니면 None) |
 | `safety.on_automount(path)` / `has_automounts()` | autofs 마운트 위인지 / 시스템에 있는지 |
 | `safety.path_depth(path)` | 루트에서부터 센 깊이 (`/user` = 1) |
 | `safety.reset()` | 모든 설정을 기본값으로 |

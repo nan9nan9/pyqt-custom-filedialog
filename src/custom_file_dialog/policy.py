@@ -12,7 +12,8 @@ automount 아래에서는 폴더를 읽는 것도, 이름 하나를 stat 하는 
 
 네 판정은 그 둘에 "누가 시켰는가"를 곱한 것이다. 사용자가 명시적으로 시킨
 쪽이 한 단계 관대하다 — 목록에 이미 보이는 항목을 누르거나, 끝에 구분자를
-붙여 "이 폴더를 열겠다"고 밝힌 경우다.
+붙여 "이 폴더를 열겠다"고 밝히거나, 마운트 키보다 깊은 경로를 끝까지 쳐서
+"붙일 것은 이 하나"라고 밝힌 경우다.
 
 ======================  ========================  ========================
 동작이 만지는 것          자동 (우리가 건다)         사용자 명시 (눌렀다)
@@ -20,7 +21,8 @@ automount 아래에서는 폴더를 읽는 것도, 이름 하나를 stat 하는 
 폴더를 통째로            :func:`may_list`          :func:`may_enter`
                         (+ ``allow_listing``)
 경로 이름 하나           :func:`may_stat`          :func:`may_open`
-                                                  (+ 끝 구분자 예외)
+                                                  (+ 끝 구분자 · 마운트 키보다
+                                                  깊은 경로 예외)
 ======================  ========================  ========================
 
 위험하다고 판정되면 **디스크를 아예 만지지 않는다** — 도달성 확인
@@ -236,18 +238,31 @@ def may_open(path):
     """그 경로를 **확정**(Enter · 열기 버튼)해도 되는지 — 명시적이라 한 단계 관대하다.
 
     확정도 결국 그 이름 하나를 stat 하는 일이라 :func:`risky_name` 을 본다.
-    다만 사용자가 **끝에 구분자를 붙여** "이 폴더를 열겠다"고 밝혔다면, 깊이만
-    충분하면(``min_depth`` 이상) 위험한 자리라도 연다 — 의도한 마운트는 그
-    확정의 stat 한 번으로 일어나야 하기 때문이다.
+    자동 확인보다 관대해지는 자리는 둘뿐이고, 둘 다 "그 stat 이 부르는 마운트가
+    **하나뿐**임을 사용자가 명시했다"는 같은 이유다.
+
+    1. **끝에 구분자를 붙인 폴더 표기** — "이 폴더를 열겠다"는 명시. 깊이만
+       충분하면(``min_depth`` 이상) 위험한 자리라도 연다.
+    2. **마운트 키보다 깊은 경로** — ``/user`` 가 autofs 일 때
+       ``/user/myaccount/proj/a.csv`` 를 확정하면 붙는 마운트는
+       ``/user/myaccount`` 하나뿐이다(:func:`~custom_file_dialog.mounts.automount_key`).
+       ``/user/myaccount/`` 를 여는 것과 정확히 같은 일이라 같은 기준으로 연다.
 
     ``min_depth=2`` · ``/user`` 가 autofs 인 경우::
 
         /user/my            Enter -> 막힘  (오타일 수 있다. 부모가 위험한 자리)
-        /user/myaccount     Enter -> 막힘  (이름이 맞아도 구분자가 없으면 같다)
+        /user/myaccount     Enter -> 막힘  (마운트 키 자체 — 구분자로 밝혀야 한다)
         /user/myaccount/    Enter -> 열림  (명시적 폴더 표기 + 깊이 충족)
-        /user/myaccount/a.csv Enter -> 열림 (부모가 이미 붙은 자리라 안전)
+        /user/myaccount/a.csv Enter -> 열림 (키보다 깊다. 붙는 건 myaccount 하나)
 
-    지목해서 막은 자리(``guarded_roots``) **자체**는 구분자를 붙여도 열지 않는다.
+    2번이 없으면 **경로를 끝까지 친 파일을 고를 수 없다** — 아직 안 붙은
+    automount 아래에서는 전체 경로가 그대로 막히고 "끝에 '/' 를 붙이세요" 만
+    나온다(파일에는 따를 수 없는 안내다). 게다가 그 자리가 붙어 있는 동안에는
+    멀쩡히 열리므로, 같은 경로가 되다 안 되다 하는 것으로 보인다.
+
+    지목해서 막은 자리(``guarded_roots``) **자체**는 구분자를 붙여도 열지 않고,
+    그 **바로 아래**도 구분자 없이는 열지 않는다(2번 예외도 여기엔 안 준다 —
+    앱이 이름으로 지목한 자리라 마운트 개수와 무관하게 막아야 한다).
     """
     if not path:
         return True
@@ -265,4 +280,17 @@ def may_open(path):
         if mounts.is_automount_point(absolute):
             return False
         return limit <= 0 or path_depth(absolute) >= limit
-    return not risky_name(absolute)
+
+    if not risky_name(absolute):
+        return True
+
+    # 위험하다고 봤지만, **automount 키보다 깊은** 경로는 예외다(docstring 2번).
+    # 그 확정의 stat 이 부르는 마운트는 키 하나뿐이라, 사용자가 명시적으로 여는
+    # ``키/`` 와 위험이 같다. 풀어 주는 것은 **autofs 라는 이유 하나뿐**이라,
+    # 나머지 두 이유(지목된 부모 · 얕은 부모)는 평소의 구분자 없는 확정과
+    # 똑같이 부모를 기준으로 그대로 본다.
+    parent = os.path.dirname(absolute)
+    if is_guarded(parent) or is_too_shallow(parent):
+        return False
+    key = mounts.automount_key(absolute)
+    return bool(key) and key != absolute
