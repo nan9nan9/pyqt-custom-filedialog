@@ -288,13 +288,19 @@ class FavoritesMenus(QObject):
         # 남지 않아 곧바로 수거될 수 있다. 부모를 지정해 직접 만들어 붙인다.
         submenu = QMenu("즐겨찾기에 추가", menu)
         menu.addMenu(submenu)
-        for category in store.categories():
+        # 분류 목록과 "이미 들어 있나"를 **한 번에** 묻는다. 예전에는
+        # categories() 를 두 번 부르고 분류마다 contains() 를 따로 불러,
+        # 우클릭 한 번에 인덱스를 분류 수만큼 다시 읽었다(분류 20개 = 21회).
+        # 저장소가 네트워크 홈에 있으면 그것이 전부 왕복이다.
+        categories = store.categories()
+        taken = store.categories_containing(path, categories)
+        for category in categories:
             action = submenu.addAction(category)
-            action.setEnabled(not store.contains(category, path))
+            action.setEnabled(category not in taken)
             action.triggered.connect(
                 lambda _checked=False, c=category: self.add_to_favorites(path, c)
             )
-        if store.categories():
+        if categories:
             submenu.addSeparator()
         submenu.addAction(
             "새 분류...", lambda: self.add_to_favorites(path, None)
@@ -322,20 +328,26 @@ class FavoritesMenus(QObject):
             # 폴더**의 것이다(Qt 기본 메뉴도 부모로 판정한다). 파일 권한을 보면
             # 읽기 전용 파일을 지우지 못하고, 읽기 전용 폴더 안의 파일은 지울
             # 수 있다고 표시된 뒤 실패한다.
-            writable = safety.safe_call(
-                _writable, os.path.dirname(path) or path, default=False
-            )
+            wanted = [
+                name
+                for name in QT_ITEM_ACTIONS
+                if name not in omit
+                and not (name == "qt_delete_action" and not allow_delete)
+            ]
+            # 붙일 항목이 하나도 없으면(최근 파일) **묻지도 않는다.** 위의
+            # 확인은 그 자체가 stat 이라, 쓸 데 없는 왕복을 우클릭마다 한 번씩
+            # 더 하고 있었다.
             added = False
-            for name in QT_ITEM_ACTIONS:
-                if name == "qt_delete_action" and not allow_delete:
-                    continue
-                if name in omit:
-                    continue
-                action = dialog.findChild(QAction, name)
-                if action is not None:
-                    action.setEnabled(not read_only and writable)
-                    menu.addAction(action)
-                    added = True
+            if wanted:
+                writable = safety.safe_call(
+                    _writable, os.path.dirname(path) or path, default=False
+                )
+                for name in wanted:
+                    action = dialog.findChild(QAction, name)
+                    if action is not None:
+                        action.setEnabled(not read_only and writable)
+                        menu.addAction(action)
+                        added = True
             # 구분선은 **이 묶음이 실제로 붙었을 때만.** 묶음이 통째로 빠지는
             # 자리(최근 파일)에서 앞 구분선 뒤에 하나가 더 붙어 빈 칸처럼 보였다.
             if added:

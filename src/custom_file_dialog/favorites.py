@@ -229,6 +229,12 @@ def _scan_names(directory):
         return []
 
 
+def _ensure_dir(path):
+    """폴더를 만든다(있으면 그대로). ``safe_call`` 로 감쌀 수 있는 형태."""
+    os.makedirs(path, exist_ok=True)
+    return True
+
+
 def _index_stamp(path):
     """인덱스 파일의 (수정시각, 크기). 없으면 None."""
     try:
@@ -286,7 +292,7 @@ class FavoritesStore:
         self._link_mode = link_mode
         self._index_cache = None        # (파일 mtime_ns, 크기, dict) — _load_index 참고
         if create:
-            os.makedirs(self.base_dir, exist_ok=True)
+            self._ensure_base_dir()
 
     # ------------------------------------------------------------- 분류
     def categories(self):
@@ -339,6 +345,20 @@ class FavoritesStore:
             cached = (self.base_dir, os.path.normpath(self.base_dir))
             self._normal_base_cache = cached
         return cached[1]
+
+    def _ensure_base_dir(self):
+        """저장소 뿌리를 만든다 — **멈추면 물러선다.**
+
+        이 저장소의 기본 자리는 ``~/.config``, 곧 이 라이브러리가 상정하는
+        **네트워크 홈** 위다. 그런데 생성자가 맨 ``makedirs`` 로 만들고 있어서,
+        홈이 멈추면 **다이얼로그를 열기도 전에** 앱이 그대로 잡혔다
+        (실측: ``path_timeout=1.0`` 을 주고도 6.00초). 안전장치를 켜 두라고
+        안내해 놓고 정작 첫 걸음에서 그 값을 무시한 셈이다.
+
+        만드는 일은 원래 best-effort 다 — 못 만들면 분류를 읽을 때 빈 목록이
+        나오고, 홈이 살아난 뒤 다음 등록에서 다시 만들어진다.
+        """
+        return safety.safe_call(_ensure_dir, self.base_dir, False)
 
     def add_category(self, category):
         """분류 폴더를 만들고 경로를 반환한다(이미 있으면 그대로)."""
@@ -478,6 +498,32 @@ class FavoritesStore:
     def contains(self, category, path):
         """해당 대상이 이미 등록되어 있는지."""
         return self.link_for(category, path) is not None
+
+    def categories_containing(self, path, categories=None):
+        """``path`` 를 이미 담고 있는 분류 이름들(``set``).
+
+        분류마다 :meth:`contains` 를 따로 부르면 **인덱스를 분류 수만큼 다시
+        읽는다**(분류 20개 = 21회). 우클릭 메뉴처럼 모든 분류를 한 번에 묻는
+        자리를 위해, 인덱스는 한 번만 읽고 그 사본을 돌려 쓴다. 저장소가
+        네트워크 홈에 있으면 그 한 번이 곧 왕복 한 번이다.
+
+        분류 폴더를 훑는 것은 분류 수만큼 그대로 든다 — 낡은 인덱스에 속지
+        않으려면 링크 자신을 봐야 하기 때문이다(:meth:`_target_of` 참고).
+
+        Args:
+            path: 찾을 대상의 **원본** 경로.
+            categories: 이미 읽어 둔 분류 목록. 주지 않으면 :meth:`categories`
+                를 부른다 — 목록을 이미 들고 있으면 넘겨서 한 번 더 훑지
+                않게 한다.
+        """
+        names = self.categories() if categories is None else list(categories)
+        if not names:
+            return set()
+        index = self._load_index()
+        return {
+            name for name in names
+            if self.link_for(name, path, index) is not None
+        }
 
     def link_for(self, category, path, _index=None):
         """대상에 해당하는 링크 경로(없으면 None).

@@ -16,6 +16,7 @@ from . import safety
 from .favorites import (
     FavoritesError,
     FavoritesStore,
+    _ensure_dir,
     _safe_name,
     default_storage_dir,
 )
@@ -99,7 +100,10 @@ class RecentStore(FavoritesStore):
         self.name = _safe_name(name)
         self.max_items = max(0, int(max_items))
         if create and self.max_items > 0:
-            self.add_category(self.name)
+            # 뿌리와 같은 이유로 **여기도 감싼다** — 이 줄 역시 다이얼로그를
+            # 열기 전에 도는 자리다(:meth:`FavoritesStore._ensure_base_dir`).
+            # add_category 를 그대로 부르면 멈춘 홈에서 그만큼 또 매달린다.
+            safety.safe_call(_ensure_dir, self.category_dir(self.name), False)
 
     # --------------------------------------------------------------- 기록
     def record(self, path):

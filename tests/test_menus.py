@@ -947,3 +947,44 @@ def test_favorites_category_still_hides_add(qapp, tmp_path):
     rename = dialog.findChild(QAction, "qt_rename_action")
     assert rename in menu.actions()
     dialog.close()
+
+
+def test_add_submenu_reads_index_once(qapp, tmp_path, monkeypatch):
+    """우클릭 메뉴 한 번에 인덱스를 **분류 수만큼** 다시 읽지 않는다.
+
+    분류마다 contains() 를 따로 부르면 그 안에서 인덱스를 새로 읽는다(분류
+    20개 = 21회). 게다가 categories() 까지 두 번 불러 저장소 폴더를 두 번
+    훑었다. 저장소가 네트워크 홈에 있으면 그것이 전부 왕복이라, 우클릭 한
+    번이 눈에 띄게 늦어진다.
+    """
+    from qtpy.QtWidgets import QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, _output = _make_tree(tmp_path)
+    for i in range(12):
+        store.add("분류%02d" % i, design)
+
+    dialog, menus = _menu_dialog([store, recent], os.path.dirname(design))
+    dialog.show()
+    _spin(qapp, 400)
+
+    counts = {"index": 0, "categories": 0}
+    for key, name in (("index", "_load_index"), ("categories", "categories")):
+        original = getattr(FavoritesStore, name)
+
+        def spy(self, *args, _o=original, _k=key, **kwargs):
+            counts[_k] += 1
+            return _o(self, *args, **kwargs)
+
+        monkeypatch.setattr(FavoritesStore, name, spy)
+
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+    rows = {model.index(r, 0, root).data(): model.index(r, 0, root)
+            for r in range(model.rowCount(root))}
+    menus.build_view_menu(tree, rows["설계도.csv"])      # 우클릭 한 번
+
+    assert counts["categories"] == 1, counts        # 예전엔 2
+    assert counts["index"] <= 2, counts             # 예전엔 분류 수 + 1 (13)
+    dialog.close()

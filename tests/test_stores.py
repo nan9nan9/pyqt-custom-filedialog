@@ -1626,3 +1626,48 @@ def test_folder_needs_symlink_or_junction(tmp_path, monkeypatch):
         store.add("설계", str(folder))
     assert "즐겨찾기 링크를 만들지 못했습니다" in str(caught.value)
     assert store.items("설계") == []
+
+
+def test_store_creation_gives_up_on_dead_home(tmp_path, monkeypatch):
+    """저장소를 **만드는 것** 자체가 멈춘 네트워크 홈에서 매달리지 않는다.
+
+    저장소의 기본 자리는 ``~/.config`` — 이 라이브러리가 상정하는 네트워크 홈
+    위다. 그런데 생성자가 맨 ``os.makedirs`` 로 만들고 있어서, 홈이 멈추면
+    ``path_timeout`` 을 아무리 낮춰 줘도 **다이얼로그를 열기도 전에** 앱이
+    잡혔다(실측 6.00초). 안전장치를 켜 두라고 안내하고는 정작 첫 걸음에서 그
+    값을 무시한 셈이다.
+    """
+    from custom_file_dialog import safety
+
+    dead = str(tmp_path / "홈")
+    os.makedirs(dead)
+    _fake_remote_mount(monkeypatch, dead)      # 그 자리를 nfs4 로 위장
+
+    real = os.makedirs
+
+    def hang(path, *args, **kwargs):
+        if str(path).startswith(dead):
+            time.sleep(2.0)                    # mkdir 이 돌아오지 않는다
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "makedirs", hang)
+    try:
+        for cls in (FavoritesStore, RecentStore):
+            start = time.time()
+            store = cls(base_dir=os.path.join(dead, ".config", "store"))
+            spent = time.time() - start
+            # 안전장치가 걸리면 예산(_fake_remote_mount 의 0.2초)만 쓴다.
+            # 걸리지 않으면 makedirs 두 번 × 2.0초 = 4.0초다.
+            assert spent < 1.5, "%s 생성이 %.2f초 매달렸다" % (cls.__name__, spent)
+            # 물러섰을 뿐 쓸 수는 있는 물건이어야 한다 — 조회는 빈 값이다
+            assert store.categories() == []
+    finally:
+        # **뒷정리를 끝까지 한다.** _fake_remote_mount 가 걸어 둔
+        # timeout=0.2 를 그대로 두면 뒤따르는 모든 테스트가 짧은 예산으로
+        # 돌고, 여기서 만든 "안 돌아오는" 스레드가 살아 있는 채로 다음
+        # 테스트에 넘어간다 — 스위트를 들쭉날쭉하게 만드는 조합이다.
+        safety.reset()
+        deadline = time.time() + 10.0
+        while safety_reach.pending_checks() and time.time() < deadline:
+            time.sleep(0.05)
+        safety.clear_cache()
