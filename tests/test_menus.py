@@ -861,3 +861,89 @@ def test_read_only_dialog_cannot_make_folders(qapp, tmp_path):
     dialog.done(0)
     dialog.deleteLater()
     _spin(qapp, 50)
+
+
+def _recent_dialog(qapp, tmp_path):
+    """최근 파일 폴더를 연 다이얼로그와 그 안의 링크 하나를 돌려준다."""
+    from qtpy.QtWidgets import QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)          # 즐겨찾기에도 분류가 하나 있어야 메뉴가 채워진다
+    recent.record(design)
+
+    dialog, menus = _menu_dialog([store, recent], recent.category_dir("최근 파일"))
+    dialog.show()
+    _spin(qapp, 400)
+
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+    assert model.rowCount(root) == 1, "최근 파일에 항목이 하나 있어야 한다"
+    return dialog, menus, tree, model.index(0, 0, root), store, design
+
+
+def test_add_to_favorites_from_recent(qapp, tmp_path):
+    """최근 파일의 항목에도 "즐겨찾기에 추가" 가 붙고, **원본**이 등록된다."""
+    dialog, menus, tree, index, store, design = _recent_dialog(qapp, tmp_path)
+
+    _path, menu = _view_menu(menus, tree, index)
+    submenu = _submenu_of(menu)
+    assert submenu is not None, "최근 파일에서도 추가 메뉴가 떠야 한다"
+    assert submenu.title() == "즐겨찾기에 추가"
+
+    labels = [a.text() for a in submenu.actions() if not a.isSeparator()]
+    assert "설계" in labels and "새 분류..." in labels, labels
+    # 이미 '설계' 에 들어 있는 원본이라 그 항목은 꺼져 있어야 한다 —
+    # 링크 경로로 판정했다면 원본을 못 찾아 켜져 있었을 것이다.
+    assert not [a for a in submenu.actions() if a.text() == "설계"][0].isEnabled()
+
+    # 다른 분류로 실제로 넣어 보면 링크가 아니라 **원본**을 가리켜야 한다.
+    assert menus.add_to_favorites(design, "보고서")
+    assert store.resolve(store.link_for("보고서", design)) == design
+    dialog.close()
+
+
+def test_recent_menu_omits_rename_and_hidden(qapp, tmp_path):
+    """최근 파일에서는 "이름 변경" · "숨김 파일 표시" 를 아예 안 붙인다."""
+    from qtpy.QtWidgets import QAction
+
+    dialog, menus, tree, index, _store, _design = _recent_dialog(qapp, tmp_path)
+    _path, menu = _view_menu(menus, tree, index)
+
+    dropped = [dialog.findChild(QAction, name)
+               for name in ("qt_rename_action", "qt_show_hidden_action")]
+    assert all(a is not None for a in dropped), "Qt 기본 항목을 못 찾았다"
+    for action in dropped:
+        assert action not in menu.actions(), action.objectName()
+
+    # 뜻이 있는 것은 그대로 남는다
+    assert [a for a in menu.actions() if a.text().endswith("에서 제거")]
+    assert "경로 복사" in _menu_labels(menu)
+    # 구분선만 둘 연달아 남지 않는다
+    kinds = [a.isSeparator() for a in menu.actions()]
+    assert not any(kinds[i] and kinds[i + 1] for i in range(len(kinds) - 1)), kinds
+    dialog.close()
+
+
+def test_favorites_category_still_hides_add(qapp, tmp_path):
+    """즐겨찾기 분류 안은 그대로 — 최근 파일만 열어 준 것이다."""
+    from qtpy.QtWidgets import QAction, QTreeView
+
+    store = FavoritesStore(base_dir=str(tmp_path / "favorites"))
+    recent = RecentStore(base_dir=str(tmp_path / "recent"), max_items=5)
+    design, _report, _output = _make_tree(tmp_path)
+    store.add("설계", design)
+
+    dialog, menus = _menu_dialog([store, recent], store.category_dir("설계"))
+    dialog.show()
+    _spin(qapp, 400)
+
+    tree = dialog.findChild(QTreeView, "treeView")
+    model, root = tree.model(), tree.rootIndex()
+    _path, menu = _view_menu(menus, tree, model.index(0, 0, root))
+    assert _submenu_of(menu) is None
+    # 이름 변경도 여기서는 계속 붙는다(최근 파일이 아니므로)
+    rename = dialog.findChild(QAction, "qt_rename_action")
+    assert rename in menu.actions()
+    dialog.close()

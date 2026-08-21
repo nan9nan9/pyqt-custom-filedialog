@@ -57,6 +57,12 @@ def _writable(path):
 QT_ITEM_ACTIONS = ("qt_rename_action", "qt_delete_action")
 QT_COMMON_ACTIONS = ("qt_show_hidden_action", "qt_new_folder_action")
 
+# **최근 파일** 목록에서는 빼는 Qt 기본 항목. 최근 목록은 지나간 자리를 비추는
+# 거울이지 폴더가 아니다 — "이름 변경"은 원본이 아니라 거울에 붙은 이름표를
+# 갈고(원본은 그대로, 다음에 그 파일을 다시 열면 원래 이름으로 또 쌓인다),
+# "숨김 파일 표시"는 우리가 만든 링크만 들어 있는 곳이라 보여 줄 것이 없다.
+RECENT_OMITTED_ACTIONS = ("qt_rename_action", "qt_show_hidden_action")
+
 
 class FavoritesMenus(QObject):
     """QFileDialog 에 즐겨찾기 관련 우클릭 메뉴를 붙인다.
@@ -221,6 +227,15 @@ class FavoritesMenus(QObject):
                     s, c, p
                 )
             )
+            # 1a-2) **최근 파일** 의 항목은 즐겨찾기에도 넣을 수 있어야 한다.
+            #     최근 목록은 지나간 자리를 보여 주는 곳이라, 거기서 쓸 만한
+            #     것을 발견하면 그 자리에서 붙잡아 두는 것이 자연스럽다.
+            #
+            #     넣는 것은 **원본 경로**다. 링크 경로를 그대로 넣으면 최근
+            #     목록을 가리키는 링크가 생기고, 최근 목록에서 그 항목이
+            #     밀려나면 즐겨찾기가 끊어진 링크로 남는다. copy_path 가
+            #     원본을 복사하는 것과 같은 규칙이다.
+            self._add_origin_favorite_submenu(menu, store, path)
             menu.addSeparator()
         elif (
             path
@@ -242,8 +257,30 @@ class FavoritesMenus(QObject):
             menu.addSeparator()
 
         # 3) Qt 기본 항목 (이름 변경 · 삭제 · 숨김 파일 · 새 폴더)
-        self._add_default_actions(menu, path, allow_delete=store is None)
+        self._add_default_actions(
+            menu,
+            path,
+            allow_delete=store is None,
+            omit=RECENT_OMITTED_ACTIONS if self._places.is_recent(store) else (),
+        )
         return None if menu.isEmpty() else menu
+
+    def _add_origin_favorite_submenu(self, menu, store, path):
+        """최근 파일 항목이면 **원본 경로**로 "즐겨찾기에 추가" 를 붙인다.
+
+        즐겨찾기 분류 안의 링크에는 붙이지 않는다 — 이미 즐겨찾기에 있는
+        것을 다시 즐겨찾기에 넣는 자리라 :meth:`build_view_menu` 의 "제거"
+        와 나란히 두면 무엇이 지워지는지 읽기 어려워진다.
+
+        분류 폴더 자체와 저장소 뿌리는 진짜 폴더라 ``link_target`` 이 None 을
+        돌려주므로 여기서 저절로 빠진다.
+        """
+        if self._places.favorites is None or not self._places.is_recent(store):
+            return
+        origin = self._places.link_target(path)
+        if not origin or self._places.is_inside(origin):
+            return
+        self._add_favorite_submenu(menu, origin)
 
     def _add_favorite_submenu(self, menu, path):
         store = self._places.favorites
@@ -263,11 +300,15 @@ class FavoritesMenus(QObject):
             "새 분류...", lambda: self.add_to_favorites(path, None)
         )
 
-    def _add_default_actions(self, menu, path, allow_delete=True):
+    def _add_default_actions(self, menu, path, allow_delete=True, omit=()):
         """Qt 가 원래 띄우던 항목들을 그대로 붙인다(활성 상태도 같은 규칙).
 
         ``allow_delete`` 가 False 면 "삭제"만 뺀다 — 우리가 "…에서 제거"로
         갈아 끼운 자리라 둘을 함께 두면 어느 쪽이 원본을 지우는지 헷갈린다.
+
+        ``omit`` 에 준 이름들은 아예 붙이지 않는다(:data:`RECENT_OMITTED_ACTIONS`).
+        비활성으로 두지 않고 빼는 이유는, 그 자리에서는 **할 수 없는** 것이
+        아니라 **뜻이 없는** 동작이기 때문이다.
         """
         dialog = self._dialog
         read_only = bool(dialog.options() & QFileDialog.Option.ReadOnly)
@@ -284,17 +325,25 @@ class FavoritesMenus(QObject):
             writable = safety.safe_call(
                 _writable, os.path.dirname(path) or path, default=False
             )
+            added = False
             for name in QT_ITEM_ACTIONS:
                 if name == "qt_delete_action" and not allow_delete:
+                    continue
+                if name in omit:
                     continue
                 action = dialog.findChild(QAction, name)
                 if action is not None:
                     action.setEnabled(not read_only and writable)
                     menu.addAction(action)
-            if not menu.isEmpty():
+                    added = True
+            # 구분선은 **이 묶음이 실제로 붙었을 때만.** 묶음이 통째로 빠지는
+            # 자리(최근 파일)에서 앞 구분선 뒤에 하나가 더 붙어 빈 칸처럼 보였다.
+            if added:
                 menu.addSeparator()
 
         for name in QT_COMMON_ACTIONS:
+            if name in omit:
+                continue
             action = dialog.findChild(QAction, name)
             if action is None or not action.isVisible():
                 continue
